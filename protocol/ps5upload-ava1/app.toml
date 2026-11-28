@@ -613,6 +613,11 @@ value = 204
 name = "METHOD_PADS_LIST"
 ty = "u16"
 value = 205
+# USB Ethernet adapter on the PS5, experimental (payload/src/usbnet.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_USBNET"
+ty = "u16"
+value = 206
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

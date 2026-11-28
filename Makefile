@@ -1529,6 +1529,19 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/power_phase_live_selftest.c $(PAYLOAD_DIR)/src/power_phase.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-power-phase-live-selftest
 	@echo "✓ going to rest and the minute after a wake: no fan or kernel work, tailnet without sockets until the network is back"
+	@echo "Running USB Ethernet adapter self-tests (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-usbnet-selftest $(PAYLOAD_DIR)/tests/usbnet_selftest.c $(PAYLOAD_DIR)/src/usbnet_util.c \
+		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/usbnet/rtl.c $(PAYLOAD_DIR)/usbnet/ncm.c $(PAYLOAD_DIR)/usbnet/link.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-usbnet-selftest
+	@echo "✓ adapter IDs, descriptors, bulk aggregates, the link debounce and Minion's PROXY line"
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -w -pthread -I$(PAYLOAD_DIR)/usbnet \
+		-I$(PAYLOAD_DIR)/include -Ithird_party/lwip/src/include -o $(SELFTEST_DIR)/ps5upload-usbnet-dhcp-selftest \
+		$(PAYLOAD_DIR)/tests/usbnet_dhcp_selftest.c $(PAYLOAD_DIR)/usbnet/net.c $(PAYLOAD_DIR)/usbnet/sys_arch.c \
+		$(wildcard third_party/lwip/src/core/*.c) $(wildcard third_party/lwip/src/core/ipv4/*.c) \
+		$(wildcard third_party/lwip/src/api/*.c) third_party/lwip/src/netif/ethernet.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-usbnet-dhcp-selftest
+	@echo "✓ the adapter's network layer gets, reads back and releases a DHCP lease, and takes a static address"
 	@echo "Running save param.sfo self-test (host build, ASan + UBSan)..."
 	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
 		-I$(PAYLOAD_DIR)/include -o $(SELFTEST_DIR)/ps5upload-save-sfo-selftest \

@@ -103,6 +103,7 @@
 #include "mesh.h"
 #include "play_host.h"
 #include "tailnet_node.h"
+#include "usbnet.h"
 #include "save_owner.h"
 #include "trophy_fix.h"
 #include "title_restore.h"
@@ -409,6 +410,9 @@
 #define MGMT_FRAME_PLAY_GRANT_ACK 381u
 #define MGMT_FRAME_PADS_LIST 382u
 #define MGMT_FRAME_PADS_LIST_ACK 383u
+/* the USB Ethernet adapter, experimental (usbnet.c) */
+#define MGMT_FRAME_USBNET 384u
+#define MGMT_FRAME_USBNET_ACK 385u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -9381,6 +9385,19 @@ static int handle_tailnet(runtime_state_t *state, const char *body, uint64_t bod
     return rc;
 }
 
+/* usbnet: the USB Ethernet adapter, experimental (usbnet.h). An empty body reads the status. Reads
+ * the watcher's snapshot or changes the setting: never waits on USB, the loader or the daemon. */
+#define USBNET_OUT_MAX (8u * 1024u)
+static int handle_usbnet(runtime_state_t *state, const char *body, uint64_t body_len) {
+    if (!state || body_len > 1024u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    char *out = malloc(USBNET_OUT_MAX);
+    if (!out) return mgmt_reply(MGMT_FRAME_ERROR, "out_of_memory", 13);
+    int n = usbnet_call(body ? body : "", (size_t)body_len, out, USBNET_OUT_MAX);
+    int rc = n > 0 ? mgmt_reply(MGMT_FRAME_USBNET_ACK, out, (uint64_t)n) : mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    free(out);
+    return rc;
+}
+
 /* ── The devices that use this console (mesh.c) ─────────────────────────
  * Every call acts as the device whose session made it (the AVA1 RPC identity). */
 static int mesh_reply(runtime_state_t *state, uint16_t ack, int which, const char *body, uint64_t body_len) {
@@ -10513,6 +10530,9 @@ static int handle_status_frame(runtime_state_t *state) {
     helper_busy_t busy;
     helper_busy_read(&busy, ava1_server_rpc_peer());
     if (helper_busy_json(&busy, busy_json, sizeof busy_json) < 0) snprintf(busy_json, sizeof busy_json, "null");
+    /* The USB adapter while it serves (usbnet.h), for the engine to prefer its address. */
+    char usbnet_json[160];
+    if (usbnet_status_brief(usbnet_json, sizeof usbnet_json) < 0) snprintf(usbnet_json, sizeof usbnet_json, "null");
     const size_t body_cap = sizeof body;
     char kernel_version_raw[256];
     char kernel_version_esc[512];
@@ -10562,7 +10582,10 @@ static int handle_status_frame(runtime_state_t *state) {
                    "\"fan_reapply_sec\":%d,"
                    /* What a restart would stop (helper_busy.h, 12.6.15): an app replaces this
                     * helper by itself only while nothing is. Absent on older helpers. */
-                   "\"busy\":%s}",
+                   "\"busy\":%s,"
+                   /* The USB Ethernet adapter, experimental (usbnet.h): {ip, port, mbps, chip} while it
+                    * serves, else null. Absent on older helpers. */
+                   "\"usbnet\":%s}",
                    PS5UPLOAD2_VERSION,
                    kernel_version_esc,
                    (unsigned long long)snap_instance_id,
@@ -10577,7 +10600,7 @@ static int handle_status_frame(runtime_state_t *state) {
                    (int)AVA1_MAX_LANES,
                    fan_pinned,
                    fan_reapply,
-                   busy_json);
+                   busy_json, usbnet_json);
     /* Truncation-safe: if the fields ever grow past `body`, clamp rather than emit a body_len that
      * reads past the stack buffer. The node.status runner then fails to parse it, which is the right
      * failure mode. */

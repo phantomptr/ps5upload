@@ -53,6 +53,11 @@ int webui_start(const webui_cfg_t *cfg);
 
 /* 1 while the server is started (webui_start .. webui_stop), else 0. */
 int webui_running(void);
+/* 1 while it runs with LAN access on (the USB adapter daemon serves Minion only then). */
+int webui_lan_on(void);
+/* The USB adapter's address ("" for none: usbnet.c), added to the Host allowlist the server keeps
+ * (getifaddrs does not list it); the next listener check picks it up. */
+void webui_set_extra_addr(const char *ip);
 
 /* Close the listener and the queued connections, wake the workers and join
  * them within 2 s. A worker still inside route() after that is detached and

@@ -13,8 +13,10 @@ PS5Upload Minion, the console's own web page, on **9180** (`WEBUI_PORT` in
 `include/config.h`; off when `webui.json` says `enabled:false`), and starts
 companion daemons on demand through the console's `:9021` loader: the
 installer on **9115**, the SMB daemon (`smb/`, loopback-only on 9183), the
-keyboard & mouse companion (`vinput/`, `ps5u-vinput`, loopback-only on 9184)
-and the short-lived archive extractor (`extractor/`, no socket).
+keyboard & mouse companion (`vinput/`, `ps5u-vinput`, loopback-only on 9184),
+the USB Ethernet adapter daemon (`usbnet/`, `ps5u-usbnet`, experimental: control on
+loopback 9185, AVA1 and Minion on the adapter's own address, only while a supported
+adapter is plugged in) and the short-lived archive extractor (`extractor/`, no socket).
 
 ## Layout
 

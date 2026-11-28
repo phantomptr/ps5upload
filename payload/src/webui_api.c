@@ -1658,6 +1658,31 @@ static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
     send_text_reply(fd, st, out, ol, t, tl);
 }
 
+/* {op?}: the USB Ethernet adapter, experimental (AVA1 usbnet, usbnet.h): its status, and on / off
+ * from the console. A static address stays the app's to set. Answers the helper's status JSON. */
+static void r_usbnet(const char *b, size_t n, uint8_t *out, int fd) {
+    char op[16], req[48];
+    const uint8_t *t;
+    size_t ol, tl;
+    int st, k;
+    if (n > 512) {
+        send_error(fd, 413, "too_large", 9);
+        return;
+    }
+    if (webui_json_str(b, n, "op", op, sizeof op) < 0) {
+        send_bad(fd, "bad_request");
+        return;
+    }
+    if (!op[0]) snprintf(op, sizeof op, "status");
+    if (strcmp(op, "status") && strcmp(op, "enable") && strcmp(op, "disable")) {
+        send_bad(fd, "bad_op");
+        return;
+    }
+    k = snprintf(req, sizeof req, "{\"op\":\"%s\"}", op);
+    st = call_text(AVA1_METHOD_USBNET, req, (size_t)k, out, &ol, &t, &tl);
+    send_text_reply(fd, st, out, ol, t, tl);
+}
+
 /* {op?, id?}: the devices that use this PS5 (the mesh, the same list the app's Consoles page shows).
  * No op: the picture ({devices, asks, settings, ...}), so someone at the console sees who is asking
  * to connect and who may. allow / decline answer a device that asks (approval is on); remove takes a
@@ -3863,6 +3888,7 @@ static const struct {
     { "/api/apps/icon", r_apps_icon },
     { "/api/proc/list", r_proc_list },
     { "/api/tailnet", r_tailnet },
+    { "/api/usbnet", r_usbnet },
     { "/api/mesh", r_mesh },
     { "/api/save-sync", r_save_sync },
     { "/api/proc/kill", r_proc_kill },

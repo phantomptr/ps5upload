@@ -27,6 +27,7 @@
 #include "sigpipe_guard.h"
 #include "wake_watchdog.h"
 #include "tailnet_node.h"
+#include "usbnet.h"
 #include "app_api.h"
 #include "icon_keeper.h"
 #include "fakelib_overlay.h"
@@ -954,6 +955,12 @@ int main(void) {
     if (tailnet_node_boot() != 0) fprintf(stderr, "[tailnet] not started\n");
     startup_trace("TAILNET_STARTED");
 
+    /* A USB Ethernet adapter, experimental (usbnet.h): the watcher runs whether or not one is plugged
+     * in, and starts the adapter daemon only while one is and the setting is on. After AVA1 and the
+     * page, whose ports the daemon serves on the adapter. Failure is logged, never fatal. */
+    if (usbnet_boot() != 0) fprintf(stderr, "[usbnet] not started\n");
+    startup_trace("USBNET_STARTED");
+
     /* PS5Upload Play's loopback API (app_api.h): 127.0.0.1:9181, on whatever the Minion switch says.
      * After AVA1 (its requests run inside the local-RPC gate). A bind failure is retried by its own
      * thread (an old helper may still hold the port for a moment); a start failure is logged. */
@@ -978,6 +985,9 @@ int main(void) {
     /* Leave the tailnet first: the next instance wants the same UDP port (41641). */
     tailnet_node_shutdown();
     startup_trace("STOP_TAILNET_DONE");
+    /* The adapter daemon stops cleanly (its MAC stopped, the adapter put back) and is waited for. */
+    usbnet_shutdown();
+    startup_trace("STOP_USBNET_DONE");
 
     /* Persist tracked play time before we go. The watcher only saves every
      * 60s, so a payload swap in between would otherwise drop the current

@@ -226,6 +226,9 @@ payload/play/
 payload/smb/ps5upload-smb.elf
 payload/smb/build/
 payload/vinput/ps5u-vinput.elf
+# The USB Ethernet adapter daemon: built from payload/usbnet/ and embedded in the helper.
+payload/usbnet/ps5u-usbnet.elf
+payload/usbnet/build/
 # A standalone hardware probe (payload/tools/mbus-probe/README.md), sent by hand.
 payload/tools/mbus-probe/ps5u-mbusprobe.elf
 

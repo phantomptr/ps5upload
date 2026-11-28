@@ -137,6 +137,7 @@ static pthread_mutex_t g_life = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static srv_t *g_srv;
 static char g_token[65];
+static int g_lan_flag;
 
 static uint64_t mono_ms(void) {
     struct timespec ts;
@@ -178,9 +179,24 @@ static int thread_start(pthread_t *t, void *(*fn)(void *), void *arg) {
 /* The console's IPv4 addresses, for the LAN Host check; -1 when they could not be read
  * (getifaddrs failed: the caller keeps the list it has, so a passing failure never looks like an
  * address change). */
+/* The USB adapter's address (usbnet.c), which getifaddrs never lists: it is the adapter daemon's
+ * own TCP/IP stack's, not the kernel's. "" when there is none. Its own lock: own_addrs runs with and
+ * without the server's. */
+static pthread_mutex_t g_extra_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_extra_addr[INET_ADDRSTRLEN];
+
+void webui_set_extra_addr(const char *ip) {
+    pthread_mutex_lock(&g_extra_mu);
+    snprintf(g_extra_addr, sizeof g_extra_addr, "%s", ip ? ip : "");
+    pthread_mutex_unlock(&g_extra_mu);
+}
+
 static int own_addrs(char out[WEBUI_MAX_ADDRS][INET_ADDRSTRLEN]) {
     struct ifaddrs *ifa = NULL, *p;
     int n = 0;
+    pthread_mutex_lock(&g_extra_mu);
+    if (g_extra_addr[0]) memcpy(out[n++], g_extra_addr, INET_ADDRSTRLEN);
+    pthread_mutex_unlock(&g_extra_mu);
     if (getifaddrs(&ifa) != 0) return -1;
     for (p = ifa; p && n < WEBUI_MAX_ADDRS; p = p->ifa_next) {
         if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
@@ -345,16 +361,29 @@ enum { RD_OK = 0, RD_DROP = -1, RD_STREAM = 1 };
 
 /* Read one request within the deadline. Returns RD_OK, RD_STREAM (the headers are in; the body is
  * the stream handler's to read), RD_DROP (silent close), or an HTTP status (400/413) to answer with. */
+/* *src: the peer; a loopback peer that opens with a PROXY line (the USB adapter daemon joining a LAN
+ * client, usbnet_proto.h) becomes the client it names, and the line is taken off the buffer. */
 static int read_request(srv_t *s, int fd, uint64_t deadline, char *buf, webui_req_t *req,
-                        size_t *got_out) {
+                        size_t *got_out, uint32_t *src) {
     size_t got = 0, need = 0;
-    int parsed = 0;
+    int parsed = 0, proxy_checked = *src != 0x7F000001u;
     for (;;) {
         struct pollfd pf;
         uint64_t now;
         ssize_t n;
         int r, wait;
-        if (got > 0 && !parsed) {
+        if (got > 0 && !proxy_checked) {
+            uint32_t client = 0;
+            r = webui_proxy_line(buf, got, &client);
+            if (r == -2) return RD_DROP;
+            if (r > 0) {
+                memmove(buf, buf + r, got - (size_t)r);
+                got -= (size_t)r;
+                *src = client;
+            }
+            if (r != -1) proxy_checked = 1;
+        }
+        if (got > 0 && !parsed && proxy_checked) {
             r = webui_http_parse_cap(buf, got, req, s->stream ? WEBUI_STREAM_BODY_MAX : WEBUI_BODY_CAP);
             if (r == WEBUI_PARSE_BAD) return 400;
             if (r == WEBUI_PARSE_TOO_BIG) return 413;
@@ -427,7 +456,7 @@ static void serve(srv_t *s, int idx, conn_t c) {
     set_timeo(c.fd, SO_RCVTIMEO, WEBUI_CONN_MS);
     set_timeo(c.fd, SO_SNDTIMEO, WEBUI_CONN_MS);
     memset(&req, 0, sizeof req);
-    rd = read_request(s, c.fd, c.deadline_ms, buf, &req, &got);
+    rd = read_request(s, c.fd, c.deadline_ms, buf, &req, &got, &c.src);
     if (rd == RD_DROP) return;
     req.peer = c.src; /* after the parse, which clears the struct */
 
@@ -904,6 +933,7 @@ int webui_start(const webui_cfg_t *cfg) {
     s->stream = cfg->stream;
     s->long_for = cfg->long_for;
     s->lan = cfg->lan ? 1 : 0;
+    __atomic_store_n(&g_lan_flag, s->lan, __ATOMIC_RELAXED);
     webui_token_new(s->token);
     if (s->lan) {
         int got = own_addrs(s->addrs);
@@ -972,6 +1002,11 @@ int webui_running(void) {
     return on;
 }
 
+/* g_lan_flag follows every write of a server's lan (no lock order with the server's own mutex). */
+int webui_lan_on(void) {
+    return webui_running() && __atomic_load_n(&g_lan_flag, __ATOMIC_RELAXED);
+}
+
 void webui_stop(void) {
     srv_t *s;
     pthread_mutex_lock(&g_life);
@@ -1004,6 +1039,7 @@ int webui_restart(int lan) {
     }
     pthread_mutex_lock(&s->mu);
     s->lan = lan ? 1 : 0;
+    __atomic_store_n(&g_lan_flag, s->lan, __ATOMIC_RELAXED);
     if (!lan || got >= 0) { /* a failed read keeps the list it had */
         s->n_addrs = n;
         if (n) memcpy(s->addrs, addrs, sizeof addrs);

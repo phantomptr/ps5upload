@@ -247,7 +247,17 @@ VINPUT_DEPS := $(VINPUT_DIR)/main.c $(VINPUT_DIR)/Makefile src/vinput_companion.
         src/vinput_mbus.c include/vinput.h include/vinput_wire.h include/vinput_companion.h include/vinput_dev.h \
         include/vinput_mbus.h
 
-SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover_flag.c src/start_dedupe.c src/start_trace.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
+# The USB Ethernet adapter daemon, experimental (usbnet/, include/usbnet_proto.h): its own lwIP and a
+# user-space driver for Realtek USB 2.5G/5G/10G adapters, built by its own Makefile, stripped and
+# embedded by xxd as usbnet_elf[] + usbnet_elf_len, which src/usbnet.c sends to the console's ELF
+# loader while a supported adapter is plugged in. The helper never runs the driver itself.
+USBNET_DIR := usbnet
+USBNET_ELF := $(USBNET_DIR)/ps5u-usbnet.elf
+USBNET_ELF_C := build/usbnet_elf.c
+USBNET_DEPS := $(wildcard $(USBNET_DIR)/*.c $(USBNET_DIR)/*.h $(USBNET_DIR)/arch/*.h) $(USBNET_DIR)/Makefile \
+        include/usbnet_proto.h smb/smbd_json.c smb/smbd_json.h
+
+SRCS :=src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover_flag.c src/start_dedupe.c src/start_trace.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
         src/drive_sensors.c src/plog.c \
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
         src/sony_api_lock.c src/kernel_rw_lock.c src/sys_time.c \
@@ -261,7 +271,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/app_dump.c src/app_dump_core.c src/app_dump_pkg.c src/app_dump_fself.c src/app_dump_self.c src/app_dump_sha256.c $(WEBUI_TILE_ICON_C) $(EXTRACTOR_ELF_C) \
         src/pkg_info.c src/webui_pkg.c $(WEBUI_INSTALLER_C) \
         src/webui_smb.c src/smb_shares.c src/smb_client.c smb/smbd_json.c smb/smbd_path.c $(SMBD_ELF_C) \
-        src/tailnet_node.c src/app_api.c src/app_api_server.c src/play_app.c src/play_host.c src/rate_gate.c \
+        src/tailnet_node.c src/usbnet.c src/usbnet_util.c $(USBNET_ELF_C) src/app_api.c src/app_api_server.c src/play_app.c src/play_host.c src/rate_gate.c \
         src/save_sfo.c src/save_owner.c src/trophy_fix.c src/title_restore.c \
         src/helper_uninstall.c \
         src/file_compare.c \
@@ -386,6 +396,14 @@ $(VINPUT_ELF_C): $(VINPUT_ELF) Makefile
 	$(PS5_PAYLOAD_SDK)/bin/prospero-strip -o build/vinput.elf $(VINPUT_ELF)
 	(cd build && xxd -i vinput.elf) > $@.tmp && mv $@.tmp $@
 
+$(USBNET_ELF): $(USBNET_DEPS)
+	$(MAKE) -C $(USBNET_DIR)
+
+$(USBNET_ELF_C): $(USBNET_ELF) Makefile
+	@mkdir -p $(dir $@)
+	$(PS5_PAYLOAD_SDK)/bin/prospero-strip -o build/usbnet.elf $(USBNET_ELF)
+	(cd build && xxd -i usbnet.elf) > $@.tmp && mv $@.tmp $@
+
 # Written from the dist-console/strings the page rule's build just produced.
 $(WEBUI_STRINGS_C): $(WEBUI_PAGE_C) ../scripts/embed-console-strings.mjs Makefile
 	@mkdir -p $(dir $@)
@@ -417,9 +435,10 @@ clean:
 	rm -f $(CONVERT_ELF_C)
 	rm -f $(WEBUI_TILE_ICON_C) $(WEBUI_PAGE_C) $(WEBUI_STRINGS_C) $(WEBUI_OFFLINE_C) build/webui_page.gz \
 		build/webui_sw.js build/webui_cache.appcache $(WEBUI_INSTALLER_C) build/webui_installer.elf $(SMBD_ELF_C) build/smbd.elf \
-		$(VINPUT_ELF_C) build/vinput.elf
+		$(VINPUT_ELF_C) build/vinput.elf $(USBNET_ELF_C) build/usbnet.elf
 	$(MAKE) -C $(SMBD_DIR) clean
 	$(MAKE) -C $(VINPUT_DIR) clean
+	$(MAKE) -C $(USBNET_DIR) clean
 
 send: $(ELF)
 	@echo "Sending $(ELF) to $(PS5_HOST):$(PS5_PORT) ..."

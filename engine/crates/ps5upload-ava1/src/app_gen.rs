@@ -155,6 +155,7 @@ pub const METHOD_APP_RESTORE: u16 = 202;
 pub const METHOD_PLAY_ROOM: u16 = 203;
 pub const METHOD_PLAY_GRANT: u16 = 204;
 pub const METHOD_PADS_LIST: u16 = 205;
+pub const METHOD_USBNET: u16 = 206;
 pub const JOB_OP_DELETE: u8 = 1;
 pub const JOB_OP_CHMOD_R: u8 = 2;
 pub const JOB_OP_HASH: u8 = 3;
