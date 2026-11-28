@@ -352,8 +352,11 @@ fn forget(id: &str) -> bool {
     })
 }
 
-/// The friend's console, name and waiting room (room, hub host), by id.
-fn of(id: &str) -> Option<(String, String, Option<(String, String)>)> {
+/// A waiting room on the hub: (room id, hub host).
+type Inbox = (String, String);
+
+/// The friend's console, name and waiting room, by id.
+fn of(id: &str) -> Option<(String, String, Option<Inbox>)> {
     with_store(|s| {
         s.friends.iter().find(|f| f.id == id).map(|f| {
             (
@@ -523,15 +526,6 @@ pub async fn send(
             bad(StatusCode::BAD_GATEWAY, "hub")
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
-    use axum::routing::{get, post};
-    axum::Router::new()
-        .route("/api/join/friends", get(list))
-        .route("/api/join/friends/forget", post(forget_route))
-        .route("/api/join/friends/send", post(send))
 }
 
 #[cfg(test)]
