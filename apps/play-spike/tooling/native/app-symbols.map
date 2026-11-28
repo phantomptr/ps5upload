@@ -1,0 +1,15 @@
+/*
+ * ps5-native-app-boilerplate - Application symbol visibility policy.
+ * Copyright (C) 2026 BlackBearReloaded
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Only the entry point is exported. Everything else, including C++ allocation
+ * operators and SDK kernel helpers, stays internal to the executable.
+ */
+
+{
+    global:
+        _start;
+    local:
+        *;
+};
