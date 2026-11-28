@@ -203,6 +203,9 @@ const char *webui_proc_kill_refusal(const char *json, size_t n, uint64_t pid);
 /* From a PROCESS_LIST reply: 1 when a game ("app") process with title id `tid` runs (when
  * `other` is set: a game with any OTHER title id), 0 when none, -1 when the reply does not parse. */
 int webui_proc_game_running(const char *json, size_t n, const char *tid, int other);
+/* From a PROCESS_LIST reply: the app_id of the app process with title id `tid` (what APP_LIFECYCLE
+ * kill takes). 1 found (*app_id set), 0 not running or no app_id, -1 the reply does not parse. */
+int webui_proc_title_app_id(const char *json, size_t n, const char *tid, uint64_t *app_id);
 
 /* ---- search index (INDEX_START / INDEX_STATUS / INDEX_SEARCH / INDEX_CANCEL, runtime.c) ----
  * The handlers read their bodies with a quote-to-quote scan (no JSON unescaping), so every string the

@@ -258,7 +258,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/app_dump.c src/app_dump_core.c src/app_dump_pkg.c src/app_dump_fself.c src/app_dump_self.c src/app_dump_sha256.c $(WEBUI_TILE_ICON_C) $(EXTRACTOR_ELF_C) \
         src/pkg_info.c src/webui_pkg.c $(WEBUI_INSTALLER_C) \
         src/webui_smb.c src/smb_shares.c src/smb_client.c smb/smbd_json.c smb/smbd_path.c $(SMBD_ELF_C) \
-        src/tailnet_node.c src/app_api.c src/app_api_server.c \
+        src/tailnet_node.c src/app_api.c src/app_api_server.c src/play_app.c \
         src/save_sfo.c src/save_owner.c src/trophy_fix.c src/title_restore.c \
         src/helper_uninstall.c \
         src/file_compare.c \

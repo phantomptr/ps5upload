@@ -60,6 +60,11 @@
  *   src/fakelib_overlay.c 1  dir    the overlay record left for the next helper: <record>.tmp -> record
  *   src/console_convert.c 1  dir    the leftover-output record (pending.rec): <file>.<pid>.<n>.tmp -> file
  *   src/mesh.c            1  dir    device list, settings and shared documents: <file>.tmp -> file
+ *   src/play_app.c        1  guard  PS5Upload Play's install (same_dev_rename: st_dev of the source and of
+ *                                   the destination's folder compared first, refused when they differ):
+ *                                   <drive>/prosperostore/staging/FAKE99261 -> <location>/FAKE99261, each
+ *                                   staged file over its target (same drive by construction), and the
+ *                                   receipt / install.json <file>.tmp -> file
  *   src/profile.c         3  dir    PSN sign-in backup: <uid>.txt.tmp -> <uid>.txt (made, or a slot added) and
  *                                   <uid>.txt -> .restored;
  *                                   an NP file put back: <file>.ps5upload-tmp -> file
