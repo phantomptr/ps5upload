@@ -14,6 +14,8 @@
 #include "../core/json.hpp"
 #include "../net/route_probe.hpp"
 #include "guest.hpp"
+
+#include "../net/seal.hpp"
 #include "helper.hpp"
 #include "log.hpp"
 
@@ -154,15 +156,26 @@ bool Guest::route_open(net::WsClient &ws, int way, int *status) noexcept
             static_cast<unsigned>(c.port), bridge_why_, *status);
         return false;
     }
-    char m[256];
+    char m[512];
     json::Writer w(m, sizeof m);
-    w.raw("{\"bridge\":{\"v\":1,\"room\":").str(c.room).raw(",\"fp\":").str(c.fp).raw("}}");
+    if (c.lobby)
+    {
+        // A room from Rooms (docs/ROOMS.md): the bridge knocks on the host's lobby for us; the
+        // knock's answers come back here (a challenge is sealed here, the password never goes
+        // to the bridge in the clear), then "open".
+        w.raw("{\"bridge\":{\"v\":2,\"lobby\":").str(c.room);
+        w.raw(",\"knock\":{\"via\":").str(extras_.via[0] ? extras_.via : "rooms");
+        w.raw(",\"name\":").str(name_).raw(",\"device\":").str(extras_.device);
+        w.raw(",\"client\":\"ps5\",\"ver\":").str(version_).raw("}}}");
+    }
+    else
+        w.raw("{\"bridge\":{\"v\":1,\"room\":").str(c.room).raw(",\"fp\":").str(c.fp).raw("}}");
     if (!w.ok() || !ws.send_text(m))
     {
         ws.close();
         return false;
     }
-    const std::uint64_t until = net::now_us() + kBridgeMs * 1000ull;
+    std::uint64_t until = net::now_us() + kBridgeMs * 1000ull;
     while (net::now_us() < until && !stop_.load())
     {
         const auto got = ws.next(200);
@@ -178,6 +191,50 @@ bool Guest::route_open(net::WsClient &ws, int way, int *status) noexcept
         if (!d.parse(reinterpret_cast<const char *>(ws.data()), ws.size()))
             continue;
         const int b = d.get(0, "bridge");
+        const int k = d.get(0, "knock");
+        if (k >= 0)
+        {
+            // the lobby knock's answers, relayed (PROTOCOL.md "Knocks")
+            char gid[40] = {};
+            d.str(d.get(0, "gid"), gid, sizeof gid);
+            if (d.str_is(k, "challenge"))
+            {
+                d.str(d.get(0, "c"), challenge_, sizeof challenge_);
+                char pk[100] = {};
+                if (d.str(d.get(0, "pk"), pk, sizeof pk) && pk[0])
+                    std::snprintf(room_pk_, sizeof room_pk_, "%s", pk);
+                char blob[1024];
+                if (!extras_.password[0] || !seal::seal(room_pk_, challenge_, gid, extras_.password, blob, sizeof blob))
+                {
+                    std::snprintf(bridge_why_, sizeof bridge_why_, "%s", extras_.password[0] ? "seal" : "password");
+                    ws.close();
+                    return false;
+                }
+                char sm[1100];
+                json::Writer sw(sm, sizeof sm);
+                sw.raw("{\"knock\":\"sealed\",\"blob\":").str(blob).raw("}");
+                ws.send_text(sm);
+            }
+            else if (d.str_is(k, "wait"))
+            {
+                // the host is being asked: up to the ask's 90 s
+                set_phase(GuestView::asking, "");
+                until = net::now_us() + 100000000ull;
+            }
+            else if (d.str_is(k, "no"))
+            {
+                char why[24] = {};
+                d.str(d.get(0, "why"), why, sizeof why);
+                const int left = d.get(0, "left");
+                pthread_mutex_lock(&lock_);
+                view_.tries_left = left >= 0 && !d.is_null(left) ? static_cast<int>(d.integer(left)) : -1;
+                pthread_mutex_unlock(&lock_);
+                std::snprintf(bridge_why_, sizeof bridge_why_, "knock_%s", why[0] ? why : "no");
+                ws.close();
+                return false;
+            }
+            continue;
+        }
         if (d.str_is(b, "open"))
         {
             const int r = d.get(0, "rtt_ms");

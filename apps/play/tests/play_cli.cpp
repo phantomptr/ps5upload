@@ -5,6 +5,9 @@
 //   play-cli room HUB_URL SECRET_FILE [--seconds N]
 //   play-cli handoff HUB_URL SECRET_FILE [--own PORT] [--seconds N]   (an invite from the phone, played)
 //   play-cli again ADDR PORT PASS [--link ROOM,FP,KEY] [--own PORT] [--no-direct] [--seconds N]
+//   play-cli join ... [--via rooms|friends|nearby] [--password PW] [--pk KEY] [--device D] [--name N]
+//                     [--quick ID] [--text T] [--talk N] [--group TOKEN --no-media] [--lobby PORT:ROOM]
+//   play-cli rooms HUB_WS_URL [--friends LOBBY,...] [--details ROOM] [--seconds N]   (the Join list)
 // The same guest and companion code as the console's; pictures and sound are counted (and the
 // pictures optionally written out as an Annex-B file to check with ffmpeg).
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -13,6 +16,7 @@
 #include "../src/app/helper.hpp"
 #include "../src/app/log.hpp"
 #include "../src/app/route_pick.hpp"
+#include "../src/app/rooms_net.hpp"
 #include "../src/core/proto.hpp"
 #include "../src/app/waiting_room.hpp"
 
@@ -85,6 +89,12 @@ class CountSinks final : public GuestSinks
         std::snprintf(out, cap, "\"frames\":%u,\"dropped\":0,\"decoder\":\"native\",\"snd\":\"native\",\"snd_decoded\":%u",
                       pictures, sounds);
     }
+    unsigned voices = 0, speakers_seen = 0;
+    void voice(std::uint8_t speaker, std::uint16_t, const std::uint8_t *, std::size_t) override
+    {
+        ++voices;
+        speakers_seen |= 1u << (speaker & 31);
+    }
 };
 
 std::uint8_t big[8u << 20];
@@ -113,8 +123,9 @@ bool has(int argc, char **argv, const char *name)
 
 const char *phase_name(int p)
 {
-    static const char *n[] = {"idle", "connecting", "asking", "waiting", "joined", "reconnecting", "refused", "ended", "failed"};
-    return p >= 0 && p < 9 ? n[p] : "?";
+    static const char *n[] = {"idle",    "connecting", "asking", "waiting",    "joined",  "reconnecting",
+                              "refused", "ended",      "failed", "name_taken", "password"};
+    return p >= 0 && p < 11 ? n[p] : "?";
 }
 
 // Starts the guest and plays until --seconds (or --leave-after): the phases, the friend pass, the
@@ -122,8 +133,17 @@ const char *phase_name(int p)
 int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t port, const char *code, int argc,
               char **argv)
 {
-    guest.start(addr, port, code, "play-cli", "13.0.0");
+    const char *name = arg_str(argc, argv, "--name");
+    guest.start(addr, port, code, name ? name : "play-cli", "13.0.0");
     bool told_friend = false;
+    // Play Rooms: a quick message, a typed line, and N voice frames (push-to-talk held) once in
+    const int quick = arg_int(argc, argv, "--quick", 0);
+    const char *text = arg_str(argc, argv, "--text");
+    int talk = arg_int(argc, argv, "--talk", 0);
+    bool said = false, typed = false;
+    std::uint64_t said_at = 0;
+    std::uint16_t vseq = 0;
+    std::uint32_t room_rev = 0;
     const int seconds = arg_int(argc, argv, "--seconds", 10);
     const int leave_after = arg_int(argc, argv, "--leave-after", -1);
     const std::uint64_t t0 = net::now_us();
@@ -145,6 +165,44 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
             std::fflush(stdout);
         }
         const double t = static_cast<double>(net::now_us() - t0) / 1e6;
+        if (v.phase == GuestView::name_taken)
+        {
+            std::printf("suggest %s\n", v.suggest);
+            std::fflush(stdout);
+        }
+        if (v.phase == GuestView::joined && v.room.known && room_rev == 0)
+        {
+            room_rev = 1;
+            std::printf("room name=%s players=%d chat=%s voice=%s you_rtt=%d\n", v.room.name, v.room.n_players,
+                        v.room.chat, v.room.voice, v.room.you_rtt);
+            std::fflush(stdout);
+        }
+        if (v.phase == GuestView::joined && !said && v.room.known)
+        {
+            said = true;
+            said_at = net::now_us();
+            if (quick)
+                std::printf("quick sent %d\n", guest.send_quick(quick) ? 1 : 0);
+            if (text && quick)
+                std::printf("text now %d\n", guest.send_text(text) ? 1 : 0); // too soon: Slow down
+            if (talk)
+                guest.send_mic("ptt_down");
+        }
+        if (v.phase == GuestView::joined && said && !typed && text && net::now_us() - said_at > 2100000)
+        {
+            typed = true;
+            std::printf("text sent %d\n", guest.send_text(text) ? 1 : 0);
+        }
+        if (v.phase == GuestView::joined && said && talk > 0 && tick % 1 == 0)
+        {
+            // a 20 ms frame of stand-in Opus (the engine forwards bytes, it never decodes)
+            std::uint8_t op[40];
+            for (int i = 0; i < 40; ++i)
+                op[i] = static_cast<std::uint8_t>(vseq + i);
+            guest.send_voice(vseq++, 180, op, sizeof op);
+            if (--talk == 0)
+                guest.send_mic("ptt_up");
+        }
         if (v.phase == GuestView::joined)
         {
             // a pad: cross pressed every other half second, the left stick moving
@@ -161,10 +219,21 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
     guest.join();
     const auto v = guest.view();
     std::printf("phase %s %s\n", phase_name(v.phase), v.why);
+    if (v.phase == GuestView::name_taken)
+        std::printf("suggest %s\n", v.suggest);
     std::printf("result player=%d headers=%u pictures=%u keyframes=%u bytes=%llu sounds=%u rumbles=%u lights=%u pads=%llu rtt=%d delivery_ms=%d\n",
                 v.player, sinks.headers, sinks.pictures, sinks.keyframes, static_cast<unsigned long long>(sinks.bytes),
                 sinks.sounds, sinks.rumbles, sinks.lights, static_cast<unsigned long long>(v.pads_sent), v.rtt_ms,
                 v.delivery_ms);
+    {
+        chat::Log log;
+        guest.chat_copy(log);
+        std::printf("chat lines=%d unread=%d note=%s voice_in=%u voice_out=%u speakers=%x tries_left=%d lobby=%s\n",
+                    log.size(), v.chat_unread, v.chat_note[0] ? v.chat_note : "-", sinks.voices, v.voice_out,
+                    sinks.speakers_seen, v.tries_left, v.lobby[0] ? v.lobby : "-");
+        for (int i = 0; i < log.size(); ++i)
+            std::printf("chat %s q=%d t=%s mine=%d\n", log.at(i).from, log.at(i).quick, log.at(i).text, log.at(i).mine);
+    }
     std::printf("route way=%s tier=%s switches=%d backups=%d why=%s\n",
                 v.route < 0 ? "none" : route::kind_word(static_cast<route::Kind>(v.route)),
                 route::tier_word(static_cast<route::Tier>(v.tier)), v.route_switches, v.backups,
@@ -192,6 +261,17 @@ int join(int argc, char **argv)
         std::snprintf(x.again, sizeof x.again, "%s", p);
     if (const char *p = arg_str(argc, argv, "--path"))
         std::snprintf(x.path, sizeof x.path, "%s", p);
+    // Play Rooms
+    if (const char *p = arg_str(argc, argv, "--via"))
+        std::snprintf(x.via, sizeof x.via, "%s", p);
+    if (const char *p = arg_str(argc, argv, "--password"))
+        std::snprintf(x.password, sizeof x.password, "%s", p);
+    if (const char *p = arg_str(argc, argv, "--pk"))
+        std::snprintf(x.pk, sizeof x.pk, "%s", p);
+    std::snprintf(x.device, sizeof x.device, "%s", arg_str(argc, argv, "--device") ? arg_str(argc, argv, "--device") : "AAECAwQFBgcICQoLDA0ODw");
+    if (const char *p = arg_str(argc, argv, "--group"))
+        std::snprintf(x.group, sizeof x.group, "%s", p);
+    x.no_media = has(argc, argv, "--no-media");
     guest.set_extras(x);
     // --way KIND:PORT (lan, tailscale, internet) on 127.0.0.1, any number: the ways to check and
     // keep (docs/ROUTES.md); --bridge PORT:ROOM:FP: an internet invite through a stand-in bridge.
@@ -214,6 +294,21 @@ int join(int argc, char **argv)
             c.kind = !std::strcmp(kind, "tailscale") ? route::Kind::tailscale
                      : !std::strcmp(kind, "internet") ? route::Kind::internet
                                                        : route::Kind::lan;
+            ways[n_ways++] = c;
+        }
+        else if (!std::strcmp(argv[i], "--lobby"))
+        {
+            // PORT:ROOM: a public room's lobby through a stand-in bridge (docs/ROOMS.md)
+            const char *colon = std::strchr(argv[i + 1], ':');
+            if (!colon)
+                continue;
+            route::Candidate c;
+            c.kind = route::Kind::internet;
+            c.way = route::Way::bridge;
+            c.lobby = true;
+            std::snprintf(c.addr, sizeof c.addr, "127.0.0.1");
+            c.port = static_cast<std::uint16_t>(std::atoi(argv[i + 1]));
+            std::snprintf(c.room, sizeof c.room, "%s", colon + 1);
             ways[n_ways++] = c;
         }
         else if (!std::strcmp(argv[i], "--bridge"))
@@ -501,8 +596,80 @@ int again(int argc, char **argv)
 }
 } // namespace
 
+// The Join list's network side: the list (page 0, then more), friends' rooms, one Details.
+int rooms_cmd(int argc, char **argv)
+{
+    if (argc < 3)
+        return 2;
+    static RoomsNet r;
+    r.init(argv[2]);
+    std::printf("base %s\n", r.base());
+    r.start();
+    rooms::Filter f;
+    f.myver = false;
+    r.refresh(rooms::Sort::best, f);
+    const char *lob[8], *names[8];
+    int nl = 0;
+    char fr[256] = {};
+    if (const char *s = arg_str(argc, argv, "--friends"))
+    {
+        std::snprintf(fr, sizeof fr, "%s", s);
+        for (char *p = fr; p && *p && nl < 8;)
+        {
+            lob[nl] = p;
+            names[nl++] = "Friend";
+            p = std::strchr(p, ',');
+            if (p)
+                *p++ = 0;
+        }
+        r.set_friends(lob, names, nl);
+    }
+    const int seconds = arg_int(argc, argv, "--seconds", 5);
+    const char *det = arg_str(argc, argv, "--details");
+    const std::uint64_t t0 = net::now_us();
+    bool asked_more = false, asked_detail = false;
+    while (net::now_us() - t0 < static_cast<std::uint64_t>(seconds) * 1000000)
+    {
+        const auto v = r.view();
+        if (v.state == RoomsNet::State::ok && v.list.next > 0 && !asked_more)
+            asked_more = true, r.more();
+        if (det && v.state == RoomsNet::State::ok && !asked_detail)
+        {
+            for (int i = 0; i < v.list.n; ++i)
+                if (!std::strcmp(v.list.cards[i].room, det))
+                    r.details(v.list.cards[i]), asked_detail = true;
+            if (!std::strncmp(det, "127.0.0.1:", 10) && !asked_detail)
+            {
+                rooms::Card c;
+                c.group = rooms::Group::nearby;
+                std::snprintf(c.addr, sizeof c.addr, "127.0.0.1");
+                c.port = static_cast<std::uint16_t>(std::atoi(det + 10));
+                r.details(c);
+                asked_detail = true;
+            }
+        }
+        net::sleep_ms(50);
+    }
+    r.stop();
+    const auto v = r.view();
+    static const char *st[] = {"idle", "loading", "ok", "unreachable", "off"};
+    static const char *ds[] = {"none", "loading", "ok", "old_host", "no_direct", "no_answer", "gone", "failed"};
+    std::printf("rooms state=%s n=%d next=%d app_latest=%s friends=%d\n", st[static_cast<int>(v.state)], v.list.n,
+                v.list.next, v.list.app_latest, v.n_friends);
+    for (int i = 0; i < v.list.n; ++i)
+        std::printf("card %s %s in=%d max=%d pw=%d est=%d\n", v.list.cards[i].room, v.list.cards[i].name,
+                    v.list.cards[i].in, v.list.cards[i].max, v.list.cards[i].pw, v.list.cards[i].est_ms);
+    for (int i = 0; i < v.n_friends; ++i)
+        std::printf("friend %s in=%d game=%s\n", v.friends[i].room, v.friends[i].in, v.friends[i].game_title);
+    std::printf("details %s host=%s players=%d measured=%d\n", ds[static_cast<int>(v.detail)], v.preview.host,
+                v.preview.n_players, v.measured_ms);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && !std::strcmp(argv[1], "rooms"))
+        return rooms_cmd(argc, argv);
     log_open(std::getenv("PLAY_CLI_LOG"));
     net::init();
     if (argc >= 2 && !std::strcmp(argv[1], "join"))

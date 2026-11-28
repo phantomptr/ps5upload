@@ -153,6 +153,9 @@ struct Candidate
     // An internet invite this way joins (Way::bridge): the room and the engine's certificate.
     char room[24] = {};
     char fp[100] = {};
+    // Play Rooms (docs/ROOMS.md): `room` is the host's lobby on the hub (a public or a friend's
+    // room): this home's PS5Upload knocks there for us and joins once the host lets us in.
+    bool lobby = false;
 };
 
 // Which way is used and when to change it. Holds a meter per way; the caller feeds the meters

@@ -12,7 +12,7 @@ namespace play
 {
 namespace
 {
-constexpr std::size_t kTokens = 640;
+constexpr std::size_t kTokens = 1400;
 
 void copy(char *dst, std::size_t cap, const char *src) noexcept
 {
@@ -77,6 +77,14 @@ bool parse_companion_doc(const char *text, std::size_t len, CompanionDoc &doc) n
         jstr(d, d.get(a, "name"), x.name, sizeof x.name);
         jstr(d, d.get(a, "client_kind"), x.client_kind, sizeof x.client_kind);
         jstr(d, d.get(a, "codec_warning"), x.codec_warning, sizeof x.codec_warning);
+        jstr(d, d.get(a, "via"), x.via, sizeof x.via);
+        jstr(d, d.get(a, "tag"), x.tag, sizeof x.tag);
+        const int pw = d.get(a, "password_ok");
+        x.password_ok = d.type(pw) == json::Type::boolean ? (d.boolean(pw) ? 1 : 0) : -1;
+        const int rh = d.get(a, "rtt_hint");
+        x.rtt_hint = d.type(rh) == json::Type::number ? static_cast<int>(d.integer(rh)) : -1;
+        const int gp = d.get(a, "players");
+        x.group_size = d.type(gp) == json::Type::array ? static_cast<int>(d.count(gp)) : 0;
     }
     const int gs = d.get(tog, "guests");
     for (std::uint32_t i = 0; i < d.count(gs) && doc.n_guests < 4; ++i)
@@ -93,7 +101,63 @@ bool parse_companion_doc(const char *text, std::size_t len, CompanionDoc &doc) n
         jstr(d, d.get(g, "client_kind"), x.client_kind, sizeof x.client_kind);
         jstr(d, d.get(g, "route"), x.route, sizeof x.route);
         jstr(d, d.get(g, "tier"), x.tier, sizeof x.tier);
+        jstr(d, d.get(g, "tag"), x.tag, sizeof x.tag);
+        x.from_rooms = d.boolean(d.get(g, "from_rooms"));
+        const int mu = d.get(g, "muted");
+        if (d.type(mu) == json::Type::object)
+        {
+            x.muted_voice = d.boolean(d.get(mu, "voice"));
+            x.muted_chat = d.boolean(d.get(mu, "chat"));
+        }
+        else
+            x.muted_voice = d.boolean(mu);
+        x.group = d.integer(d.get(g, "group"));
     }
+    // The room (GET /api/join `room`): in the doc beside "together", or inside it.
+    int rm = d.get(root, "room");
+    if (d.type(rm) != json::Type::object)
+        rm = d.get(tog, "room");
+    if (d.type(rm) == json::Type::object)
+    {
+        auto &r = doc.room;
+        r.known = true;
+        jstr(d, d.get(rm, "name"), r.name, sizeof r.name);
+        jstr(d, d.get(rm, "visibility"), r.vis, sizeof r.vis);
+        r.size = static_cast<int>(d.integer(d.get(rm, "size")));
+        r.password = d.boolean(d.get(rm, "password"));
+        const int ap = d.get(rm, "approval");
+        r.approve_friends = d.boolean(d.get(ap, "friends"), true);
+        r.approve_password = d.boolean(d.get(ap, "password"));
+        r.locked = d.boolean(d.get(rm, "lock")) || d.boolean(d.get(rm, "locked"));
+        jstr(d, d.get(rm, "chat"), r.chat, sizeof r.chat);
+        jstr(d, d.get(rm, "voice"), r.voice, sizeof r.voice);
+        r.start_muted = d.boolean(d.get(rm, "start_muted"));
+        const int li = d.get(rm, "listed");
+        jstr(d, d.get(li, "state"), r.listed, sizeof r.listed);
+        jstr(d, d.get(li, "why"), r.listed_why, sizeof r.listed_why);
+        jstr(d, d.get(rm, "lang"), r.lang, sizeof r.lang);
+        jstr(d, d.get(rm, "region"), r.region, sizeof r.region);
+        r.nearby = d.boolean(d.get(rm, "nearby"), true);
+        const int gm = d.get(rm, "game");
+        if (d.type(gm) == json::Type::object)
+            jstr(d, d.get(gm, "title"), r.game, sizeof r.game);
+        else
+            jstr(d, gm, r.game, sizeof r.game);
+        const int hl = d.get(rm, "host_link");
+        const int lr = d.get(hl, "rtt_ms");
+        r.link_rtt = d.type(lr) == json::Type::number ? static_cast<int>(d.integer(lr)) : -1;
+        jstr(d, d.get(hl, "tier"), r.link_tier, sizeof r.link_tier);
+        const int bl = d.get(rm, "blocked");
+        for (std::uint32_t i = 0; i < d.count(bl) && r.n_blocked < 8; ++i)
+        {
+            const int b = d.item(bl, i);
+            jstr(d, d.get(b, "name"), r.blocked[r.n_blocked].name, sizeof r.blocked[0].name);
+            jstr(d, d.get(b, "tag"), r.blocked[r.n_blocked].tag, sizeof r.blocked[0].tag);
+            ++r.n_blocked;
+        }
+    }
+    jstr(d, d.get(ses, "user"), doc.stream_user, sizeof doc.stream_user);
+    jstr(d, d.get(con, "owner"), doc.console_owner, sizeof doc.console_owner);
     const int st = d.get(tog, "settings");
     doc.block_system_buttons = d.boolean(d.get(st, "block_system_buttons"), true);
     doc.max_players = static_cast<int>(d.integer(d.get(st, "max_players"), 3));
@@ -371,6 +435,59 @@ bool Companion::set_switch(const char *key, const char *json_value) noexcept
     const long long rev = view_.doc.settings_rev;
     pthread_mutex_unlock(&lock_);
     std::snprintf(b, sizeof b, "\"settings\":{\"rev\":%lld,\"set\":{\"%s\":%s}}", rev, key, json_value);
+    return intent(b);
+}
+
+bool Companion::room_set(const char *key, const char *json_value) noexcept
+{
+    char b[400];
+    json::Writer w(b, sizeof b);
+    w.raw("\"room\":{").str(key).raw(":").raw(json_value).raw("}");
+    return w.ok() && intent(b);
+}
+
+bool Companion::kick_block(int player, const char *block) noexcept
+{
+    char b[96];
+    if (block && *block)
+        std::snprintf(b, sizeof b, "\"kick\":{\"player\":%d,\"block\":\"%s\"}", player, block);
+    else
+        std::snprintf(b, sizeof b, "\"kick\":{\"player\":%d}", player);
+    return intent(b);
+}
+
+bool Companion::unblock(const char *tag) noexcept
+{
+    char b[96];
+    json::Writer w(b, sizeof b);
+    w.raw("\"unblock\":{\"tag\":").str(tag).raw("}");
+    return w.ok() && intent(b);
+}
+
+bool Companion::mute(int player, bool voice, bool chat) noexcept
+{
+    char b[96];
+    std::snprintf(b, sizeof b, "\"mute\":{\"player\":%d,\"voice\":%s,\"chat\":%s}", player, voice ? "true" : "false",
+                  chat ? "true" : "false");
+    return intent(b);
+}
+
+bool Companion::mute_all(bool on) noexcept
+{
+    return intent(on ? "\"mute\":{\"all\":true,\"voice\":true}" : "\"mute\":{\"all\":true,\"voice\":false}");
+}
+
+bool Companion::allow_group(long long ask) noexcept
+{
+    char b[96];
+    std::snprintf(b, sizeof b, "\"decide\":{\"ask\":%lld,\"allow\":\"group\"}", ask);
+    return intent(b);
+}
+
+bool Companion::chat_quick(int id) noexcept
+{
+    char b[64];
+    std::snprintf(b, sizeof b, "\"chat\":{\"quick\":%d}", id);
     return intent(b);
 }
 

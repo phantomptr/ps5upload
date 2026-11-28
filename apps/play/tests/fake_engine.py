@@ -16,7 +16,8 @@ import time
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 report = {"hellos": [], "pads": [], "keyframes": 0, "pings": 0, "stats": [], "leaves": 0,
           "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0, "hub_hosts": [], "hub_host_msgs": [],
-          "probe_sockets": 0, "probe_checks": [], "bursts": [], "replaced": 0, "bridges": []}
+          "probe_sockets": 0, "probe_checks": [], "bursts": [], "replaced": 0, "bridges": [],
+          "chats": [], "mics": [], "voice_up": [], "knocks": [], "http": []}
 T0 = time.monotonic()
 lock = threading.Lock()
 
@@ -87,6 +88,111 @@ class Ws:
         self.send(1, json.dumps(obj))
 
 
+# ---- Play Rooms (docs/ROOMS.md): the room key, sealed knocks, lists and previews ----
+ROOM_SK = int.from_bytes(hashlib.sha256(b"fake room key").digest(), "big") % (2**256 - 2**224) or 1
+
+
+def b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def b64d(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def room_pk():
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+    k = ec.derive_private_key(ROOM_SK, ec.SECP256R1())
+    return b64u(k.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint))
+
+
+def unseal(blob, challenge):
+    """src/net/seal.hpp, as the host engine opens it."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    box = b64d(blob)
+    if box[0] != 1:
+        return None
+    sk = ec.derive_private_key(ROOM_SK, ec.SECP256R1())
+    shared = sk.exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), box[1:66]))
+    key = HKDF(algorithm=hashes.SHA256(), length=16, salt=b64d(challenge), info=b"ps5upload room knock v1").derive(shared)
+    try:
+        return json.loads(AESGCM(key).decrypt(box[66:78], box[78:], None))
+    except Exception:
+        return None
+
+
+def knock_secret(ws, args, gid):
+    """A knock that needs the password: challenge, sealed, checked. True when it is right."""
+    c = b64u(os.urandom(16))
+    ws.text({"knock": "challenge", "c": c, "pk": room_pk(), "gid": gid})
+    _, data = ws.recv()
+    m = json.loads(data)
+    plain = unseal(m.get("blob", ""), c) if m.get("knock") == "sealed" else None
+    ok = bool(plain) and plain.get("secret") == args.room_pw and plain.get("challenge") == c and plain.get("gid") == gid
+    rec("knocks", {"sealed": m.get("knock") == "sealed", "ok": ok, "gid": gid})
+    if not ok:
+        ws.text({"knock": "no", "why": "password", "left": 4})
+    return ok
+
+
+ROOMS = [
+    {"room": "lobbyA", "name": "Couch chaos", "host": "Sam", "tag": "4F2A",
+     "game": {"title": "It Takes Two", "id": "PPSA01234"}, "proto": 2, "ver": "13.0.0",
+     "caps": ["web", "ps5app", "preview", "chat", "voice"], "slots": [1, 4], "pw": True, "lang": "en",
+     "region": "eu-west", "est_ms": 30, "age_s": 120},
+    {"room": "lobbyB", "name": "Sunday racers", "host": "Kai", "tag": "9C11",
+     "game": {"title": "Gran Turismo 7", "id": "PPSA01476"}, "proto": 2, "ver": "13.0.0",
+     "caps": ["ps5app", "preview"], "slots": [4, 4], "pw": False, "lang": "de", "est_ms": 70, "age_s": 30},
+]
+PREVIEW = {"proto": 2, "caps": ["chat", "voice", "preview", "group"],
+           "host": {"name": "Sam", "tag": "4F2A", "ver": "13.0.0", "playing_for_min": 42},
+           "room": {"name": "Couch chaos", "visibility": "public", "size": 4, "pw": True, "approval": "ask",
+                    "chat": "quick", "lang": "en", "region": "eu-west", "watchers": 0},
+           "game": {"id": "PPSA01234", "title": "It Takes Two"},
+           "stream": {"res": "1080p", "fps": 60, "codec": "hevc", "kbps": 15000, "hdr": False},
+           "host_link": {"rtt_ms": 2, "tier": "excellent"},
+           "players": [{"name": "Sam", "seat": 1, "kind": "host"},
+                       {"name": "Mia", "seat": 2, "kind": "ps5", "tier": "good", "rtt_ms": 31}],
+           "asking": 0}
+rooms_429 = {"left": 0}
+
+
+def http_rooms(conn, path):
+    """The hub's GET /rooms, /rooms/status, /rooms/<id>/preview and the engine's /api/join/preview."""
+    def answer(code, obj, extra=b""):
+        body = json.dumps(obj).encode()
+        conn.sendall(b"HTTP/1.1 %d X\r\nContent-Type: application/json\r\n%sContent-Length: %d\r\n\r\n"
+                     % (code, extra, len(body)) + body)
+    rec("http", path)
+    p, _, q = path.partition("?")
+    params = dict(kv.split("=", 1) for kv in q.split("&") if "=" in kv)
+    if p == "/rooms":
+        if rooms_429["left"] > 0:
+            rooms_429["left"] -= 1
+            return answer(429, {"why": "slow_down", "retry_s": 1}, b"Retry-After: 1\r\n")
+        page = int(params.get("page", "0") or 0)
+        rooms = ROOMS[page:page + 1]
+        return answer(200, {"you": {"country": "DE", "region": "eu-west"}, "proto": {"min": 2, "latest": 2},
+                            "app": {"latest": "13.0.0"}, "rooms": rooms, "next": page + 1 if page + 1 < len(ROOMS) else None})
+    if p == "/rooms/status":
+        ids = params.get("r", "").split(",")
+        out = {i: {"listed": False, "locked": False, "slots": [2, 4], "pw": False, "proto": 2,
+                   "game": {"title": "ASTRO BOT", "id": "PPSA02345"}} for i in ids if i == "lobbyF"}
+        return answer(200, {"every_s": 60, "rooms": out})
+    if p.startswith("/rooms/") and p.endswith("/preview"):
+        rid = p[len("/rooms/"):-len("/preview")]
+        if rid == "lobbyA":
+            return answer(200, PREVIEW)
+        return answer(404, {"why": "no_room"})
+    if p == "/api/join/preview":
+        return answer(200, PREVIEW)
+    return answer(404, {"why": "not_found"})
+
+
 def parse_pad(b):
     """join.rs parse_pad: [1][u32 seq][u32 buttons][6 x u8][n][n x (u8, u16, u16)] [2][6 x f32]"""
     if len(b) < 16 or b[0] != 1:
@@ -116,6 +222,13 @@ def guest(ws, args, state, via=None):
     if resume and resume != "tok1":
         ws.text({"stage": "refused", "why": "expired"})
         return
+    # Play Rooms: a knock that needs the password, a name already in the room
+    if h.get("knock") and args.room_pw and not resume and via != "lobby":
+        if not knock_secret(ws, args, ""):
+            return
+    if args.name_taken and h.get("name") == args.name_taken and not resume:
+        ws.text({"name_taken": {"suggest": args.name_taken + " (2)"}})
+        return
     if args.refuse:
         ws.text({"stage": "refused", "why": args.refuse})
         return
@@ -141,7 +254,18 @@ def guest(ws, args, state, via=None):
         joined["friend"] = "pass1"
     if not args.old:
         joined["codec_warning"] = None
+    rooms = h.get("proto") == 2 and not args.old
+    if rooms:
+        joined["lobby"] = "lobbyF"
     ws.text(joined)
+    if rooms:
+        ws.text({"room": {"name": "Couch chaos", "size": 4,
+                          "players": [{"id": 1, "name": "Fake host", "seat": 1, "color": [0, 0, 255]},
+                                      {"id": 2, "name": h.get("name", ""), "seat": 2, "you": True},
+                                      {"id": 3, "name": "Mia", "seat": 3}],
+                          "you": {"rtt_ms": 5, "tier": "excellent"}, "host_link": {"rtt_ms": 2, "tier": "excellent"},
+                          "chat": "text", "voice": "ptt", "muted": {"voice": False, "chat": False}}})
+        ws.text({"chat": {"from": "Mia", "quick": 3}})
     timed = bool(h.get("client", {}).get("caps", {}).get("timing")) and not args.old
     stop = threading.Event()
 
@@ -149,6 +273,11 @@ def guest(ws, args, state, via=None):
         try:
             while not stop.is_set():
                 op, data = ws.recv()
+                if op == 2 and data[:1] == b"\x06":
+                    # room voice up: [6][seq u16][level u8][Opus]
+                    if len(data) >= 5:
+                        rec("voice_up", {"seq": struct.unpack(">H", data[1:3])[0], "level": data[3], "len": len(data) - 4})
+                    continue
                 if op == 2:
                     p = parse_pad(data)
                     if p is None:
@@ -171,6 +300,10 @@ def guest(ws, args, state, via=None):
                     ws.text(pong)
                 if "stats" in m:
                     rec("stats", m["stats"])
+                if "chat" in m:
+                    rec("chats", m["chat"])
+                if "mic" in m:
+                    rec("mics", m["mic"])
         except Exception:
             stop.set()
 
@@ -209,6 +342,13 @@ def guest(ws, args, state, via=None):
             if n == 30:
                 ws.text({"rumble": [200, 40]})
                 ws.text({"light": [0, 0, 255]})
+            if rooms and n % 6 == 0:
+                # room voice down: [9][n][(speaker, seq u16, len, Opus)...], two speakers
+                k = (n // 6) & 0xFFFF
+                ws.send(2, b"\x09\x02" + bytes([1]) + struct.pack(">H", k) + bytes([3]) + b"abc"
+                        + bytes([3]) + struct.pack(">H", k) + bytes([2]) + b"de")
+                if n == 60:
+                    ws.text({"voice": {"speaking": [1], "paused": None, "mode": "ptt"}})
             if args.drop_after and not sent_drop and time.monotonic() - t0 > args.drop_after:
                 state["dropped"] = True
                 ws.c.shutdown(socket.SHUT_RDWR)
@@ -251,6 +391,15 @@ def bridge(ws, args, state):
     rec("bridges", b)
     ws.text({"bridge": "connecting"})
     time.sleep(0.2)
+    if b.get("v") == 2 and b.get("lobby"):
+        # a room from Rooms: the bridge knocks on the host's lobby for the app and relays the answers
+        if args.room_pw and not knock_secret(ws, args, "g1"):
+            return
+        ws.text({"knock": "wait"})
+        time.sleep(0.3)
+        ws.text({"bridge": "open", "path": "internet", "rtt_ms": 45})
+        guest(ws, args, state, via="lobby")
+        return
     if args.bridge_fail:
         ws.text({"bridge": "failed", "why": args.bridge_fail})
         return
@@ -426,6 +575,8 @@ def serve(conn, args, state):
         hdr = {l.split(":", 1)[0].lower(): l.split(":", 1)[1].strip() for l in lines[1:] if ":" in l}
         if path.startswith("/v1/"):
             return helper_api(conn, lines[0].split(" ")[0], path, hdr, rest)
+        if path.startswith("/rooms") or path.startswith("/api/join/preview"):
+            return http_rooms(conn, path)
         if path == "/api/join/probe" and args.no_probe:
             conn.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
             return
@@ -540,6 +691,9 @@ def main():
     ap.add_argument("--bridge-fail", help="the stand-in bridge answers failed with this why")
     ap.add_argument("--key", help="the invite key the stand-in takes through a bridge (default: any)")
     ap.add_argument("--no-probe", action="store_true", help="an engine without the checks socket")
+    ap.add_argument("--room-pw", help="knocks need this password (sealed to the room key)")
+    ap.add_argument("--name-taken", help="a guest with this name is told it is taken")
+    ap.add_argument("--rooms-429", type=int, default=0, help="the first N GET /rooms answer 429 Retry-After 1")
     ap.add_argument("--proxy", action="append", default=[],
                     help="DELAY_MS[:HOLE_AFTER_S[:HOLE_UNTIL_S]]: another way in, with that round trip")
     args = ap.parse_args()
@@ -565,6 +719,7 @@ def main():
             f.write(str(port))
     if args.discovery:
         threading.Thread(target=discovery, args=(port,), daemon=True).start()
+    rooms_429["left"] = args.rooms_429
     state = {}
     srv.settimeout(0.2)
     end = time.monotonic() + args.lifetime

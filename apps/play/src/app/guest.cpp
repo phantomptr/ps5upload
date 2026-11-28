@@ -194,6 +194,18 @@ void Guest::run() noexcept
                 const char *e = ws_.error();
                 if (bridge_why_[0] && route_is_bridge(-1))
                 {
+                    // A knock from Rooms that the host answered no (or a wrong password): the
+                    // same words as any refusal.
+                    if (!std::strncmp(bridge_why_, "knock_", 6))
+                    {
+                        set_phase(GuestView::refused, bridge_why_ + 6);
+                        break;
+                    }
+                    if (!std::strcmp(bridge_why_, "password"))
+                    {
+                        set_phase(GuestView::password, "");
+                        break;
+                    }
                     // Through this home's PS5Upload: its own reason, for a plain message.
                     char why[24];
                     std::snprintf(why, sizeof why, "bridge_%s", bridge_why_);

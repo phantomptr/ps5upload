@@ -412,5 +412,90 @@ check(len(hs) == 2 and hs[0].get("again") == "pass1" and "resume" not in hs[0] a
 check(out.count("joined as player 2") == 2 and "phase reconnecting" not in out and "phase refused" not in out
       and "friend " not in out, "no reconnect screen, no refusal, no second pass")
 
+# ---- Play Rooms (docs/ROOMS.md) ----------------------------------------------------------------
+def chat_line(out):
+    for line in out.splitlines():
+        if line.startswith("chat lines="):
+            return dict(kv.split("=", 1) for kv in line.split() if "=" in kv)
+    return {}
+
+
+# R1. A room's knock with a password (sealed to the room key), then chat, voice and the room push.
+p, port, rep = engine("room", "--room-pw", "hunter22", "--seconds", "5", "--lifetime", "15")
+out = run("join", "127.0.0.1", str(port), "--via", "rooms", "--password", "hunter22", "--quick", "3",
+          "--text", "hello https://x.io there", "--talk", "12", "--seconds", "4")
+r = finish(p, rep)
+h = r["hellos"][0] if r["hellos"] else {}
+check(h.get("knock") == {"via": "rooms"} and h.get("device") == "AAECAwQFBgcICQoLDA0ODw" and h.get("proto") == 2
+      and "voice" in h.get("caps", []), "a rooms hello: knock, device tag, protocol 2 and features")
+check(r["knocks"] == [{"sealed": True, "ok": True, "gid": ""}], "the password goes sealed and opens on the host")
+check("phase joined" in out and "room name=Couch chaos players=3 chat=text voice=ptt" in out, "the room push is read")
+check(r["chats"] == [{"quick": 3}, {"text": "hello https://x.io there"}], "a quick message by id and a typed line")
+check("text now 0" in out and "note=slow" in out, "a second line within 2 s: Slow down, nothing sent")
+check(r["mics"][:1] == ["ptt_down"] and r["mics"][-1:] == ["ptt_up"], "push-to-talk edges")
+check(len(r["voice_up"]) == 12 and all(v["len"] == 40 and v["level"] == 180 for v in r["voice_up"])
+      and [v["seq"] for v in r["voice_up"]] == list(range(12)), "voice frames up: [6][seq][level][Opus]")
+cl = chat_line(out)
+check(cl.get("lines") == "3" and cl.get("unread") == "1", "chat: the host's line in, ours kept (unread 1)")
+check(int(cl.get("voice_in", 0)) >= 10 and cl.get("speakers") == "a", "voice bundles from two speakers (1 and 3)")
+check(cl.get("lobby") == "lobbyF", "joined names the host's lobby (Your friends' rooms)")
+
+# R2. A wrong password: refused with the tries left; no password at all: the app asks for it.
+p, port, rep = engine("room-bad", "--room-pw", "hunter22", "--lifetime", "10")
+out = run("join", "127.0.0.1", str(port), "--via", "rooms", "--password", "wrong", "--seconds", "3")
+r = finish(p, rep)
+check("phase refused password" in out and chat_line(out).get("tries_left") == "4", "wrong password: refused, 4 tries left")
+p, port, rep = engine("room-none", "--room-pw", "hunter22", "--lifetime", "10")
+out = run("join", "127.0.0.1", str(port), "--via", "rooms", "--seconds", "2")
+finish(p, rep)
+check("phase password" in out, "no password given: the app asks for it")
+
+# R3. A name already in the room: the host's suggestion.
+p, port, rep = engine("room-name", "--name-taken", "Sam", "--lifetime", "10")
+out = run("join", "127.0.0.1", str(port), "--via", "rooms", "--name", "Sam", "--seconds", "2")
+finish(p, rep)
+check("phase name_taken" in out and "suggest Sam (2)" in out, "name taken: Join as Sam (2)")
+
+# R4. A public room through this home's PS5Upload: the bridge knocks on the lobby, the app seals.
+p, port, rep = engine("room-lobby", "--room-pw", "pw4lobby", "--seconds", "3", "--lifetime", "15")
+out = run("join", "127.0.0.1", "9", "--via", "rooms", "--password", "pw4lobby", "--lobby", f"{port}:lobbyA",
+          "--seconds", "3")
+r = finish(p, rep)
+b = r["bridges"][0] if r["bridges"] else {}
+check(b.get("v") == 2 and b.get("lobby") == "lobbyA" and b.get("knock", {}).get("via") == "rooms"
+      and "password" not in json.dumps(b), "bridge v2: the lobby and the knock, never the password")
+check({"sealed": True, "ok": True, "gid": "g1"} in r["knocks"] and "phase joined" in out,
+      "the lobby's challenge is sealed with the hub's gid, then joined")
+p, port, rep = engine("room-lobby-bad", "--room-pw", "pw4lobby", "--lifetime", "10")
+out = run("join", "127.0.0.1", "9", "--via", "rooms", "--password", "nope", "--lobby", f"{port}:lobbyA", "--seconds", "3")
+finish(p, rep)
+check("phase refused password" in out, "a wrong password through the bridge: refused")
+
+# R5. Many controllers: a seat without picture or sound, in the first player's group.
+p, port, rep = engine("group", "--seconds", "3", "--lifetime", "10")
+out = run("join", "127.0.0.1", str(port), "--group", "tok1", "--no-media", "--seconds", "2")
+r = finish(p, rep)
+h = r["hellos"][0] if r["hellos"] else {}
+check(h.get("media") is False and h.get("group") == "tok1" and "remember" not in h and "inbox" not in h,
+      "a grouped seat: media false, the group token, no pass, no inbox")
+
+# R6. The Join list: the hub's list (a 429 waited out silently), more pages, friends, Details.
+p, port, rep = engine("hub-rooms", "--rooms-429", "1", "--lifetime", "15")
+out = run("rooms", f"ws://127.0.0.1:{port}/ws", "--friends", "lobbyF,lobbyGone", "--details", "lobbyA",
+          "--seconds", "5")
+r = finish(p, rep)
+check("rooms state=ok n=2" in out and "card lobbyA Couch chaos in=1 max=4 pw=1 est=30" in out,
+      "the list, page by page")
+lists = [x for x in r["http"] if x.startswith("/rooms?")]
+check(len(lists) >= 3 and "page=1" in lists[-1] and "sort=best" in lists[0], "a 429 is tried again, then the next page")
+check("friends=1" in out and "friend lobbyF in=2 game=ASTRO BOT" in out, "Your friends' rooms: only the open one")
+check("details ok host=Sam players=2 measured=-1" in out, "Details from the hub: the preview, an estimate only")
+p, port, rep = engine("near-preview", "--lifetime", "10")
+out = run("rooms", f"ws://127.0.0.1:{port}/ws", "--details", f"127.0.0.1:{port}", "--seconds", "4")
+finish(p, rep)
+m = [l for l in out.splitlines() if l.startswith("details ")]
+check(m and m[0].startswith("details ok host=Sam players=2 measured=") and not m[0].endswith("measured=-1"),
+      "Details of a nearby game: the engine's preview and a measured round trip")
+
 print("e2e:", "all passed" if not failures else f"{failures} failed")
 sys.exit(1 if failures else 0)
