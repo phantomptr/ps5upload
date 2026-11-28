@@ -544,7 +544,7 @@ mod tests {
         t.probed(AT, moved, true);
         assert_eq!(t.pick(AT, true, now), Some(moved));
         // The host is the console's bare host, whatever form the address came in.
-        assert_eq!(t.pick("192.0.2.40:9113", true, now), Some(moved));
+        assert_eq!(t.pick("192.0.2.40:9120", true, now), Some(moved));
     }
 
     #[test]
