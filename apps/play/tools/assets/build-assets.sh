@@ -50,7 +50,12 @@ step() { printf '== %s\n' "$*"; }
 # 1. art: icon0, pic0/pic1 (PNG + raw RGBA), logo, in-app background
 art_outs=("$out/icon0.png" "$out/pic0.png" "$out/pic1.png" "$work/pic0.rgba" "$work/pic1.rgba"
           "$out/logo.rgba" "$out/ui-bg.rgba")
-if stale "${art_outs[@]}" -- "$here/make-art.py" "$branding/icon-1024.png" "$branding/mark-white-1024.png"; then
+icon_svg=$play/../../branding/icon-play.svg
+if stale "$work/icon-play-512.png" -- "$icon_svg"; then
+    step "icon (branding/icon-play.svg)"
+    rsvg-convert -w 512 -h 512 "$icon_svg" -o "$work/icon-play-512.png"
+fi
+if stale "${art_outs[@]}" -- "$here/make-art.py" "$work/icon-play-512.png" "$branding/mark-white-1024.png"; then
     step "art"
     python3 "$here/make-art.py" "$branding" "$out" "$work"
 fi

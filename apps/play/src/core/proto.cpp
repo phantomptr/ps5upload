@@ -201,6 +201,8 @@ bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
         copy(ev.why, sizeof ev.why, d, v);
         return true;
     }
+    if (d.get(0, "watch") >= 0 || d.get(0, "picture") >= 0)
+        return true; // the watch page's notes: nothing for the app (type none)
     if ((v = d.get(0, "pong")) >= 0)
     {
         ev.type = GuestEvent::pong;

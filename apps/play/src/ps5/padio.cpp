@@ -109,7 +109,10 @@ void *thread_main(void *) noexcept
                 seen_rumble = rs;
                 const std::uint32_t v = want_rumble.load();
                 const std::uint8_t m[2] = {static_cast<std::uint8_t>(v >> 8), static_cast<std::uint8_t>(v)};
-                scePadSetVibration(handle, m);
+                const int rc = scePadSetVibration(handle, m);
+                static int logged;
+                if (logged++ < 5)
+                    log("pad: rumble %u %u: %#x", m[0], m[1], rc);
             }
             const unsigned ls = light_serial.load();
             if (ls != seen_light)
@@ -120,7 +123,10 @@ void *thread_main(void *) noexcept
                 {
                     const std::uint8_t c[4] = {static_cast<std::uint8_t>(v >> 16), static_cast<std::uint8_t>(v >> 8),
                                                static_cast<std::uint8_t>(v), 0};
-                    scePadSetLightBar(handle, c);
+                    const int rc = scePadSetLightBar(handle, c);
+                    static int logged;
+                    if (logged++ < 5)
+                        log("pad: light bar %u %u %u: %#x", c[0], c[1], c[2], rc);
                 }
                 else
                     scePadResetLightBar(handle);

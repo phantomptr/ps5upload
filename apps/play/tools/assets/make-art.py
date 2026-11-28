@@ -18,13 +18,14 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageFilter
 
-NAVY_TOP = np.array([9, 11, 26], np.float32)
-NAVY_BOTTOM = np.array([4, 5, 14], np.float32)
-INDIGO = np.array([30, 26, 78], np.float32)
-GLOW = np.array([72, 64, 168], np.float32)
-TEAL = np.array([16, 54, 84], np.float32)
-MARK = np.array([240, 242, 255], np.float32)
-MARK_GLOW = np.array([110, 120, 255], np.float32)
+# The PS5Upload palette only: black, white and the greys between (no other brand colours).
+NAVY_TOP = np.array([14, 14, 16], np.float32)
+NAVY_BOTTOM = np.array([5, 5, 6], np.float32)
+INDIGO = np.array([34, 34, 38], np.float32)
+GLOW = np.array([92, 92, 98], np.float32)
+TEAL = np.array([22, 22, 26], np.float32)
+MARK = np.array([250, 250, 250], np.float32)
+MARK_GLOW = np.array([150, 150, 156], np.float32)
 
 
 def smoothstep(a, b, x):
@@ -38,7 +39,7 @@ def blob(u, v, cx, cy, radius, aspect=1.0):
 
 
 def background(w, h, glow=1.0, calm=1.0):
-    """Deep navy field, indigo bloom on the right, dark left side, vignette."""
+    """Near-black field, a soft grey bloom on the right, dark left side, vignette."""
     y, x = np.mgrid[0:h, 0:w].astype(np.float32)
     u, v = x / w, y / h
     a = w / h  # aspect so that spots stay round
@@ -103,11 +104,15 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
 
-    # icon0: the white logo tile flattened onto white, 512x512 RGB
-    icon = Image.open(branding / "icon-1024.png").convert("RGBA")
+    # icon0: the Play icon (branding/icon-play.svg, rendered by build-assets.sh) flattened
+    # onto white, 512x512 RGB
+    icon = Image.open(work / "icon-play-512.png").convert("RGBA")
     tile = Image.new("RGBA", icon.size, (255, 255, 255, 255))
     tile.alpha_composite(icon)
-    tile.convert("RGB").resize((512, 512), Image.LANCZOS).save(out / "icon0.png", optimize=True)
+    tile = tile.convert("RGB")
+    if tile.size != (512, 512):
+        tile = tile.resize((512, 512), Image.LANCZOS)
+    tile.save(out / "icon0.png", optimize=True)
 
     # pic0 (selection) and pic1 (launch): same scene, pic1 a little brighter
     for name, glow, height, seed in (("pic0", 1.0, 0.60, 1), ("pic1", 1.15, 0.64, 2)):

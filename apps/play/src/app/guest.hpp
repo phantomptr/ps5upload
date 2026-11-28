@@ -88,6 +88,11 @@ class Guest
     {
         nudge_.store(true);
     }
+    // Testing: let the socket go as a suspend does (the session then comes back with its token).
+    void drop_socket() noexcept
+    {
+        ws_.close();
+    }
 
   private:
     static void *entry(void *self) noexcept;

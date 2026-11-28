@@ -19,7 +19,7 @@ namespace play::ps5::video
 {
 namespace
 {
-constexpr unsigned kFrames = 16, kAuSlots = 8, kQueue = 6;
+constexpr unsigned kFrames = 16, kAuSlots = 8, kQueue = 16; // a burst after a network stall fits
 constexpr std::size_t kAuMax = 4u << 20;
 
 // ---- the decoder ----------------------------------------------------------------------------

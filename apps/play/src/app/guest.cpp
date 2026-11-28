@@ -250,7 +250,7 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
     proto::GuestEvent e;
     if (!proto::parse_guest(t, n, e))
     {
-        log("guest: unread message (%zu bytes)", n);
+        log("guest: unread message (%zu bytes): %.*s", n, static_cast<int>(n > 160 ? 160 : n), t);
         return;
     }
     switch (e.type)

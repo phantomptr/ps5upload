@@ -724,6 +724,8 @@ void App::command(const char *line) noexcept
     }
     if (!std::strcmp(verb, "leave"))
         leave_game();
+    else if (!std::strcmp(verb, "drop"))
+        guest_->drop_socket();
     else if (!std::strcmp(verb, "home"))
     {
         stop_host();
@@ -732,6 +734,14 @@ void App::command(const char *line) noexcept
     }
     else if (!std::strcmp(verb, "pair"))
         host_->pair();
+    else if (!std::strcmp(verb, "pick") || !std::strcmp(verb, "pickhost"))
+    {
+        stop_host();
+        depth_ = 0;
+        screen_ = Screen::home;
+        for_host_ = !std::strcmp(verb, "pickhost");
+        go(Screen::pick);
+    }
     else if (n >= 3 && (!std::strcmp(verb, "join") || !std::strcmp(verb, "nearby") || !std::strcmp(verb, "host")))
     {
         std::snprintf(addr_, sizeof addr_, "%s", a);
@@ -1008,17 +1018,19 @@ void App::draw_code(Canvas &c) noexcept
         if (i < 31)
         {
             const char ch[2] = {proto::kCodeAlphabet[i], 0};
-            c.text_center(Font::title, kx + kw / 2, yy + (kh - ui::font_height(Font::title)) / 2, ch, col::text);
+            c.text_center(Font::title, kx + kw / 2, yy + (kh - ui::font_height(Font::title)) / 2, ch,
+                          sel ? col::on_accent : col::text);
         }
         else
-            c.text_center(Font::body, kx + kw / 2, yy + (kh - ui::font_height(Font::body)) / 2, "←", col::text);
+            c.text_center(Font::body, kx + kw / 2, yy + (kh - ui::font_height(Font::body)) / 2, "←",
+                          sel ? col::on_accent : col::text);
     }
     const bool full = len == static_cast<std::size_t>(proto::kCodeLen);
     const int jy = ky + 4 * (kh + kg), jw = 8 * kw + 7 * kg;
     c.round_rect(kLeft, jy, jw, kh, 14, sel_ == 32 ? col::accent : full ? col::accent_dim : col::panel,
                  full || sel_ == 32 ? 255 : 160);
     c.text_center(Font::title, kLeft + jw / 2, jy + (kh - ui::font_height(Font::title)) / 2, tr(S::code_join),
-                  full ? col::text : col::muted);
+                  sel_ == 32 ? col::on_accent : full ? col::text : col::muted);
     const int g[] = {G_CROSS, G_SQUARE, G_TRIANGLE, G_CIRCLE};
     const S l[] = {S::hint_type, S::hint_delete, S::hint_join, S::hint_back};
     draw_hints(c, g, l, 4);
@@ -1053,7 +1065,8 @@ void App::draw_address(Canvas &c) noexcept
         }
         const bool sel = sel_ == i;
         c.round_rect(kx, yy, w, kh, 14, sel ? col::accent : col::panel, sel ? 255 : 220);
-        c.text_center(Font::title, kx + w / 2, yy + (kh - ui::font_height(Font::title)) / 2, label, col::text);
+        c.text_center(Font::title, kx + w / 2, yy + (kh - ui::font_height(Font::title)) / 2, label,
+                      sel ? col::on_accent : col::text);
     }
     const int g[] = {G_CROSS, G_SQUARE, G_TRIANGLE, G_CIRCLE};
     const S l[] = {S::hint_type, S::hint_delete, S::hint_ok, S::hint_back};

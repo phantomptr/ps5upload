@@ -14,12 +14,14 @@ constexpr std::uint32_t rgb(unsigned r, unsigned g, unsigned b, unsigned a = 255
     return (a << 24) | (b << 16) | (g << 8) | r;
 }
 
-// The look: deep navy, an indigo accent (the home-screen art's glow), soft white text.
+// The look: PS5Upload's black and white (no other brand colours); white marks the selection,
+// with black text on it.
 namespace color
 {
-constexpr std::uint32_t bg = rgb(8, 9, 20), panel = rgb(22, 24, 46), panel_hi = rgb(38, 40, 78),
-                        accent = rgb(110, 104, 255), accent_dim = rgb(64, 60, 160), text = rgb(236, 238, 250),
-                        muted = rgb(150, 154, 186), good = rgb(80, 210, 140), warn = rgb(255, 190, 90),
+constexpr std::uint32_t bg = rgb(8, 8, 9), panel = rgb(26, 26, 29), panel_hi = rgb(44, 44, 48),
+                        accent = rgb(240, 240, 242), accent_dim = rgb(92, 92, 98), on_accent = rgb(12, 12, 14),
+                        text = rgb(238, 238, 240), muted = rgb(150, 150, 156), good = rgb(80, 210, 140),
+                        warn = rgb(255, 190, 90),
                         bad = rgb(255, 110, 110), white = rgb(255, 255, 255), black = rgb(0, 0, 0),
                         cross = rgb(140, 170, 255), circle = rgb(255, 120, 130), square = rgb(240, 150, 220),
                         triangle = rgb(90, 220, 190);

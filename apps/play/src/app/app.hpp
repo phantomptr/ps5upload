@@ -35,7 +35,7 @@ class App
     // One frame: input, state, drawing. `ui` is the full-screen picture, `layer` the overlay.
     void frame(std::uint64_t now_us, std::uint32_t *ui, std::uint32_t *layer) noexcept;
     // Commands from the dev file (`join ADDR PORT CODE`, `nearby ADDR PORT`, `host ADDR PORT`,
-    // `pair`, `leave`, `home`, `exit`).
+    // `pick`, `pickhost`, `pair`, `drop`, `leave`, `home`, `exit`).
     void command(const char *line) noexcept;
 
     // For screenshots on a computer: show a screen with made-up state.

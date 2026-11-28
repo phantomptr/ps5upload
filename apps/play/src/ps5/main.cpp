@@ -135,7 +135,8 @@ Chords chords() noexcept
 }
 bool video_showing() noexcept
 {
-    return ps5::display::since_video_us() < 400000;
+    // Short stalls keep the last picture up; after this long the app says it is waiting.
+    return ps5::display::since_video_us() < 1500000;
 }
 void present(const std::uint32_t *ui) noexcept
 {

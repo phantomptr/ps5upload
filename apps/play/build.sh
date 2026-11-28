@@ -6,7 +6,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
-image=ps5upload-play-build:1
+image=ps5upload-play-build:2
 if [[ ${PLAY_NO_DOCKER:-} == 1 ]]; then
     exec bash "$here/tools/build-in-container.sh" "$@"
 fi

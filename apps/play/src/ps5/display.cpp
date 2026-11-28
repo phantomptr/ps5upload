@@ -193,7 +193,8 @@ std::uint8_t *acquire() noexcept
                 status_ok = false;
                 break;
             }
-            if (s.flip_pending_num <= 0)
+            // Three buffers: one on screen, one waiting for its vblank, one being drawn.
+            if (s.flip_pending_num <= 1)
                 break;
             ++st.waits;
             sceKernelUsleep(1000);
@@ -265,7 +266,11 @@ void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned
 {
     if (!w || !h || w > 4096 || h > 2304)
         return;
-    const std::uint64_t t0 = net::now_us();
+    // Decoders round the height up to whole macroblocks: 1088 holds a 1080 picture.
+    if (h == 1088)
+        h = 1080;
+    else if (h == 544)
+        h = 540;
     pthread_mutex_lock(&present_lock);
     if (w != map_w || h != map_h)
     {
@@ -279,6 +284,7 @@ void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned
     }
     job.kind = Job::nv12;
     job.dst = acquire();
+    const std::uint64_t t0 = net::now_us();
     job.y = y;
     job.uv = y + pitch * luma_rows;
     job.pitch = pitch;
@@ -290,9 +296,9 @@ void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned
     run_job();
     pthread_mutex_unlock(&ov_lock);
     flip();
+    const float ms = static_cast<float>(net::now_us() - t0) / 1000.0f;
     pthread_mutex_unlock(&present_lock);
     last_video_us = net::now_us();
-    const float ms = static_cast<float>(net::now_us() - t0) / 1000.0f;
     convert_avg = convert_avg * 0.95f + ms * 0.05f;
 }
 

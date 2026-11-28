@@ -255,7 +255,7 @@ void Companion::handle(const char *t, std::size_t n) noexcept
         pthread_mutex_unlock(&lock_);
         if (!parse_companion_doc(t, n, doc))
         {
-            log("companion: unread doc (%zu bytes)", n);
+            log("companion: unread doc (%zu bytes): %.*s", n, static_cast<int>(n > 160 ? 160 : n), t);
             return;
         }
         pthread_mutex_lock(&lock_);

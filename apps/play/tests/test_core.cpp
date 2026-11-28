@@ -231,6 +231,8 @@ void test_guest_messages()
     CHECK(proto::parse_guest(li, std::strlen(li), e) && e.has_light && e.light_rgb[2] == 255);
     const char *by = R"({"bye":"kicked"})";
     CHECK(proto::parse_guest(by, std::strlen(by), e) && e.type == proto::GuestEvent::bye && !std::strcmp(e.why, "kicked"));
+    const char *wa = R"({"watch":{"hevc":true}})";
+    CHECK(proto::parse_guest(wa, std::strlen(wa), e) && e.type == proto::GuestEvent::none);
     const char *po = R"({"pong":123.5,"engine_us":99})";
     CHECK(proto::parse_guest(po, std::strlen(po), e) && e.pong_t == 123.5 && e.has_engine_us && e.engine_us == 99);
 }
