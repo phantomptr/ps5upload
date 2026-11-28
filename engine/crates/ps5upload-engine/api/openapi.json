@@ -882,6 +882,160 @@
         ],
         "type": "object"
       },
+      "AutoBody": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "key",
+          "on"
+        ],
+        "type": "object"
+      },
+      "AutoReason": {
+        "enum": [
+          "offline",
+          "settling",
+          "running",
+          "queued",
+          "error",
+          "ps4",
+          "no_save",
+          "refused",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "AutoState": {
+        "enum": [
+          "in_step",
+          "waiting",
+          "conflict",
+          "cant_sync"
+        ],
+        "type": "string"
+      },
+      "AutoView": {
+        "description": "Where a save kept in step stands, kept with its sync record.",
+        "properties": {
+          "copied_direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncDirection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "copied_ms": {
+            "description": "The last copy made while kept in step, and which way it went.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "detail": {
+            "description": "The words of an error or a refusal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncDirection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Waiting: the way the save goes once it can."
+          },
+          "fails": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first": {
+            "description": "Conflict: never synced before (rather than changed on both).",
+            "type": "boolean"
+          },
+          "kept": {
+            "description": "Conflict: the backups taken of both sides when it was found (file names).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "side": {
+            "description": "The console the state is about (`a` or `b`): the one waited for, or the one the reason\nnames.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since_ms": {
+            "description": "When this state began (engine ms).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AutoState"
+          },
+          "title_id": {
+            "type": "string"
+          },
+          "woke_ms": {
+            "description": "When the console waited for was last woken.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "title_id",
+          "kind",
+          "side",
+          "reason",
+          "detail",
+          "direction",
+          "first",
+          "kept",
+          "since_ms",
+          "fails",
+          "woke_ms",
+          "copied_ms",
+          "copied_direction"
+        ],
+        "type": "object"
+      },
       "Autoload": {
         "description": "Payload Manager's boot autoload: on/off, the seconds it waits after boot,\nand the ordered list (`/data/pldmgr/autoload.txt`, one entry a line). An\nentry is a slot (`local/<leaf>`, `repo/<…>`, 0.6), a file name it matches\nagainst its stored files, an absolute path under its folders, or `!<ms>`\nfor a pause. Nothing loads at boot while `enabled` is false.",
         "properties": {
@@ -5541,46 +5695,6 @@
         ],
         "type": "object"
       },
-      "GameView": {
-        "properties": {
-          "consoles": {
-            "items": {
-              "$ref": "#/components/schemas/ConsoleEntry"
-            },
-            "type": "array"
-          },
-          "copies": {
-            "items": {
-              "$ref": "#/components/schemas/Location"
-            },
-            "type": "array"
-          },
-          "cover": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "platform": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "title_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "title_id",
-          "title",
-          "platform",
-          "cover",
-          "copies",
-          "consoles"
-        ],
-        "type": "object"
-      },
       "GenerateReq": {
         "properties": {
           "title_id": {
@@ -8122,6 +8236,21 @@
         },
         "required": [
           "hosts"
+        ],
+        "type": "object"
+      },
+      "KeyBody": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "key"
         ],
         "type": "object"
       },
@@ -12915,6 +13044,26 @@
         ],
         "type": "object"
       },
+      "ResolveBody": {
+        "properties": {
+          "keep": {
+            "description": "The side whose save is kept: `a` or `b` (as in the pair). It is copied over the other,\nwhich is backed up first.",
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair",
+          "key",
+          "keep"
+        ],
+        "type": "object"
+      },
       "ResolveReq": {
         "properties": {
           "action": {
@@ -15808,6 +15957,13 @@
           "a": {
             "$ref": "#/components/schemas/SyncSide"
           },
+          "auto": {
+            "description": "Saves kept in step automatically (keys): the newer one is copied across after its game\ncloses, with no question unless both changed (`save_sync_auto`). Opt-in, one by one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "b": {
             "$ref": "#/components/schemas/SyncSide"
           },
@@ -15820,13 +15976,19 @@
           },
           "id": {
             "type": "string"
+          },
+          "wake": {
+            "description": "A console that is off the network in rest is woken to take a waiting copy. Off unless the\nuser turns it on: save sync never wakes a console by itself.",
+            "type": "boolean"
           }
         },
         "required": [
           "id",
           "a",
           "b",
-          "excluded"
+          "excluded",
+          "auto",
+          "wake"
         ],
         "type": "object"
       },
@@ -15845,6 +16007,13 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "wake": {
+            "description": "Wake a console in rest to take a waiting copy. Left out: as before (off for a new pair).",
+            "type": [
+              "boolean",
               "null"
             ]
           }
@@ -15887,6 +16056,17 @@
                 "type": "null"
               }
             ]
+          },
+          "auto": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Kept in step automatically: where that stood before this check."
           },
           "b": {
             "anyOf": [
@@ -15951,7 +16131,8 @@
           "a",
           "b",
           "synced_ms",
-          "last_error"
+          "last_error",
+          "auto"
         ],
         "type": "object"
       },
@@ -17907,6 +18088,46 @@
         },
         "type": "object"
       },
+      "engine.games_api.GameView": {
+        "properties": {
+          "consoles": {
+            "items": {
+              "$ref": "#/components/schemas/ConsoleEntry"
+            },
+            "type": "array"
+          },
+          "copies": {
+            "items": {
+              "$ref": "#/components/schemas/Location"
+            },
+            "type": "array"
+          },
+          "cover": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "title_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_id",
+          "title",
+          "platform",
+          "cover",
+          "copies",
+          "consoles"
+        ],
+        "type": "object"
+      },
       "engine.helper_copies_api.StoreReq": {
         "properties": {
           "addr": {
@@ -18472,6 +18693,46 @@
           "file"
         ],
         "type": "object"
+      },
+      "engine.save_sync_auto.GameView": {
+        "allOf": [
+          {
+            "properties": {
+              "a": {
+                "$ref": "#/components/schemas/SyncSide"
+              },
+              "b": {
+                "$ref": "#/components/schemas/SyncSide"
+              },
+              "key": {
+                "type": "string"
+              },
+              "pair": {
+                "type": "string"
+              },
+              "synced_ms": {
+                "description": "The last copy between the two (any copy, kept in step or picked by hand).",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "pair",
+              "key",
+              "a",
+              "b",
+              "synced_ms"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/AutoView"
+          }
+        ],
+        "description": "One save kept in step, for `GET /api/save-sync/games`."
       },
       "engine.tailnet_discover.AddBody": {
         "properties": {
@@ -25090,7 +25351,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GameView"
+                  "$ref": "#/components/schemas/engine.games_api.GameView"
                 }
               }
             },
@@ -52159,6 +52420,71 @@
         }
       }
     },
+    "/api/save-sync/auto": {
+      "put": {
+        "description": "`PUT /api/save-sync/auto` `{pair, key, on}`: keep one save in step automatically, or stop.\nTurning it on checks the save first (both consoles read, nothing copied): a PS4 save, a PS5\nsave the other user has none of yet, or a copy the helper can't make safely is refused with\nthe reason. A save that is newer on one side is sent at the next look; one never synced, or\nchanged on both, asks which to keep.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "auto": {},
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Keep one save in step automatically, or stop",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/save-sync/dismiss": {
       "post": {
         "description": "`POST /api/save-sync/dismiss` `{pair, key}`: Not now. The suggestion goes; the next time the\ngame closes with a change it comes back.",
@@ -52207,9 +52533,52 @@
         }
       }
     },
+    "/api/save-sync/games": {
+      "get": {
+        "description": "`GET /api/save-sync/games`: every save kept in step and where it stands (in step, waiting\nfor a console, a conflict to pick, or can't sync and why). Reads no console: cheap enough for\nthe phone app to ask often.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "applying": {},
+                    "games": {
+                      "items": {
+                        "$ref": "#/components/schemas/engine.save_sync_auto.GameView"
+                      },
+                      "type": "array"
+                    },
+                    "last_sweep": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Every save kept in step and where it stands (in step, waiting for a console, a conflict to pick, or can't sync and why)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/save-sync/pair": {
       "put": {
-        "description": "`PUT /api/save-sync/pair` `{a, b, excluded?}`: adds the pair, or changes which saves it leaves\nout.",
+        "description": "`PUT /api/save-sync/pair` `{a, b, excluded?, wake?}`: adds the pair, or changes which saves it\nleaves out and whether a resting console is woken for a waiting copy. Which saves are kept in\nstep automatically is `PUT /api/save-sync/auto` (it checks each one first).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -52253,7 +52622,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "Adds the pair, or changes which saves it leaves out",
+        "summary": "Adds the pair, or changes which saves it leaves out and whether a resting console is woken for a waiting copy",
         "tags": [
           "saves"
         ],
@@ -52306,6 +52675,71 @@
           }
         },
         "summary": "Stops keeping the pair in step (nothing on a console changes)",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/resolve": {
+      "post": {
+        "description": "`POST /api/save-sync/resolve` `{pair, key, keep: \"a\"|\"b\"}`: the user's pick in a conflict (or\nthe first sync of a save): the kept side is copied over the other, the other backed up first.\nRefused when the save is no longer a conflict (it changed since: check again).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "auto": {},
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The user's pick in a conflict (or the first sync of a save): the kept side is copied over the other, the other backed up first",
         "tags": [
           "saves"
         ],
@@ -52372,6 +52806,71 @@
           }
         },
         "summary": "Check now",
+        "tags": [
+          "saves"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/save-sync/sync-now": {
+      "post": {
+        "description": "`POST /api/save-sync/sync-now` `{pair, key}`: looks at one save kept in step now and does what\nthe background look would: copies the newer one, or says what it waits for, or that both\nchanged. A save that stopped after failing tries again. Never overwrites a conflict.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "auto": {},
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Looks at one save kept in step now and does what the background look would: copies the newer one, or says what it waits for, or that both changed",
         "tags": [
           "saves"
         ],

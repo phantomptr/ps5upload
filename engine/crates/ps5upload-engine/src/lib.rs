@@ -132,6 +132,7 @@ mod save_copy;
 mod save_folders;
 mod save_layout;
 mod save_sync;
+mod save_sync_auto;
 mod self_host;
 mod server_out;
 mod settings_api;
@@ -13603,7 +13604,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     );
     // Save backups to a network share: on an interval, or when a game is closed (#592).
     save_backup_server::spawn();
-    // Save sync between two consoles: suggests a copy after a game closes, never copies itself.
+    // Save sync between two consoles: suggests a copy after a game closes, and keeps the games
+    // the user turned on in step by itself (save_sync_auto).
     save_sync::spawn();
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
@@ -14033,6 +14035,16 @@ fn build_app_and_mcp(
         .route("/api/save-sync/status", get(save_sync::get_status))
         .route("/api/save-sync/apply", post(save_sync::post_apply))
         .route("/api/save-sync/dismiss", post(save_sync::post_dismiss))
+        .route("/api/save-sync/games", get(save_sync_auto::get_games))
+        .route(
+            "/api/save-sync/auto",
+            axum::routing::put(save_sync_auto::put_auto),
+        )
+        .route(
+            "/api/save-sync/sync-now",
+            post(save_sync_auto::post_sync_now),
+        )
+        .route("/api/save-sync/resolve", post(save_sync_auto::post_resolve))
         .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),
