@@ -26,14 +26,36 @@ pub struct Hello {
     pub kind: String,
     pub os: String,
     pub app: String,
+    /// Where PS5Upload Play on the console reaches this engine; None when it cannot (not known
+    /// yet, or the engine listens on its own computer only).
+    pub play: Option<PlayHost>,
+}
+
+/// The engine's Play endpoints, carried in the hello rather than in presence: every app before
+/// this one lists each presence item as something the device is doing. An older helper ignores
+/// the field, and no helper passes it on to other devices (MESH_STATE never shows it); only the
+/// console's own PS5Upload Play reads it, from the helper's `GET /v1/mesh`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayHost {
+    /// The engine's HTTP port.
+    pub port: u16,
+    /// `/api/join/ws`.
+    pub join_ws: String,
+    /// `/api/play/app`.
+    pub app_ws: String,
+}
+
+/// The MESH_HELLO body; `play` only when there is one.
+pub fn hello_body(me: &Hello) -> Value {
+    let mut body = json!({ "name": me.name, "kind": me.kind, "os": me.os, "app": me.app });
+    if let Some(p) = &me.play {
+        body["play"] = json!({ "port": p.port, "join_ws": p.join_ws, "app_ws": p.app_ws });
+    }
+    body
 }
 
 pub fn hello(addr: &str, me: &Hello) -> Result<Option<Value>> {
-    call_json(
-        addr,
-        m::MESH_HELLO,
-        &json!({ "name": me.name, "kind": me.kind, "os": me.os, "app": me.app }),
-    )
+    call_json(addr, m::MESH_HELLO, &hello_body(me))
 }
 
 /// The whole picture, or `{"same":true}` when nothing changed since revision `since`. Events after
@@ -116,4 +138,35 @@ pub fn announce(addr: &str, kind: &str, text: &str) -> Result<Option<Value>> {
 /// The helper refused because it has not met this engine on this connection yet.
 pub fn needs_hello(e: &anyhow::Error) -> bool {
     e.to_string().contains("say_hello_first")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hello_carries_play_only_when_there_is_one() {
+        let mut me = Hello {
+            name: "Desk".into(),
+            kind: "desktop".into(),
+            os: "macOS".into(),
+            app: "13.0.0".into(),
+            play: None,
+        };
+        assert_eq!(
+            hello_body(&me),
+            json!({"name": "Desk", "kind": "desktop", "os": "macOS", "app": "13.0.0"})
+        );
+        me.play = Some(PlayHost {
+            port: 19113,
+            join_ws: "/api/join/ws".into(),
+            app_ws: "/api/play/app".into(),
+        });
+        let b = hello_body(&me);
+        assert_eq!(
+            b["play"],
+            json!({"port": 19113, "join_ws": "/api/join/ws", "app_ws": "/api/play/app"})
+        );
+        assert_eq!(b["name"], "Desk");
+    }
 }

@@ -13451,6 +13451,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
+    // The hello tells each console's PS5Upload Play this port (before any session opens).
+    if let Ok(at) = listener.local_addr() {
+        mesh_api::set_listening(at);
+    }
     // Convert (and the package viewer) read games on saved servers and the console in place.
     convert_source::register();
     // Every management call (hardware, filesystem, apps, ...) goes through one transport

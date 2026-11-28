@@ -128,8 +128,10 @@ check("phase unpaired  invalid" in out and "(cleared)" in out, "a token that sto
 p, port, rep = engine("helper", "--lifetime", "10")
 out = run("helper", str(port))
 r = finish(p, rep)
-check("mesh 2" in out and "engine Living room PC 192.168.1.20:19113 tailnet=0" in out
-      and "engine Laptop 100.101.102.103:0 tailnet=1" in out, "mesh: engines only, the console left out")
+check("mesh 2" in out and "engine Laptop 100.101.102.103:0 tailnet=1 kind=desktop preferred=0" in out,
+      "mesh: engines only, the console left out, the offered one once")
+check(out.split("mesh 2\n", 1)[-1].startswith("engine Living room PC 192.168.1.20:19200 tailnet=0 kind=desktop preferred=1"),
+      "mesh: the engine the helper offers comes first, on the port its hello gave")
 check("rp 1 ready=0 service_on=0 needs_user=1" in out and "enable 1 ready=1" in out, "Remote Play readiness, turned on")
 enable = [i["helper"] for i in r["intents"] if "helper" in i and i["helper"][1] == "/v1/rp/enable"]
 check(enable and enable[0][2] == {"confirm": True}, "turning Remote Play on says confirm")

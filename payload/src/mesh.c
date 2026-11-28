@@ -26,6 +26,7 @@
 #define LOCK_TTL_MAX_S 600u
 #define PRUNE_EVERY_MS (3600u * 1000u)
 #define VIA_MAX 12
+#define PLAY_PATH_MAX 128 /* a Play endpoint path (join_ws, app_ws), with its NUL */
 /* A device that asked to connect while approval is on: listed for the owner to Allow or Decline
  * for this long. Allowed, it has the same time to connect; declined, it is not asked about again
  * until then. */
@@ -45,6 +46,13 @@ typedef struct {
      * a code, launched by its app, or listed before 12.2). Kept in v1/via, so an older helper reading
      * v1/devices sees the file it knows. */
     char via[VIA_MAX];
+    /* Where PS5Upload Play reaches it, from its last hello ({"play":{port,join_ws,app_ws}}, engines
+     * from 13): play is 1 when that hello carried the object; port 0 / "" for a part that was
+     * missing or not valid. In memory only: never saved, never in MESH_STATE (an older app would
+     * not know it), only in mesh_engines_json. */
+    int play;
+    uint16_t play_port;
+    char play_join[PLAY_PATH_MAX], play_app[PLAY_PATH_MAX];
 } dev_t_;
 
 enum { ASK_ASKING = 0, ASK_ALLOWED = 1, ASK_DECLINED = 2 };
@@ -812,15 +820,51 @@ static void put_settings(buf_t *b) {
     putf(b, "{\"require_approval\":%s,\"prune_days\":%u}", M.require_approval ? "true" : "false", M.prune_days);
 }
 
+/* A path from a Play object ("/..." with no quote, backslash, space or control character, shorter
+ * than cap), or "" (shown as null). */
+static void item_path(const char *item, size_t il, const char *key, char *out, size_t cap) {
+    size_t i;
+    out[0] = 0;
+    if (!item || webui_json_str(item, il, key, out, cap) != 1 || out[0] != '/') {
+        out[0] = 0;
+        return;
+    }
+    for (i = 0; out[i]; i++)
+        if ((unsigned char)out[i] < 0x21 || out[i] == '"' || out[i] == '\\' || out[i] == 0x7f) {
+            out[0] = 0;
+            return;
+        }
+}
+
+/* The port of a Play object (1..65535), or 0. */
+static unsigned item_port(const char *item, size_t il) {
+    uint64_t port = 0;
+    if (!item || webui_json_u64(item, il, "port", &port) != 1 || port == 0 || port > 65535) return 0;
+    return (unsigned)port;
+}
+
 static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap,
                     const mesh_online_t *on, int non) {
     char name[NAME_MAX_], kind[KIND_MAX], os[OS_MAX], app[APP_MAX], hex[65], *tmp;
+    char play_join[PLAY_PATH_MAX], play_app[PLAY_PATH_MAX];
+    const char *pv = NULL;
+    size_t pvl = 0;
+    unsigned play_port = 0;
     uint8_t ev[32];
-    int evicted = 0, isnew = 0, i;
+    int evicted = 0, isnew = 0, i, play = 0;
     uint32_t ip = 0;
     dev_t_ *d;
     buf_t b = { out, 0, cap, 0 };
     name[0] = kind[0] = os[0] = app[0] = 0;
+    play_join[0] = play_app[0] = 0;
+    /* Where PS5Upload Play reaches this engine (engines from 13). A hello without it clears it: the
+     * engine no longer offers it. */
+    if (top_value(body, n, "play", &pv, &pvl) == 1 && pvl && pv[0] == '{') {
+        play = 1;
+        play_port = item_port(pv, pvl);
+        item_path(pv, pvl, "join_ws", play_join, sizeof play_join);
+        item_path(pv, pvl, "app_ws", play_app, sizeof play_app);
+    }
     /* Each read whole (a string never decodes longer than the body that holds it), then cut to its
      * field on a character boundary, as the engine cuts it. A name of 64 bytes or more did not fit
      * the buffer and was dropped: the console went on showing the old one. */
@@ -849,6 +893,10 @@ static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *
     if (app[0]) snprintf(d->app, sizeof d->app, "%s", app);
     d->last = now_ms();
     if (ip) d->ip = ip;
+    d->play = play;
+    d->play_port = (uint16_t)play_port;
+    snprintf(d->play_join, sizeof d->play_join, "%s", play_join);
+    snprintf(d->play_app, sizeof d->play_app, "%s", play_app);
     if (isnew) add_event("joined", caller, "%s connected for the first time", shown_name(d));
     /* A Docker engine whose /data was not kept comes back under a new key after every update: the
      * same name and address, kind docker, the old one offline. Only its list entry goes (its nickname
@@ -1442,26 +1490,22 @@ static int find_play_item(const char *s, size_t n, const char **v, size_t *vl) {
     }
 }
 
-/* A path from the item ("/..." with no quote, backslash or control character), or "" (shown as null). */
-static void item_path(const char *item, size_t il, const char *key, char *out, size_t cap) {
-    size_t i;
-    out[0] = 0;
-    if (!item || webui_json_str(item, il, key, out, cap) != 1 || out[0] != '/') {
-        out[0] = 0;
-        return;
-    }
-    for (i = 0; out[i]; i++)
-        if ((unsigned char)out[i] < 0x21 || out[i] == '"' || out[i] == '\\' || out[i] == 0x7f) {
-            out[0] = 0;
-            return;
-        }
-}
-
-/* One engine as the app reads it; `item` is its play_host presence item (NULL: none). */
+/* One engine as the app reads it; `item` is its play_host presence item (NULL: none, and then
+ * what its hello said, if anything). */
 static void put_engine(buf_t *b, const dev_t_ *d, const char *item, size_t il) {
-    char ipt[16], path[128];
-    uint64_t port = 0;
+    char ipt[16], join[PLAY_PATH_MAX], app[PLAY_PATH_MAX];
+    unsigned port;
     ip_text(d->ip, ipt);
+    if (item) {
+        port = item_port(item, il);
+        item_path(item, il, "join_ws", join, sizeof join);
+        item_path(item, il, "app_ws", app, sizeof app);
+    } else {
+        /* Empty when its hello carried no play object (cleared at every hello). */
+        port = d->play_port;
+        snprintf(join, sizeof join, "%s", d->play_join);
+        snprintf(app, sizeof app, "%s", d->play_app);
+    }
     puts_(b, "{\"name\":");
     putstr(b, shown_name(d));
     puts_(b, ",\"kind\":");
@@ -1469,21 +1513,19 @@ static void put_engine(buf_t *b, const dev_t_ *d, const char *item, size_t il) {
     puts_(b, ",\"version\":");
     putstr(b, d->app);
     putf(b, ",\"addr\":\"%s\",\"tailnet\":%s", ipt, is_tailnet_ip(d->ip) ? "true" : "false");
-    if (item && webui_json_u64(item, il, "port", &port) == 1 && port > 0 && port < 65536)
-        putf(b, ",\"port\":%u", (unsigned)port);
+    if (port)
+        putf(b, ",\"port\":%u", port);
     else
         puts_(b, ",\"port\":null");
-    item_path(item, il, "join_ws", path, sizeof path);
-    if (path[0]) {
+    if (join[0]) {
         puts_(b, ",\"join_ws\":");
-        putstr(b, path);
+        putstr(b, join);
     } else {
         puts_(b, ",\"join_ws\":null");
     }
-    item_path(item, il, "app_ws", path, sizeof path);
-    if (path[0]) {
+    if (app[0]) {
         puts_(b, ",\"app_ws\":");
-        putstr(b, path);
+        putstr(b, app);
     } else {
         puts_(b, ",\"app_ws\":null");
     }
@@ -1500,17 +1542,24 @@ int mesh_engines_json(char *out, size_t cap) {
     if (!(on = calloc(MESH_MAX_DEVICES, sizeof *on))) return fail(out, cap, "out_of_memory");
     non = M.h.online ? M.h.online(on, MESH_MAX_DEVICES) : 0;
     pthread_mutex_lock(&g_mu);
-    /* The engine the app should dial: the online device whose presence carries a play_host item,
-     * the one heard from last when there are several. */
+    /* The engine the app should dial: the online device that offers Play, with a play_host item in
+     * its presence (heard at its presence's time) or a play object in its hello (heard when it was
+     * last heard from); the one heard from last when there are several. */
     for (i = 0; i < MESH_MAX_DEVICES; i++) {
         const dev_t_ *d = &M.dev[i];
         const char *v;
         size_t vl;
+        uint64_t at;
         if (!d->used || d->blocked || !d->ip || !is_online(d->key, on, non)) continue;
-        if (!find_play_item(d->activity, strlen(d->activity), &v, &vl)) continue;
-        if (best < 0 || d->activity_at > best_at) {
+        if (find_play_item(d->activity, strlen(d->activity), &v, &vl))
+            at = d->activity_at;
+        else if (d->play)
+            at = d->last;
+        else
+            continue;
+        if (best < 0 || at > best_at) {
             best = i;
-            best_at = d->activity_at;
+            best_at = at;
         }
     }
     puts_(&b, "{\"engine\":");
