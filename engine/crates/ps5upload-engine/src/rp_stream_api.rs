@@ -11,7 +11,11 @@
 //!   "lx", "ly", "rx", "ry"}}` whenever the pad changes, `{"keyframe": true}`,
 //!   `{"ping": t}` (answered at once with `{"pong": t, "engine_us": e}`, for the page to time
 //!   the round trip and, with `e` the engine's clock when the ping came, to line its clock up
-//!   with the engine's), or `{"stop": true}`.
+//!   with the engine's), or `{"stop": true}`. With friends playing through Play Together a stop
+//!   is answered `{"stage": "confirm_friends", "friends": [names], "message"}` and nothing stops;
+//!   `{"stop": true, "confirm_friends": true}` stops anyway (together_guard.rs). Friends playing
+//!   also keep a session with no page attached, picture on or off, for up to 4 hours
+//!   (`HOST_AWAY_MAX`) since the host's last page left.
 //!   Microphone (experimental), only for a session started with `"mic": true`:
 //!   `{"mic": true|false}` turns the console's mic
 //!   on or off, and binary `[5][one Opus packet]` is one mic frame (48 kHz
@@ -107,6 +111,9 @@ const VIDEO_QUEUE_LOW_LATENCY: usize = 2;
 /// Audio frames (100/s), status, rumble and light bar.
 const CTL_QUEUE: usize = 512;
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
+/// The longest a session is kept for friends playing through Play Together with no page of the
+/// host's attached; after it the session ends as any page-less one does.
+pub(crate) const HOST_AWAY_MAX: Duration = Duration::from_secs(4 * 60 * 60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
 /// A start while the console's last session is finishing: asked to look again this soon.
 const STOPPING_RETRY_S: u64 = 2;
@@ -202,6 +209,10 @@ struct ClientMsg {
     pad: Option<ControllerState>,
     #[serde(default)]
     stop: bool,
+    /// With `stop`: stop even though friends are playing through Play Together. Without it the
+    /// page is told `{"stage": "confirm_friends", "friends", "message"}` and nothing stops.
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
     #[serde(default)]
     keyframe: bool,
     #[serde(default)]
@@ -620,6 +631,15 @@ const GUEST_SEAT_SOURCE: u64 = u64::MAX - 1;
 
 fn live() -> Option<Arc<Live>> {
     LIVE.lock().ok().and_then(|g| g.clone())
+}
+
+/// How long the host has had no page attached to `console`'s session (a phone asleep, the desktop
+/// closed). None: a page is attached, or no session runs for that console. Play Rooms answers an
+/// ask with `host_away` from this.
+pub(crate) fn host_away(console: &str) -> Option<Duration> {
+    live()
+        .filter(|l| same_console(&l.host, console) && !l.stop.load(Ordering::Relaxed))
+        .and_then(|l| l.away_for())
 }
 
 /// A phone's controller changed (pad_link.rs); dropped when no session runs.
@@ -1333,13 +1353,28 @@ impl Live {
     }
 
     /// With no page attached, the session still has a reason to run: the picture is off here on
-    /// purpose, and Go live or Play Together needs the stream.
+    /// purpose, and Go live or Play Together needs the stream; or friends are playing through
+    /// Play Together, picture on or off, for up to [`HOST_AWAY_MAX`] since the host's last page
+    /// left (a phone asleep, the desktop closed: their game goes on).
     fn held_without_page(&self) -> bool {
-        self.picture_off() && self.stream_needed()
+        let friends_in = crate::join::needs_session(&self.host)
+            && !crate::join::friends_playing(&self.host).is_empty();
+        if friends_in && self.away_for().is_none_or(|d| d < HOST_AWAY_MAX) {
+            return true;
+        }
+        // Past the cap, Play Together no longer holds it; Go live still does.
+        self.picture_off()
+            && (crate::rp_golive::run_needs_session()
+                || (!friends_in && crate::join::needs_session(&self.host)))
     }
 
-    fn stream_needed(&self) -> bool {
-        crate::rp_golive::run_needs_session() || crate::join::needs_session(&self.host)
+    /// How long no page has been attached (None: one is).
+    fn away_for(&self) -> Option<Duration> {
+        self.alone_since
+            .lock()
+            .ok()
+            .and_then(|a| *a)
+            .map(|t| t.elapsed())
     }
 
     /// `keep_alive_s` ran out with no page, and nothing holds the session.
@@ -2451,8 +2486,14 @@ async fn session(mut socket: WebSocket) {
                             live.page_key_ask();
                         }
                         if m.stop {
-                            crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
-                            live.stop.store(true, Ordering::Relaxed);
+                            let friends = crate::join::friends_playing(&live.host);
+                            if friends.is_empty() || m.confirm_friends {
+                                crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
+                                live.stop.store(true, Ordering::Relaxed);
+                            } else {
+                                crate::log_at!(Info, "rp", "rp_stream: {}: page {id} asks to stop with {} friend(s) playing: asked to confirm", live.host, friends.len());
+                                let _ = pong_tx.try_send(text(crate::together_guard::socket_ask(&friends)));
+                            }
                         }
                         if let Some(on) = m.mic {
                             live.set_mic(id, on);
@@ -3181,6 +3222,35 @@ mod tests {
         assert!(!crate::join::needs_session("10.0.77.1"));
     }
 
+    /// Friends playing hold a page-less session, picture on or off, for up to HOST_AWAY_MAX since
+    /// the host's last page left; then it ends as any page-less session does.
+    #[test]
+    fn friends_playing_hold_the_session_for_up_to_four_hours() {
+        let host = "10.0.77.3";
+        let live = Arc::new(Live::new(host.into(), false, Duration::from_millis(0)));
+        *live.alone_since.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
+        assert!(live.alone_too_long(), "nobody in: ends as ever");
+        crate::join::test_party_with_guest(host, "Mia");
+        assert!(crate::join::needs_session(host));
+        // Picture on (the host's device was showing it), and off: held either way.
+        assert!(!live.picture_off());
+        assert!(live.held_without_page());
+        assert!(!live.alone_too_long());
+        live.set_picture(false);
+        assert!(!live.alone_too_long());
+        live.set_picture(true);
+        // Just under the cap: still held. Past it: ends, picture on or off.
+        *live.alone_since.lock().unwrap() =
+            Some(Instant::now() - (HOST_AWAY_MAX - Duration::from_secs(60)));
+        assert!(!live.alone_too_long());
+        *live.alone_since.lock().unwrap() =
+            Some(Instant::now() - (HOST_AWAY_MAX + Duration::from_secs(1)));
+        assert!(live.alone_too_long());
+        live.set_picture(false);
+        assert!(live.alone_too_long());
+        crate::join::test_close_party(host);
+    }
+
     /// "Server shutting down" while a Play Together guest was being asked who is using their pad:
     /// the end names their player for the page. Any other end, or no guest picking, names nobody.
     #[test]
@@ -3538,6 +3608,56 @@ mod tests {
                 s.0.alone_since.lock().unwrap().is_some(),
                 "the session waits"
             );
+            drop(c);
+        }
+
+        /// `{"stop": true}` with friends playing asks the page first; with `"confirm_friends":
+        /// true` it stops. `host_away` says how long no page has been attached.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_page_stop_with_friends_in_asks_first() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            crate::join::test_party_with_guest("10.0.77.2", "Mia");
+            assert_eq!(host_away("10.0.77.2"), None, "never attached, never left");
+            *s.0.alone_since.lock().unwrap() = Some(Instant::now() - Duration::from_secs(90));
+            assert!(host_away("10.0.77.2").unwrap() >= Duration::from_secs(90));
+            assert_eq!(host_away("10.0.77.9"), None, "another console");
+            let url = serve().await;
+            let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            c.send(TMsg::Text(ATTACH.into())).await.unwrap();
+            c.send(TMsg::Text(r#"{"stop":true}"#.into())).await.unwrap();
+            let asked = async {
+                loop {
+                    match c.next().await {
+                        Some(Ok(TMsg::Text(t))) => {
+                            let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                            if v["stage"] == "confirm_friends" {
+                                return v;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        other => panic!("closed: {other:?}"),
+                    }
+                }
+            };
+            let v = tokio::time::timeout(Duration::from_secs(3), asked)
+                .await
+                .expect("asked");
+            assert_eq!(v["friends"], serde_json::json!(["Mia"]));
+            assert!(!s.0.stop.load(Ordering::Relaxed));
+            assert_eq!(host_away("10.0.77.2"), None, "a page is attached");
+            c.send(TMsg::Text(r#"{"stop":true,"confirm_friends":true}"#.into()))
+                .await
+                .unwrap();
+            let stopped = async {
+                while !s.0.stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(3), stopped)
+                .await
+                .expect("stopped");
+            crate::join::test_close_party("10.0.77.2");
             drop(c);
         }
 

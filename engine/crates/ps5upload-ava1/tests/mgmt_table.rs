@@ -104,6 +104,7 @@ fn the_ids_the_gate_and_the_converters_key_on_are_the_schema_numbers() {
     assert_eq!(m::SMB_SHARES_LIST.id, gen::METHOD_SMB_SHARES_LIST);
     assert_eq!(m::SMB_SHARES_SAVE.id, gen::METHOD_SMB_SHARES_SAVE);
     assert_eq!(m::SMB_SHARES_REMOVE.id, gen::METHOD_SMB_SHARES_REMOVE);
+    assert_eq!(m::PLAY_GRANT.id, gen::METHOD_PLAY_GRANT);
     // The core's feature detect (an older helper) keys on the schema's unknown-method status.
     assert_eq!(
         ps5upload_core::console_files::ERR_UNKNOWN_METHOD,

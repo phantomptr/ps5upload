@@ -360,13 +360,7 @@ async fn four_talkers_leave_the_pads_latency_alone_and_fit_the_budget() {
     host_rx.await.unwrap();
     drop(host_tx);
     let (ci, h) = local();
-    close(
-        ci,
-        h,
-        Json(AddrBody {
-            addr: console.into(),
-        }),
-    )
+    close(ci, h, Query(Default::default()), Json(CloseBody { addr: console.into(), confirm_friends: true }))
     .await;
     set_live(console, 0);
     let _ = lee_h;

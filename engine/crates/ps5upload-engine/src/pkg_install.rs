@@ -917,6 +917,10 @@ fn mark_released(map: &mut HashMap<String, InstallSession>, sid: &str) -> bool {
 struct PayloadRestoreRequest {
     #[serde(alias = "console", alias = "addr", alias = "host")]
     ps5_addr: String,
+    /// Replace the helper even though friends are playing through Play Together
+    /// (together_guard.rs).
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
     /// The helper gate's options (mode, force, replace, app_version): see helper_send.
     #[serde(flatten)]
     opts: crate::helper_send::SendOpts,
@@ -931,8 +935,15 @@ fn restore_refused(r: &crate::helper_send::Refusal) -> serde_json::Value {
     v
 }
 
+/// Send the helper this engine carries to the console's loader.
+///
+/// A failed or refused send is 200 with `ok: false`. The one HTTP error besides a bad request:
+/// with friends playing through Play Together (the helper runs their controllers), 409
+/// `friends_playing` unless confirmed (together_guard.rs).
 async fn payload_restore_handler(
     State(state): State<PkgInstallStateHandle>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(confirm): axum::extract::Query<crate::together_guard::ConfirmQuery>,
     Json(req): Json<PayloadRestoreRequest>,
 ) -> Response<Body> {
     let ps5_ip = strip_host_port(req.ps5_addr.trim()).trim().to_string();
@@ -941,6 +952,13 @@ async fn payload_restore_handler(
             StatusCode::BAD_REQUEST,
             serde_json::json!({"ok": false, "error": "ps5_addr is required"}),
         );
+    }
+    if let Some(r) = crate::together_guard::check(
+        Some(&ps5_ip),
+        &headers,
+        req.confirm_friends || confirm.yes(),
+    ) {
+        return r;
     }
     let opts = req.opts;
     // The gate every helper send goes through (helper_send): no send into an install or over a
@@ -4815,8 +4833,11 @@ pub(crate) mod tests {
     async fn payload_restore_rejects_an_empty_address() {
         let resp = super::payload_restore_handler(
             axum::extract::State(Default::default()),
+            Default::default(),
+            axum::extract::Query(Default::default()),
             axum::Json(super::PayloadRestoreRequest {
                 ps5_addr: "  ".into(),
+                confirm_friends: false,
                 opts: Default::default(),
             }),
         )

@@ -86,7 +86,9 @@ mod join;
 mod join_chat;
 mod join_comms;
 mod join_friends;
+mod join_names;
 mod join_net;
+mod join_room;
 mod join_route;
 mod join_voice;
 mod link;
@@ -117,11 +119,13 @@ mod play_discovery;
 mod pldmgr_api;
 mod profile_image;
 mod ps2_saves;
+mod public_limit;
 mod queue_api;
 mod remote;
 mod remote_download;
 mod remote_pkg;
 mod remove_backport;
+mod room_seal;
 mod rp_dev_replay;
 mod rp_diag;
 mod rp_golive;
@@ -156,6 +160,7 @@ mod tailnet_guest;
 pub(crate) mod tailnet_system;
 mod telemetry;
 mod title_restore_api;
+mod together_guard;
 mod trophy_fix_routes;
 mod uninstall_source;
 mod unpack_packs;
@@ -180,6 +185,8 @@ mod ava1_only_tests;
 mod event_hooks_tests;
 #[cfg(test)]
 mod queue_api_tests;
+#[cfg(test)]
+mod together_guard_tests;
 
 use axum::http::HeaderMap;
 use axum::{
@@ -959,6 +966,9 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // …and the checks socket a guest's app measures each way to this engine with before it
         // joins and, gently, while it plays (join_route.rs): echoes only, no guest state.
         || path == "/api/join/probe"
+        // …and a Play Room's preview (Details before joining, join_room_api.rs): what the host
+        // chose to show, never an address; rate-limited per address.
+        || path == "/api/join/preview"
         // …and PS5Upload Play on a PS5 joining a friend's internet room through this engine
         // (join_net/bridge.rs): it must be reachable from LAN peers (the PS5). It reaches only
         // the hub in the settings and the engine answering there, checked against the link's
@@ -3516,12 +3526,28 @@ struct AppLaunchReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title_id: String,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-async fn ps5_app_launch(Json(req): Json<AppLaunchReq>) -> impl IntoResponse {
+/// Launch an installed title on the console.
+///
+/// A launch replaces the game running now: with friends playing through Play Together, 409
+/// `friends_playing` unless confirmed (together_guard.rs).
+async fn ps5_app_launch(
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
+    Json(req): Json<AppLaunchReq>,
+) -> axum::response::Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     let title_id = req.title_id;
     let started = std::time::Instant::now();
     crate::log_at!(Info, "files", "app_launch: addr={addr} title_id={title_id}");
@@ -5000,6 +5026,9 @@ struct AppLifecycleReq {
     addr: Option<String>,
     action: String,
     app_id: u32,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 /// POST /api/ps5/app/lifecycle — suspend / resume / kill a running app.
@@ -5008,10 +5037,15 @@ struct AppLifecycleReq {
 /// desktop app reaches this through a Tauri command that calls core
 /// directly, with no HTTP route behind it, so "Close game" simply did not
 /// exist on the web UI. Same missing-half class as fs_read_preview.
+///
+/// `kill` and `suspend` with friends playing through Play Together: 409 `friends_playing` unless
+/// confirmed (together_guard.rs).
 async fn ps5_app_lifecycle(
     State(_state): State<AppState>,
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
     Json(req): Json<AppLifecycleReq>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let action = match req.action.as_str() {
         "suspend" => AppAction::Suspend,
         "resume" => AppAction::Resume,
@@ -5028,6 +5062,13 @@ async fn ps5_app_lifecycle(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if matches!(action, AppAction::Kill | AppAction::Suspend) {
+        if let Some(r) =
+            together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+        {
+            return r;
+        }
+    }
     let app_id = req.app_id;
     let r = tokio::task::spawn_blocking(move || app_lifecycle(&addr, action, app_id))
         .await
@@ -5119,17 +5160,28 @@ struct ProcessKillReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     pid: i32,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-/// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`.
+/// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`. With friends playing through
+/// Play Together: 409 `friends_playing` unless confirmed (together_guard.rs).
 async fn ps5_process_kill(
     State(_state): State<AppState>,
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
     Json(req): Json<ProcessKillReq>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Destructive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     let pid = req.pid;
     let r: Result<ProcessKillAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || process_kill(&addr, pid))
@@ -5148,6 +5200,9 @@ async fn ps5_process_kill(
 struct HelperStopReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 /// POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit
@@ -5157,14 +5212,23 @@ struct HelperStopReq {
 /// when nothing answered. 409 `{ "error", "reason": "busy" }` while a job runs; 502
 /// `{ "error", "reason": "refused" (not paired) | "failed" (the real error) | "still_running" }`
 /// otherwise. 409 `reason: "stopping"` while another stop or removal of that console runs.
+/// With friends playing through Play Together (the helper runs their controllers): 409
+/// `friends_playing` unless confirmed (together_guard.rs).
 async fn ps5_helper_stop(
     installs: pkg_install::PkgInstallStateHandle,
+    headers: HeaderMap,
+    confirm: together_guard::ConfirmQuery,
     req: HelperStopReq,
 ) -> axum::response::Response {
     // Disruptive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     // Marked first, then the jobs read: from here until the stop ends the queue starts nothing
     // on this console (it can take seconds), and no request starts a job there
     // (helper_stop::try_enter). A second stop or removal of it meanwhile is told one runs.
@@ -5219,6 +5283,9 @@ struct HelperUninstallReq {
     /// changes and the helper keeps running. Answers `state: "ready"`.
     #[serde(default)]
     check: bool,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 /// POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. "Remove PS5Upload from this
@@ -5233,11 +5300,21 @@ struct HelperUninstallReq {
 /// went with the folders.
 async fn ps5_helper_uninstall(
     installs: pkg_install::PkgInstallStateHandle,
+    headers: HeaderMap,
+    confirm: together_guard::ConfirmQuery,
     req: HelperUninstallReq,
 ) -> axum::response::Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    // The helper runs friends' controllers; a check alone changes nothing.
+    if !req.check {
+        if let Some(r) =
+            together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+        {
+            return r;
+        }
+    }
     // As for a stop: marked before the jobs are read, held for the whole call (up to 240 s).
     let Some(stopping) = helper_stop::begin_stopping(&addr) else {
         let e = helper_stop::UninstallError::AlreadyStopping;
@@ -5306,13 +5383,20 @@ struct PowerControlReq {
     addr: Option<String>,
     /// One of "reboot" | "shutdown" | "standby" | "tick".
     action: String,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-/// POST /api/ps5/power/control — Body: `{ addr, action }`.
+/// POST /api/ps5/power/control — Body: `{ addr, action }`. Reboot, shutdown and standby with
+/// friends playing through Play Together: 409 `friends_playing` unless confirmed
+/// (together_guard.rs).
 async fn ps5_power_control(
     State(_state): State<AppState>,
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
     Json(req): Json<PowerControlReq>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Destructive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
@@ -5330,6 +5414,13 @@ async fn ps5_power_control(
             .into_response()
         }
     };
+    if !matches!(action, PowerAction::Tick) {
+        if let Some(r) =
+            together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+        {
+            return r;
+        }
+    }
     let r: Result<SystemControlAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || system_control(&addr, action))
             .await
@@ -13597,6 +13688,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     join::load_invites();
     // PS5Upload Play: a `play` event on the feed when a console's status changes.
     play_app::spawn_feed();
+    // …the grant each console's helper hands its app, renewed while the session lasts…
+    play_app::spawn_grants();
     // …and a LAN responder so the app finds this engine without the helper (UDP 19261).
     if let Ok(at) = listener.local_addr() {
         play_discovery::start(at, cfg.allow_ips.clone());
@@ -14376,15 +14469,23 @@ fn build_app_and_mcp(
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route(
             "/api/ps5/helper/stop",
-            post(move |Json(req): Json<HelperStopReq>| {
-                ps5_helper_stop(helper_stop_installs.clone(), req)
-            }),
+            post(
+                move |headers: HeaderMap,
+                      Query(confirm): Query<together_guard::ConfirmQuery>,
+                      Json(req): Json<HelperStopReq>| {
+                    ps5_helper_stop(helper_stop_installs.clone(), headers, confirm, req)
+                },
+            ),
         )
         .route(
             "/api/ps5/helper/uninstall",
-            post(move |Json(req): Json<HelperUninstallReq>| {
-                ps5_helper_uninstall(helper_uninstall_installs.clone(), req)
-            }),
+            post(
+                move |headers: HeaderMap,
+                      Query(confirm): Query<together_guard::ConfirmQuery>,
+                      Json(req): Json<HelperUninstallReq>| {
+                    ps5_helper_uninstall(helper_uninstall_installs.clone(), headers, confirm, req)
+                },
+            ),
         )
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
@@ -14478,6 +14579,11 @@ fn build_app_and_mcp(
         .route("/api/join/invite", post(join::invite))
         .route("/api/join/decide", post(join::decide))
         .route("/api/join/kick", post(join::kick))
+        .route("/api/join/room", post(join::room))
+        .route("/api/join/unblock", post(join::unblock))
+        .route("/api/join/seat", post(join::seat))
+        .route("/api/join/preview", get(join::preview))
+        .route("/api/join/rooms", get(join::rooms_proxy))
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
@@ -14493,6 +14599,8 @@ fn build_app_and_mcp(
         .route("/api/play/app/pair", post(play_app::pair))
         .route("/api/play/app/unpair", post(play_app::unpair))
         .route("/api/play/app/paired", get(play_app::paired))
+        .route("/api/play/app/moved", post(play_app::moved))
+        .route("/api/play/app/pair_confirm", post(play_app::pair_confirm))
         // PS5Upload Play on a PS5: install, update, remove, open (play_app_install.rs).
         .route("/api/play/app/installed", get(play_app_install::installed))
         .route("/api/play/app/install", post(play_app_install::install))
@@ -15417,6 +15525,7 @@ mod loopback_guard_tests {
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
         assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/signal"));
         assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/probe"));
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/preview"));
         // PS5Upload Play on a PS5 joining an internet room through this engine.
         assert!(loopback_allows(&c, ip("192.168.1.40"), "/api/join/bridge"));
         // The host's side of Play Together stays on this computer.
@@ -15427,6 +15536,10 @@ mod loopback_guard_tests {
             "/api/join/invite",
             "/api/join/decide",
             "/api/join/kick",
+            "/api/join/room",
+            "/api/join/rooms",
+            "/api/join/seat",
+            "/api/join/unblock",
             "/api/join/playing",
             "/api/join/settings",
             "/api/join/comms",
@@ -15478,6 +15591,8 @@ mod loopback_guard_tests {
             "/api/play/app/pair",
             "/api/play/app/unpair",
             "/api/play/app/paired",
+            "/api/play/app/moved",
+            "/api/play/app/pair_confirm",
             "/api/play/app/x",
             "/api/play/appx",
             "/api/play",
@@ -15485,6 +15600,12 @@ mod loopback_guard_tests {
             assert!(!loopback_allows(&c, ip("192.168.1.50"), p), "{p}");
         }
         assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/pair"));
+        assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/moved"));
+        assert!(loopback_allows(
+            &c,
+            ip("127.0.0.1"),
+            "/api/play/app/pair_confirm"
+        ));
     }
 
     #[test]
@@ -16605,9 +16726,12 @@ mod helpers_tests {
         assert_eq!(del.status(), StatusCode::BAD_REQUEST);
         let power = ps5_power_control(
             State(state),
+            HeaderMap::new(),
+            Query(together_guard::ConfirmQuery::default()),
             Json(PowerControlReq {
                 addr: Some(String::new()),
                 action: "reboot".into(),
+                confirm_friends: false,
             }),
         )
         .await

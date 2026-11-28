@@ -47,6 +47,10 @@ changed for agents:
 - `together_routes` (read-only) explains each friend's connection: the tier lines, what their
   app measured on its way (round trip, jitter, loss), how often it changed way during play, its
   backups, and the checks socket's counts.
+- `together_room` (read-only) shows the Play Room: who can see it, its size, lock, whether a
+  password is set (never the password), why it is or isn't listed in Rooms, how many are blocked,
+  each player's seat, how they came and connection tier, the asks waiting, and chat and voice as
+  modes and counts only. Neither tool ever returns what anyone said in chat.
 
 **Finding and checking consoles.** `tailnet_consoles` lists the PS5Upload consoles on this
 device's Tailscale network (or probes one `addr`): tailnet and home address, whether its helper
@@ -296,6 +300,11 @@ clients let you allow tools one by one, so keep these on "ask".
 | `share_create`, `share_decide` | Make a Share link, and send the files to a friend who asked |
 | `share_cancel` | Stop a share and its transfers |
 | `api_request` | Anything the API can do |
+
+While friends play through Play Together, `rp_stop`, `power_control`, `games_stop`, `processes_kill`,
+`games_launch`, `payloads_send` (the helper) and `consoles_helper_ensure` fail with `friends_playing`
+and the friends' names. The agent should ask you; it calls again with `confirm_friends: true` only
+when you say go ahead.
 
 Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`, `games_restore`,
 `games_restore_finish`,

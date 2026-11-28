@@ -356,6 +356,18 @@ pub struct Ack {
     /// `vpad.hb`: the pad is neutral (its watchdog let go).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neutral: Option<bool>,
+    /// `vpad.hb` (13.0 helpers): someone sits in the pad now who is not the user it was made for
+    /// (a pick on "Who's using this controller?"), or a bound pad sits in its bound user. `false`
+    /// is "maybe still picking" (the console reports a new pad's owner as the user it was made for
+    /// at once, so a pick of that same user can't be told apart); None: not known (older helper,
+    /// no reading yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_user: Option<bool>,
+    /// `vpad.hb`: the console user the pad sits in now, and the one it was made for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made_for: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<String>,
 }

@@ -35,7 +35,13 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           loader (port 9021, which the user's jailbreak must have opened). It does \
                           not replace a running helper of another version: payloads_send does.",
             kind: Kind::Write { idempotent: true },
-            schema: object(json!({ "console": console_required() }), &["console"]),
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "confirm_friends": super::confirm_friends(),
+                }),
+                &["console"],
+            ),
             run: |ctx, args| Box::pin(helper_ensure(ctx, args)),
         },
         ToolDef {
@@ -424,7 +430,7 @@ async fn helper_ensure(ctx: ToolCtx, args: Args) -> ToolResult {
         let answer = json!({ "running": true, "sent": false, "status": status.json() });
         return Ok(ToolOutput::ok("The helper is running.", answer));
     }
-    let body = json!({ "ps5_addr": console });
+    let body = super::with_confirm_friends(json!({ "ps5_addr": console }), &args);
     let sent = ctx.post("/api/pkg/payload-restore", &body).await?;
     let answer = json!({ "running": false, "sent": true, "send": sent });
     Ok(ToolOutput::ok(

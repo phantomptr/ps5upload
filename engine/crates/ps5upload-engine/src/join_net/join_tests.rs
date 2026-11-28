@@ -39,13 +39,7 @@ async fn open_party(console: &str) -> serde_json::Value {
 
 async fn close_party(console: &str) {
     let (ci, h) = local();
-    close(
-        ci,
-        h,
-        Json(AddrBody {
-            addr: console.into(),
-        }),
-    )
+    close(ci, h, Query(Default::default()), Json(CloseBody { addr: console.into(), confirm_friends: true }))
     .await;
 }
 
@@ -559,7 +553,7 @@ async fn an_internet_room_takes_no_hello_without_the_current_invite() {
     let mut g = connect_guest(&hub.url, &room).await;
     g.text(serde_json::json!({"hello": {"invite": old, "name": "Old link"}}));
     let v = g.next_with("stage").await;
-    assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"key".into()), "{v}");
+    assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"expired".into()), "{v}");
     assert_eq!(
         host_state(console).await["pending"],
         serde_json::json!([]),

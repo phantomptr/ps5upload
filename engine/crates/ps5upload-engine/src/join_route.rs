@@ -263,6 +263,9 @@ pub async fn probe(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
+    if let Some(r) = crate::public_limit::PROBE.gate(peer.ip()) {
+        return r;
+    }
     probe_with(upgrade, peer.ip(), crate::join::together_open()).await
 }
 
@@ -278,11 +281,7 @@ pub(crate) async fn probe_with(upgrade: WebSocketUpgrade, ip: IpAddr, open: bool
     };
     if !CONNECTS.allow(ip, limit, Instant::now()) {
         COUNTERS.refused.fetch_add(1, Ordering::Relaxed);
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many tries, wait a minute",
-        )
-            .into_response();
+        return crate::public_limit::slow_down(20);
     }
     let Some(slot) = Slot::take(ip) else {
         COUNTERS.refused.fetch_add(1, Ordering::Relaxed);

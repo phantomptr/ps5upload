@@ -107,3 +107,72 @@ An older helper answers unknown method for all three.
   the wait, served again.
 - Not tested on hardware: reading `/v1/play/grants` and `/v1/intent` (127.0.0.1 only on the
   console: needs PS5Upload Play), a real pick on a guest pad, bound pads.
+
+## Engine (rooms model, host controls, lobby, audit fixes, pairing)
+
+Built against the rooms design (sections 2-6, 9-10) and the hub's PROTOCOL.md "Rooms". Where the
+engine differs from the design:
+
+1. **The way someone came is `came`, not `via`**, on guests and asks in `GET /api/join` (and the
+   app status): `via` already means `lan`/`internet` there. Words: `invite`, `again`, `nearby`,
+   `friends`, `rooms`, `group`.
+2. **Refusal words on the guest socket** keep the old ones where they existed: a host's No and a
+   block are `denied` (the lobby says `no`). New: `full` with `allowed`/`in`, `locked`, `password`
+   with `tries_left`, `locked_out` with `wait_s`, `host_away`, `not_listed`, `old`, `name_taken`
+   with `suggest`, `already_asking` (one ask per device), `expired` (a link this room gave out
+   before; a link that never was stays `key`), `code` (a wrong typed code; older guests keep
+   `key`).
+3. **A knock from the home network or Tailscale carries the password in the clear**
+   (`hello.knock.password`): the http guest page has no WebCrypto, and the socket never leaves the
+   home network or the tailnet. Over the hub it is always sealed (`room_seal.rs`).
+4. **A lobby knock hands back a resume token** (`{"knock": "ok", "token", "friend"?, "lobby"}`):
+   the knock runs the normal guest session (gate, the host's answer, the seat), the seat is held for
+   the resume window, and the data channel's hello is `{"hello": {"resume": token}}`. No second
+   admission path.
+5. **Chat and voice are join_comms.rs's** (agent B): the room keeps their modes in its settings and
+   hands them over (`set_modes`) on open and on every room change; mutes are `POST /api/join/mute`.
+   `ChatMode`/`VoiceMode` are B's types.
+6. **Host away** = no host page attached to the console's session for 5 minutes
+   (`rp_stream_api::host_away`), so a host who moved to another screen still gets asks.
+7. **"PS5s of this household get in without asking"** is `approval.household` (off): a client that
+   says `kind: ps5` from an address in this engine's console list.
+8. **Keep other guests' pads through the host's restart**: only a guest who most likely took the
+   host's user gives their pad back after the grace; everyone else keeps theirs (nothing to pick
+   again on resume).
+9. **The hosted-by marker** is the helper's `play.room` (203), every change and every 30 s, null on
+   close; `play.grant` is 204 with a 64-hex grant (the helper's form).
+10. **Name rules** come from `ps5upload_hub::names` (one copy); the look-alike table for unique
+    names is a small vendored subset (Latin/Cyrillic/Greek and digit look-alikes), not full UTS #39.
+11. **One sealed-knock format, PS5Upload Play's** (`apps/play/src/net/seal.cpp`): `0x01 ‖ point
+    (65) ‖ nonce (12) ‖ AES-128-GCM`, HKDF info without the point, no AAD, plaintext `{"secret",
+    "gid", "challenge"}` (gid "" on the guest socket). One secret per knock: the password, or for
+    Play again the friend pass — so **a Play again knock needs no room password** (its pass is the
+    proof; the host let them in before).
+12. **The guest socket answers a knock that needs the password and didn't say it with a
+    challenge** (`{"knock": "challenge", "c", "pk"}` → `{"knock": "sealed", "blob"}`); a plain
+    `knock.password` is still taken on that socket. Refusals there are the usual stages (`{"stage":
+    "refused", "why": …}`), and a taken name is `{"stage": "refused", "why": "name_taken",
+    "suggest", "name_taken": {"suggest"}}`.
+13. **Bridge v2** (`{"bridge": {"v": 2, "lobby", "knock"}}`): the bridge knocks on the lobby with
+    its own hub connection and relays the answers; `challenge` gains `gid` (the bridge's), `ok`
+    carries `token` and the host engine's DTLS `fp` (the lobby card has no fingerprint), and after
+    `no` the bridge says `{"bridge": "failed", "why": "refused"}`.
+14. **Companion intents** take `room` as `{"set": {…}}` or the fields themselves; `decide` with
+    `allow: "group"` is a plain yes until groups land; `chat {quick | text, notice?}` is the host's
+    line through join_comms. The status adds `session.user` (the PS5 user in front); there is no
+    `console.owner` yet.
+
+PS5Upload Play's assumptions (apps/play/docs/ROOMS.md on rooms-app) — in the engine now: knock +
+device + proto + caps in the hello, challenge + pk, sealed blob, bridge v2, companion `room` /
+`kick`+`block` / `unblock` / `mute` (join_comms) / `decide` group (as yes) / `chat`, status `room`
+and per-guest `tag`, `from_rooms`, `muted`, asks' `came` (not `via`), `tag`, `password_ok`,
+`rtt_hint`, `session.user`, discovery `you`, `joined.lobby`, the room push (players with `id`,
+`seat`, `you`). **Not yet:** `console.owner`, many controllers (`media: false`, `group`,
+`{"release": 1}`, each guest's `group`, an ask's `players`), the push's `host_link`.
+
+Not done in this pass (open items): the engine-side auto-restart after a friend takes the host's
+user (needs a page-less session start in rp_stream_api); "It's me" Player 1 for the host's own
+device; the internet-direct preview channel for Friends (Details over the internet go through the
+hub's relayed preview); ready check, recent players history, the host's PS5 link round trip in
+the preview; the card's game is the host's pick or the console's running title (asked once a
+minute), the marker sends only a picked game.

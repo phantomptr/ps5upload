@@ -52,6 +52,7 @@ pub(crate) mod bridge;
 pub(crate) mod chunk;
 pub(crate) mod crypto;
 pub(crate) mod hub;
+pub(crate) mod lobby;
 pub(crate) mod local_signal;
 pub(crate) mod nat;
 pub(crate) mod rtc;

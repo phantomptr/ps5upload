@@ -104,8 +104,6 @@ const HOST_GRACE: Duration = Duration::from_secs(5);
 const HOST_RESTART_WINDOW: Duration = Duration::from_secs(60);
 /// Guests at most (the PS5 takes four controllers; Player 1 is the host's).
 pub(crate) const MAX_GUESTS: u8 = 3;
-/// Guests waiting for the host's answer at once.
-const MAX_PENDING: usize = 4;
 /// How long a guest waits for the host's answer.
 const ASK_WAIT: Duration = Duration::from_secs(90);
 /// A guest must say hello this soon after connecting.
@@ -301,6 +299,9 @@ pub(crate) struct Settings {
     /// turns it off.
     #[serde(default = "yes")]
     pub play_discovery: bool,
+    /// The Play Room's settings (crate::join_room; no secrets: the password lives apart).
+    #[serde(default)]
+    pub room: crate::join_room::RoomCfg,
 }
 
 fn yes() -> bool {
@@ -335,6 +336,7 @@ impl Default for Settings {
             port: 0,
             video_track: true,
             play_discovery: true,
+            room: crate::join_room::RoomCfg::default(),
         }
     }
 }
@@ -459,6 +461,9 @@ struct StoredInvites {
     video_track: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     play_discovery: Option<bool>,
+    /// The Play Room (crate::join_room::RoomCfg::stored): only what differs from its defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    room: Option<serde_json::Value>,
 }
 
 /// What the file says, each part checked as the settings check it (None: nothing saved, or
@@ -477,6 +482,7 @@ struct Saved {
     upnp: Option<bool>,
     video_track: Option<bool>,
     play_discovery: Option<bool>,
+    room: Option<crate::join_room::RoomCfg>,
 }
 
 /// Each field read on its own: one that doesn't parse (a hand-edited `max_players: 300`) is
@@ -507,6 +513,7 @@ fn read_invites(path: &std::path::Path) -> Saved {
         upnp: field(&o, "upnp"),
         video_track: field(&o, "video_track"),
         play_discovery: field(&o, "play_discovery"),
+        room: o.get("room").cloned(),
     };
     let anywhere = match s.invites.as_deref() {
         Some("anywhere") => Some(true),
@@ -525,6 +532,10 @@ fn read_invites(path: &std::path::Path) -> Saved {
         upnp: s.upnp,
         video_track: s.video_track,
         play_discovery: s.play_discovery,
+        room: s
+            .room
+            .as_ref()
+            .map(|r| crate::join_room::RoomCfg::from_stored(Some(r))),
     }
 }
 
@@ -558,6 +569,7 @@ fn write_invites(
         upnp: (!s.upnp).then_some(false),
         video_track: (!s.video_track).then_some(false),
         play_discovery: (!s.play_discovery).then_some(false),
+        room: s.room.stored(),
     })
     .map_err(|e| e.to_string())?;
     // Written aside, on the disk, and renamed over: a crash mid-write never leaves half a file
@@ -619,6 +631,9 @@ fn apply_saved(s: &mut Settings, saved: Saved) {
     }
     if let Some(v) = saved.play_discovery {
         s.play_discovery = v;
+    }
+    if let Some(v) = saved.room {
+        s.room = v;
     }
 }
 
@@ -1205,6 +1220,33 @@ pub(crate) struct Guest {
     client: ClientInfo,
     /// Their app may not show this session's picture ([`ClientInfo::codec_warning`]).
     codec_warning: Option<&'static str>,
+    /// How they came, their device tag, protocol (Play Rooms, crate::join_room).
+    meta: Meta,
+}
+
+/// Who an ask or a guest is, for the room's rules (crate::join_room): how they came, their
+/// device's tag (shown as "Sam · 4F2A") and its hash (blocks), their protocol and capabilities,
+/// whether a password was checked, and what blocks and limits key on (never shown).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Meta {
+    pub via: Option<crate::join_room::Via>,
+    pub tag: Option<String>,
+    pub proto: Option<u32>,
+    pub caps: Vec<String>,
+    pub password_ok: Option<bool>,
+    pub rtt_hint: Option<u32>,
+    pub who: crate::join_room::Who,
+}
+
+impl Meta {
+    fn via(&self) -> crate::join_room::Via {
+        self.via.unwrap_or(crate::join_room::Via::Invite)
+    }
+    /// Came from the public Rooms list: never Player 1, never the host's profile, PS & Create
+    /// blocked.
+    fn stranger(&self) -> bool {
+        self.via().stranger()
+    }
 }
 
 /// A guest on [`STREAM_SEAT`] giving it back to the host's side.
@@ -1372,6 +1414,8 @@ struct Ask {
     /// The guest's app, for the host's prompt ("on a PS5").
     client: ClientInfo,
     answer: oneshot::Sender<Decision>,
+    /// How they came, their tag, password result (Play Rooms).
+    meta: Meta,
 }
 
 struct Invite {
@@ -1469,6 +1513,8 @@ pub(crate) struct Party {
     /// guest's "don't pick <name>" hint (None: not known), and when it was last looked up.
     front_user: Option<String>,
     front_at: Option<Instant>,
+    /// The Play Room's run-time state (lock, blocks, mutes, listing; crate::join_room).
+    pub(crate) room: crate::join_room::RoomRun,
 }
 
 /// How guests reach this engine.
@@ -1504,12 +1550,16 @@ impl Party {
             companion_at: None,
             front_user: None,
             front_at: None,
+            room: crate::join_room::RoomRun::new(Instant::now()),
         }
     }
 
     /// The invite (a new one when there is none, it expired, or `renew`).
     fn invite(&mut self, renew: bool, now: Instant) -> Option<InviteInfo> {
         if renew || self.invite.as_ref().is_none_or(|i| i.until <= now) {
+            if let Some(old) = &self.invite {
+                self.room.remember_invite(&old.key, &old.code, now);
+            }
             self.invite = Some(Invite {
                 key: random_key()?,
                 code: new_code()?,
@@ -1646,6 +1696,7 @@ impl Party {
             net: None,
             client: ClientInfo::default(),
             codec_warning: None,
+            meta: Meta::default(),
         });
         self.guests.last()
     }
@@ -1698,6 +1749,8 @@ impl Party {
         g.away_since = None;
         if let Some(c) = g.conn.take() {
             let bye = match why {
+                // Play Rooms pages say "<host> removed you from the room."
+                "kicked" if g.meta.proto.is_some() => Some("removed"),
                 "kicked" => Some("kicked"),
                 "closed" => Some("closed"),
                 "lost" => Some("lost"),
@@ -1805,7 +1858,9 @@ impl Party {
             return None; // between the stream's controller and their pad: nowhere to go yet
         }
         // While picking a user, PS answers "Who's using this controller?"; Create never helps.
-        let mut strip = match (self.settings.block_system_buttons, g.playing) {
+        // People from the public Rooms list always have PS & Create blocked once playing.
+        let block = self.settings.block_system_buttons || g.meta.stranger();
+        let mut strip = match (block, g.playing) {
             (false, _) => 0,
             (true, true) => vpad::button::SYSTEM,
             (true, false) => vpad::button::CREATE,
@@ -2054,8 +2109,15 @@ impl Party {
                     )));
                     return (fx, false);
                 }
+                // Everyone else keeps their pad through the host's restart (scenario audit: no
+                // re-picking a user for the whole room); only one who most likely took the
+                // host's user gives it back, so the host's own user is free again.
                 if gone >= HOST_GRACE {
-                    for g in self.guests.iter_mut().filter(|g| g.active() && g.slot_open) {
+                    for g in self
+                        .guests
+                        .iter_mut()
+                        .filter(|g| g.active() && g.slot_open && g.took_host)
+                    {
                         g.slot_open = false;
                         fx.push(Effect::Link(link::Cmd::Close {
                             slot: g.player,
@@ -2159,6 +2221,13 @@ impl Party {
                     "client_app": g.client.app,
                     "client_v": g.client.v,
                     "codec_warning": g.codec_warning,
+                    // Play Rooms: how they came, their device tag, the host's mutes, a stranger
+                    // from the public list, their rooms protocol.
+                    "came": g.meta.via().word(),
+                    "tag": g.meta.tag,
+                    "from_rooms": g.meta.stranger(),
+                    "proto": g.meta.proto,
+                    "caps": g.meta.caps,
                 })
             })
             .collect();
@@ -2178,7 +2247,13 @@ impl Party {
                 "client_app": a.client.app,
                 "client_v": a.client.v,
                 "codec_warning": a.client.codec_warning(live_codec(&self.console)),
+                "came": a.meta.via().word(),
+                "tag": a.meta.tag,
+                "password_ok": a.meta.password_ok,
+                "rtt_hint": a.meta.rtt_hint,
+                "from_rooms": a.meta.stranger(),
             })).collect::<Vec<_>>(),
+            "room": room_api::room_view(self, now),
             "settings": settings_view(&self.settings),
             "max_guests": MAX_GUESTS,
             // "Guests play as" on this console, and the helper's companion that binds them.
@@ -2200,7 +2275,7 @@ impl Party {
             "state": g.state(),
             "rtt_ms": g.stats.rtt_now(),
             "host": self.host_name,
-            "block_system": self.settings.block_system_buttons && g.playing,
+            "block_system": (self.settings.block_system_buttons || g.meta.stranger()) && g.playing,
             // On the stream's own controller: they play as the host's PS5 user, nothing to pick.
             "stream_seat": g.on_seat(),
             // The profile the host gave them (they play as it, nothing to pick), or null.
@@ -2217,7 +2292,7 @@ impl Party {
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
             // The session's picture may not show on their app ("hevc", "main10").
             "codec_warning": g.codec_warning,
-        }}))
+        }, "room": room_api::guest_room(self, id, Instant::now())}))
     }
 
     /// What a bug report carries: counts, stages and health, never a name, invite key, code or
@@ -2282,9 +2357,23 @@ impl Party {
 pub(crate) fn diag_summary() -> serde_json::Value {
     let now = Instant::now();
     let parties: Vec<_> = with_parties(|m| m.values().map(|p| p.diag(now)).collect());
+    let mut s = serde_json::to_value(settings()).unwrap_or_default();
+    // A bug report holds no field named like a secret: the approval switch (never a password
+    // itself) goes by another name here, and whether a password is set is said plainly.
+    if let Some(a) = s
+        .pointer_mut("/room/approval")
+        .and_then(|a| a.as_object_mut())
+    {
+        if let Some(v) = a.remove("password") {
+            a.insert("pw_lets_in".into(), v);
+        }
+    }
+    if let Some(r) = s.get_mut("room").and_then(|r| r.as_object_mut()) {
+        r.insert("pw_set".into(), crate::join_room::has_password().into());
+    }
     serde_json::json!({
         "parties": parties,
-        "settings": settings(),
+        "settings": s,
         // Play Rooms chat and voice: counts only (join_comms.rs).
         "comms": crate::join_comms::diag(),
     })
@@ -2298,6 +2387,50 @@ pub(crate) fn needs_session(console: &str) -> bool {
         p.guests.iter().any(|g| g.active()) || p.invite.as_ref().is_some_and(|i| i.until > now)
     })
     .unwrap_or(false)
+}
+
+/// The friends in on `console` now (each guest's name, "Friend" when they gave none), for the
+/// "friends playing" guard (together_guard.rs). Empty: nobody would be cut off.
+pub(crate) fn friends_playing(console: &str) -> Vec<String> {
+    with_party(&host_key(console), |p| friend_names(p)).unwrap_or_default()
+}
+
+/// [`friends_playing`] on every console with a Play Together open: `(console, names)`, only the
+/// consoles where someone is in.
+pub(crate) fn friends_playing_any() -> Vec<(String, Vec<String>)> {
+    with_parties(|m| {
+        m.values()
+            .map(|p| (p.console.clone(), friend_names(p)))
+            .filter(|(_, names)| !names.is_empty())
+            .collect()
+    })
+}
+
+fn friend_names(p: &Party) -> Vec<String> {
+    p.guests
+        .iter()
+        .filter(|g| g.active())
+        .map(|g| match g.name.trim() {
+            "" => "Friend".to_string(),
+            n => n.to_string(),
+        })
+        .collect()
+}
+
+/// A party with one guest named `name` in (Player 2, playing), for other modules' tests.
+#[cfg(test)]
+pub(crate) fn test_party_with_guest(console: &str, name: &str) {
+    let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+    let Some(id) = p
+        .admit(name, vpad::FIRST_SLOT, Instant::now())
+        .map(|g| g.id)
+    else {
+        return;
+    };
+    if let Some(g) = p.guest_mut(id) {
+        g.playing = true;
+    }
+    with_parties(|m| m.insert(host_key(console), p));
 }
 
 /// A party with an invite out, for other modules' tests.
@@ -2340,6 +2473,7 @@ pub(crate) fn test_party_with_ask(
         name: name.into(),
         client: ClientInfo::default(),
         answer: tx,
+        meta: Meta::default(),
     });
     with_parties(|m| m.insert(host_key(console), p));
     rx
@@ -2624,6 +2758,23 @@ fn on_link_event(console: &str, ev: link::Event) {
                 ))],
             }
         }
+        link::Event::Owner { slot, user } => {
+            // The console says someone picked a user on this pad: they are playing (PS & Create
+            // go to the block rule, ✕ needs no move first). Seen only for a user other than the
+            // one the pad was made for; the host-user pick keeps its own rule (blame_pick).
+            match p.guests.iter_mut().find(|g| g.active() && g.player == slot) {
+                Some(g) if !g.playing => {
+                    g.playing = true;
+                    g.picked_at = Some(now);
+                    g.cross_guard = false;
+                    vec![Effect::Log(format!(
+                        "join: Player {slot} picked a user on the TV (the helper read user {})",
+                        user.map(|u| format!("{u:#010x}")).unwrap_or_else(|| "?".into())
+                    ))]
+                }
+                _ => Vec::new(),
+            }
+        }
         link::Event::Lost { slot } => {
             let id = p
                 .guests
@@ -2860,12 +3011,14 @@ pub async fn ws(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
+    // Upgrades per client on a gentle bucket first (crate::public_limit), then the per-minute
+    // tries.
+    if let Some(r) = crate::public_limit::GUEST_WS.gate(peer.ip()) {
+        return r;
+    }
     if !connect_allowed(peer.ip(), Instant::now()) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many tries, wait a minute",
-        )
-            .into_response();
+        // Slow down, with Retry-After (our pages and apps wait it out silently).
+        return crate::public_limit::slow_down(20);
     }
     let ip = peer.ip();
     upgrade
@@ -2906,11 +3059,8 @@ pub async fn signal(
         SIGNALS_PER_MIN
     };
     if !SIGNALS.allow(ip, limit, Instant::now()) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many tries, wait a minute",
-        )
-            .into_response();
+        // Slow down, with Retry-After (our pages and apps wait it out silently).
+        return crate::public_limit::slow_down(20);
     }
     upgrade
         .max_message_size(crate::join_net::local_signal::FRAME_MAX)
@@ -2978,6 +3128,9 @@ pub async fn bridge(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
+    if let Some(r) = crate::public_limit::APP.gate(peer.ip()) {
+        return r;
+    }
     crate::join_net::bridge::upgrade(upgrade, peer.ip())
 }
 
@@ -3032,6 +3185,16 @@ pub(crate) trait GuestSocket: Send + 'static {
         m: Message,
     ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
         self.send(m)
+    }
+    /// A knock on the room's lobby (join_net/lobby.rs): the session decides and seats, then ends
+    /// with `{"stage": "knocked", "token"}`; the guest plays on its data channel with that token.
+    fn knock_only(&self) -> bool {
+        false
+    }
+    /// The guest's client id in the room's lobby on the hub (limits and blocks key on it).
+    fn hub_cid(&self) -> Option<String> {
+        self.net()
+            .and_then(|n| crate::join_net::lobby::cid_of(&n.room, &n.gid))
     }
     /// A Play Rooms voice bundle (join_voice.rs): on an internet guest's unreliable `voice`
     /// channel when their page opened one, else with the rest (dropped, never waited for, when
@@ -3139,6 +3302,57 @@ struct Hello {
     /// The guest app's waiting room on the hub, `{"room", "hub"}` (join_friends.rs).
     #[serde(default)]
     inbox: Option<serde_json::Value>,
+    /// Play Rooms: the guest device's random id (its tag, "Sam · 4F2A"; blocks key on its hash).
+    #[serde(default)]
+    device: Option<serde_json::Value>,
+    /// Play Rooms: the guest's rooms protocol (absent: 1, a 12.6 page or app) and capabilities.
+    #[serde(default)]
+    proto: Option<serde_json::Value>,
+    #[serde(default)]
+    caps: Option<serde_json::Value>,
+    /// Play Rooms: a knock from the home network or Tailscale, `{"via": "rooms" | "friends" |
+    /// "nearby" | "again", "password"?}` (the password in the clear: this socket never leaves the
+    /// home network or the tailnet; over the hub it is sealed, join_net/lobby.rs).
+    #[serde(default)]
+    knock: Option<serde_json::Value>,
+}
+
+impl Hello {
+    /// The rooms protocol it says (None: protocol 1).
+    fn proto(&self) -> Option<u32> {
+        self.proto
+            .as_ref()
+            .and_then(|v| v.as_u64())
+            .filter(|p| (1..=999).contains(p))
+            .map(|p| p as u32)
+    }
+
+    fn caps(&self) -> Vec<String> {
+        self.caps
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| c.as_str())
+                    .filter(|c| {
+                        c.len() <= 16
+                            && c.bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                    })
+                    .take(32)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn knock_field(&self, k: &str) -> Option<String> {
+        self.knock
+            .as_ref()?
+            .get(k)?
+            .as_str()
+            .map(|s| s.chars().take(80).collect())
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -3170,6 +3384,33 @@ async fn read_hello<S: GuestSocket>(socket: &mut S) -> Option<Hello> {
                 }
                 // nothing binary comes before the hello (pad frames start once in)
                 Some(Ok(Message::Binary(_))) => return None,
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
+                _ => {}
+            },
+        }
+    }
+}
+
+/// The guest's `{"knock": "sealed", "blob"}` after a challenge (None: anything else, or nothing in
+/// time).
+async fn read_sealed<S: GuestSocket>(socket: &mut S) -> Option<String> {
+    let deadline = tokio::time::sleep(HELLO_WAIT);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => return None,
+            m = socket.recv() => match m {
+                Some(Ok(Message::Text(t))) => {
+                    let v: serde_json::Value = serde_json::from_str(t.as_str()).ok()?;
+                    if v.get("knock").and_then(|k| k.as_str()) != Some("sealed") {
+                        return None;
+                    }
+                    return v
+                        .get("blob")
+                        .and_then(|b| b.as_str())
+                        .filter(|b| b.len() <= crate::room_seal::BLOB_MAX * 2)
+                        .map(str::to_string);
+                }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
                 _ => {}
             },
@@ -3235,6 +3476,9 @@ enum Admit {
     /// A guest coming back: their console and id.
     Resume(String, u64),
     Refused(&'static str),
+    /// A refusal with more than its word (Play Rooms: `full` with `allowed`/`in`, `password`
+    /// with `tries_left`, `name_taken` with `suggest`, …).
+    RefusedWith(serde_json::Value),
     /// A new guest allowed in: console and id.
     New(String, u64),
 }
@@ -3248,8 +3492,59 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         let _ = socket.send(refused("hello")).await;
         return;
     };
-    let name = clean_name(hello.name.as_deref());
+    let name = crate::join_room::guest_name(&clean_name(hello.name.as_deref()));
     let client = ClientInfo::from_hello(hello.client.as_ref());
+    let tag = crate::join_room::device_tag(hello.device.as_ref().and_then(|d| d.as_str()));
+    let mut meta = Meta {
+        via: None,
+        tag: tag.as_ref().map(|t| t.0.clone()),
+        proto: hello.proto(),
+        caps: hello.caps(),
+        password_ok: None,
+        rtt_hint: None,
+        who: crate::join_room::Who {
+            tag_sha256: tag.map(|t| t.1),
+            addr: Some(ip),
+            cid: socket.hub_cid(),
+        },
+    };
+    let mut knock_password = hello.knock_field("password");
+    // A knock that needs the room password and didn't say it: the password sealed to the room
+    // key (PS5Upload Play, the secure page), `{"knock": "challenge", "c", "pk"}` → `{"knock":
+    // "sealed", "blob"}` (room_seal.rs; no hub id on this socket).
+    let knock_via = hello
+        .knock_field("via")
+        .and_then(|v| crate::join_room::Via::from_word(&v));
+    if knock_password.is_none()
+        && !socket.knock_only()
+        && knock_via.is_some_and(|v| v.needs_password())
+        && crate::join_room::has_password()
+    {
+        let Some(c) = crate::room_seal::challenge() else {
+            let _ = socket.send(refused("closed")).await;
+            return;
+        };
+        let pk = crate::join_room::with_secrets(|s| s.key.public()).unwrap_or_default();
+        if socket
+            .send(say(
+                serde_json::json!({"knock": "challenge", "c": c, "pk": pk}),
+            ))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        match read_sealed(&mut socket).await {
+            Some(blob) => {
+                knock_password = crate::join_room::with_secrets(|s| s.key.open(&blob, "", &c))
+                    .flatten()
+                    .map(|x| x.secret)
+                    // A blob that doesn't open counts as a wrong password.
+                    .or_else(|| Some("\u{0}".to_string()));
+            }
+            None => return,
+        }
+    }
     let t0 = Instant::now();
     let sock = GUEST_SOCKETS.fetch_add(1, Ordering::Relaxed);
     // What the guest came with, never the credential itself.
@@ -3298,7 +3593,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     let again = hello
         .again
         .as_deref()
-        .filter(|p| !p.is_empty() && socket.net().is_none() && admit.is_none());
+        .filter(|p| !p.is_empty() && admit.is_none());
     let mut name = name;
     let mut again_refused = None;
     let entry = match (hello.invite.as_deref(), hello.code.as_deref(), again) {
@@ -3342,12 +3637,15 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
                         "join: Play Together opened on {console} for a friend who asks again"
                     );
                 }
+                meta.via = Some(crate::join_room::Via::Again);
                 let r = ask(
                     &mut socket,
                     Entry::Again(console.clone()),
                     &name,
                     &client,
                     ip,
+                    meta.clone(),
+                    knock_password.clone(),
                 )
                 .await;
                 if opened
@@ -3364,15 +3662,53 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
                     None => return,
                 }
             }
-            Some(e) => match ask(&mut socket, e, &name, &client, ip).await {
-                Some(a) => a,
-                None => return,
-            },
+            Some(e) => {
+                meta.via = Some(match &e {
+                    Entry::Nearby => hello
+                        .knock_field("via")
+                        .and_then(|v| crate::join_room::Via::from_word(&v))
+                        .filter(|v| {
+                            matches!(
+                                v,
+                                crate::join_room::Via::Rooms
+                                    | crate::join_room::Via::Friends
+                                    | crate::join_room::Via::Nearby
+                            )
+                        })
+                        .unwrap_or(crate::join_room::Via::Nearby),
+                    Entry::Again(_) => crate::join_room::Via::Again,
+                    Entry::Key(_) | Entry::Code(_) => crate::join_room::Via::Invite,
+                });
+                match ask(
+                    &mut socket,
+                    e,
+                    &name,
+                    &client,
+                    ip,
+                    meta.clone(),
+                    knock_password.clone(),
+                )
+                .await
+                {
+                    Some(a) => a,
+                    None => return,
+                }
+            }
             None => Admit::Refused(again_refused.unwrap_or("key")),
         },
     };
     let ms = t0.elapsed().as_millis();
     let (console, id) = match admit {
+        Admit::RefusedWith(v) => {
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: guest socket {sock} refused: {} after {ms} ms",
+                v["why"].as_str().unwrap_or("?")
+            );
+            let _ = socket.send(say(v)).await;
+            return;
+        }
         Admit::Refused(why) => {
             crate::log_at!(
                 Debug,
@@ -3400,9 +3736,29 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         }
     };
     // A guest let in who asked for a pass (and did not come with one) gets one for next time.
-    let friend = (hello.remember && !by_again && socket.net().is_none() && hello.resume.is_none())
+    let friend = (hello.remember && !by_again && hello.resume.is_none())
         .then(|| crate::join_friends::issue(&console, &name, inbox))
         .flatten();
+    if friend.is_some() {
+        crate::join_net::lobby::changed();
+    }
+    // A knock on the lobby: seated and waiting for its data channel (the resume window), which
+    // says hello with this token.
+    if socket.knock_only() {
+        let token = with_party(&host_key(&console), |p| {
+            p.guests
+                .iter()
+                .find(|g| g.id == id && g.active())
+                .map(|g| g.token.clone())
+        })
+        .flatten();
+        let v = match token {
+            Some(t) => serde_json::json!({"stage": "knocked", "token": t, "friend": friend}),
+            None => serde_json::json!({"stage": "refused", "why": "closed"}),
+        };
+        let _ = socket.send(say(v)).await;
+        return;
+    }
     play(socket, console, id, ip, client, friend).await;
 }
 
@@ -3722,19 +4078,71 @@ fn notice_ask(console: &str, name: &str, ip: IpAddr) {
     });
 }
 
-/// A new guest with an invite: checks, asks the host, makes their pad. None when the socket
-/// closed while asking.
+/// The names a new guest's name must not repeat in the room (design 3.5): the host's, everyone
+/// in (the resume window too), everyone asking.
+fn taken_names(p: &Party) -> Vec<String> {
+    let mut v = vec![p.host_name.clone()];
+    v.extend(p.front_user.clone());
+    v.extend(
+        p.guests
+            .iter()
+            .filter(|g| g.active())
+            .map(|g| g.name.clone()),
+    );
+    v.extend(p.pending.iter().map(|a| a.name.clone()));
+    v
+}
+
+/// The host's device is away: no host page is attached to the console's Remote Play session (the
+/// phone slept, the desktop closed), so nobody can answer an ask now. A host who only moved to
+/// another screen for a while still gets asks: away counts from [`HOST_AWAY_AFTER`].
+fn host_device_away(console: &str) -> bool {
+    crate::rp_stream_api::host_away(console).is_some_and(|d| d >= HOST_AWAY_AFTER)
+}
+
+/// No host page for this long: the host's device is away (asks answer `host_away`, the room's
+/// card is withdrawn).
+const HOST_AWAY_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// A PS5 this computer knows (its own household): "trusted household PS5s" may get in without
+/// asking when the host opted in.
+fn household_ps5(client: &ClientInfo, ip: IpAddr) -> bool {
+    client.kind.as_deref() == Some("ps5")
+        && crate::consoles_api::console_brief(&ip.to_string()).is_some()
+}
+
+/// Asks waiting from one address at most (pending asks don't count against the room size; one
+/// per device or pass).
+const PENDING_PER_ADDRESS: usize = 2;
+
+/// What an ask came to before the guest is seated.
+enum Asked {
+    /// Let in (by the host, or an approval): seat them.
+    In,
+    /// A refusal as the guest gets it.
+    Refused(serde_json::Value),
+    /// The socket closed while waiting.
+    Gone,
+}
+
+/// A new guest: checks, the room's rules ([`crate::join_room::gate`]), asks the host when it
+/// needs to, then makes their pad. None when the socket closed while asking.
+#[allow(clippy::too_many_arguments)]
 async fn ask<S: GuestSocket>(
     socket: &mut S,
     entry: Entry,
     name: &str,
     client: &ClientInfo,
     ip: IpAddr,
+    mut meta: Meta,
+    password: Option<String>,
 ) -> Option<Admit> {
     let now = Instant::now();
+    let rooms_aware = meta.proto.is_some();
     if matches!(entry, Entry::Code(_)) && !code_tries_left(ip, now) {
         return Some(Admit::Refused("slow_down"));
     }
+    let friend = matches!(entry, Entry::Again(_));
     let found = with_parties(|m| {
         if let Entry::Again(console) = &entry {
             // Not open (and not opened for it: the console isn't being played).
@@ -3757,16 +4165,34 @@ async fn ask<S: GuestSocket>(
                 _ => Err("key"),
             };
         }
-        m.iter()
+        let hit = m
+            .iter()
             .find(|(_, p)| match &entry {
                 Entry::Key(k) => p.key_ok(k, now),
                 Entry::Code(c) => p.code_ok(c, now),
                 Entry::Nearby | Entry::Again(_) => false,
             })
-            .map(|(k, p)| (k.clone(), p.console.clone()))
-            .ok_or("key")
+            .map(|(k, p)| (k.clone(), p.console.clone()));
+        if let Some(h) = hit {
+            return Ok(h);
+        }
+        // A link or code this room gave out before (lapsed, or replaced by New link): "expired"
+        // (the guest needs a new invite); a code that never was: "code" (typed wrong).
+        let (k, c) = match &entry {
+            Entry::Key(k) => (Some(k.as_str()), None),
+            Entry::Code(c) => (None, Some(c.as_str())),
+            _ => (None, None),
+        };
+        if m.values().any(|p| p.room.was_invite(k, c, now)) {
+            return Err("expired");
+        }
+        Err(if c.is_some() && rooms_aware {
+            "code"
+        } else {
+            "key"
+        })
     });
-    if found.is_err() && matches!(entry, Entry::Code(_)) {
+    if matches!(found, Err("code" | "key")) && matches!(entry, Entry::Code(_)) {
         code_wrong(ip, now);
     }
     let (key, console) = match found {
@@ -3783,43 +4209,164 @@ async fn ask<S: GuestSocket>(
         Ok(Ok(false)) => return Some(Admit::Refused("old_helper")),
         _ => return Some(Admit::Refused("unreachable")),
     }
+    // A name nobody else in the room has (design 3.5). An older page or app can't pick another:
+    // it plays as the suggestion.
+    let mut name = name.to_string();
+    // The same device already asking (a second tab, a retry): told so, not "name taken".
+    let asking = meta.who.tag_sha256.is_some()
+        && with_party(&key, |p| {
+            p.pending
+                .iter()
+                .any(|a| a.meta.who.tag_sha256 == meta.who.tag_sha256)
+        })
+        .unwrap_or(false);
+    if asking {
+        return Some(Admit::RefusedWith(
+            serde_json::json!({"stage": "refused", "why": "already_asking"}),
+        ));
+    }
+    let suggestion = with_party(&key, |p| {
+        crate::join_names::suggest(&name, taken_names(p).iter().map(String::as_str))
+    })
+    .flatten();
+    if let Some(s) = suggestion {
+        if rooms_aware {
+            return Some(Admit::RefusedWith(serde_json::json!({
+                "stage": "refused", "why": "name_taken", "suggest": s,
+                "name_taken": {"suggest": s},
+            })));
+        }
+        name = s;
+    }
+    // The password, when this way in needs one (off the lock: PBKDF2 takes a moment).
+    let via = meta.via();
+    let pw =
+        crate::join_room::check_password(via.needs_password(), password.as_deref(), &meta.who, now);
+    meta.password_ok = match pw {
+        crate::join_room::PwCheck::Ok => Some(true),
+        crate::join_room::PwCheck::Wrong(_) | crate::join_room::PwCheck::LockedOut(_) => {
+            Some(false)
+        }
+        _ => None,
+    };
+    let household = household_ps5(client, ip);
+    let away = host_device_away(&console);
     let id = next_id();
     let (tx, rx) = oneshot::channel();
     let queued = with_party(&key, |p| {
-        let max = p.settings.max_players.clamp(1, MAX_GUESTS) as usize;
-        if p.guests_in() + p.pending.len() >= max {
-            return Err("full");
+        let cfg = &p.settings.room;
+        let now_room = crate::join_room::RoomNow {
+            visibility: cfg.visibility,
+            nearby: cfg.nearby,
+            locked: p.room.locked,
+            approval: cfg.approval,
+            password_set: crate::join_room::has_password(),
+            allowed: p.settings.max_players.clamp(1, MAX_GUESTS),
+            guests_in: p.guests_in() as u8,
+            pending: p.pending.len(),
+            host_away: away,
+        };
+        let asker = crate::join_room::Asker {
+            via,
+            blocked: p.room.blocked(&meta.who),
+            password: pw,
+            friend,
+            household,
+            proto: meta.proto,
+        };
+        match crate::join_room::gate(&now_room, &asker) {
+            crate::join_room::Gate::Refuse(r) => Err(r.json()),
+            crate::join_room::Gate::LetIn => Ok(false),
+            crate::join_room::Gate::Ask => {
+                // One ask per device (or pass) at a time, and a few per address.
+                let same_device = meta.who.tag_sha256.is_some()
+                    && p.pending
+                        .iter()
+                        .any(|a| a.meta.who.tag_sha256 == meta.who.tag_sha256);
+                let from_address = p
+                    .pending
+                    .iter()
+                    .filter(|a| a.meta.who.addr.map(limit_key) == Some(limit_key(ip)))
+                    .count();
+                if same_device || (!ip.is_loopback() && from_address >= PENDING_PER_ADDRESS) {
+                    return Err(serde_json::json!({"stage": "refused", "why": "already_asking"}));
+                }
+                p.pending.push(Ask {
+                    id,
+                    name: name.clone(),
+                    client: client.clone(),
+                    answer: tx,
+                    meta: meta.clone(),
+                });
+                Ok(true)
+            }
         }
-        if p.pending.len() >= MAX_PENDING {
-            return Err("full");
-        }
-        p.pending.push(Ask {
-            id,
-            name: name.to_string(),
-            client: client.clone(),
-            answer: tx,
-        });
-        Ok(())
     })
-    .unwrap_or(Err("closed"));
-    if let Err(why) = queued {
-        return Some(Admit::Refused(why));
+    .unwrap_or_else(|| Err(serde_json::json!({"stage": "refused", "why": "closed"})));
+    let asks = match queued {
+        Err(v) => {
+            crate::log_at!(
+                Debug,
+                "together",
+                "join: a guest's ask on {console} ({}) refused: {}",
+                via.word(),
+                v["why"].as_str().unwrap_or("?")
+            );
+            return Some(Admit::RefusedWith(v));
+        }
+        Ok(asks) => asks,
+    };
+    let asked = if asks {
+        // By number in the log: a bug report is posted in public, and names are the host's friends.
+        crate::log_at!(
+            Info,
+            "together",
+            "join: ask {id}: a guest asks to play on {console} ({})",
+            via.word()
+        );
+        wait_for_host(socket, &key, &console, id, &name, ip, rx, now).await
+    } else {
+        crate::log_at!(
+            Info,
+            "together",
+            "join: a guest on {console} gets in without asking ({}{})",
+            via.word(),
+            if meta.password_ok == Some(true) {
+                ", password"
+            } else {
+                ""
+            }
+        );
+        Asked::In
+    };
+    match asked {
+        Asked::Gone => None,
+        Asked::Refused(v) => Some(Admit::RefusedWith(v)),
+        Asked::In => Some(seat_guest(&key, &console, &name, meta).await),
     }
-    // By number in the log: a bug report is posted in public, and names are the host's friends.
-    crate::log_at!(
-        Info,
-        "together",
-        "join: ask {id}: a guest asks to play on {console}"
-    );
+}
+
+/// Tells the guest they are asking, shows the host (and the TV), and waits for the answer.
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_host<S: GuestSocket>(
+    socket: &mut S,
+    key: &str,
+    console: &str,
+    id: u64,
+    name: &str,
+    ip: IpAddr,
+    rx: oneshot::Receiver<Decision>,
+    now: Instant,
+) -> Asked {
     if socket
         .send(say(serde_json::json!({"stage": "asking"})))
         .await
         .is_err()
     {
-        with_party(&key, |p| p.pending.retain(|a| a.id != id));
-        return None;
+        with_party(key, |p| p.pending.retain(|a| a.id != id));
+        return Asked::Gone;
     }
-    notice_ask(&console, name, ip);
+    notice_ask(console, name, ip);
     let mut gave_up = false;
     let d = tokio::select! {
         // Err: Play Together closed and the asks were dropped with it
@@ -3827,7 +4374,7 @@ async fn ask<S: GuestSocket>(
         _ = tokio::time::sleep(ASK_WAIT) => Some(Decision::NoAnswer),
         _ = closed(socket) => { gave_up = true; Some(Decision::Deny) }
     };
-    with_party(&key, |p| p.pending.retain(|a| a.id != id));
+    with_party(key, |p| p.pending.retain(|a| a.id != id));
     crate::log_at!(
         Debug,
         "together",
@@ -3840,33 +4387,46 @@ async fn ask<S: GuestSocket>(
         now.elapsed().as_millis()
     );
     if gave_up {
-        return None;
+        return Asked::Gone;
     }
-    match d {
-        None => return Some(Admit::Refused("closed")),
-        Some(Decision::Deny) => return Some(Admit::Refused("denied")),
-        Some(Decision::NoAnswer) => return Some(Admit::Refused("no_answer")),
-        Some(Decision::HostStopped) => return Some(Admit::Refused("not_playing")),
-        Some(Decision::Closed) => return Some(Admit::Refused("closed")),
-        Some(Decision::Allow) => {}
-    }
-    // A player number, and the helper's pad for it (a slot another engine holds is skipped).
+    let why = match d {
+        None => "closed",
+        Some(Decision::Deny) => "denied",
+        Some(Decision::NoAnswer) => "no_answer",
+        Some(Decision::HostStopped) => "not_playing",
+        Some(Decision::Closed) => "closed",
+        Some(Decision::Allow) => return Asked::In,
+    };
+    Asked::Refused(serde_json::json!({"stage": "refused", "why": why}))
+}
+
+/// A guest let in gets a player number and the helper's pad for it (a slot another engine holds
+/// is skipped). People from the public Rooms list never get the stream's controller (Player 1,
+/// the host's PS5 user) nor a profile the host marked as their own.
+async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta) -> Admit {
+    let console = console.to_string();
+    let stranger = meta.stranger();
     let mut tried = Vec::new();
     loop {
         let now = Instant::now();
-        let seat_free = crate::rp_stream_api::stream_seat_free(&console);
-        let g = with_party(&key, |p| {
+        let seat_free = !stranger && crate::rp_stream_api::stream_seat_free(&console);
+        let g = with_party(key, |p| {
             let player = p.next_player(&tried, seat_free)?;
-            p.admit(name, player, now)
-                .map(|g| (g.id, g.player, g.pad_token.clone()))
+            let g = p.admit(name, player, now)?;
+            let gid = g.id;
+            let pad_token = g.pad_token.clone();
+            if let Some(g) = p.guest_mut(gid) {
+                g.meta = meta.clone();
+            }
+            Some((gid, player, pad_token))
         })
         .flatten();
         let Some((gid, player, pad_token)) = g else {
-            return Some(Admit::Refused("full"));
+            return Admit::Refused("full");
         };
         if player == STREAM_SEAT {
             // Nothing to make, nobody to pick: the stream's user is already signed in.
-            let ok = with_party(&key, |p| {
+            let ok = with_party(key, |p| {
                 p.guest_mut(gid).filter(|g| g.active()).map(|g| {
                     g.playing = true;
                     g.joined_at = now;
@@ -3875,7 +4435,7 @@ async fn ask<S: GuestSocket>(
             .flatten()
             .is_some();
             if !ok {
-                return Some(Admit::Refused("closed"));
+                return Admit::Refused("closed");
             }
             crate::rp_stream_api::guest_seat(&console, Some(gid));
             crate::log_at!(
@@ -3883,13 +4443,14 @@ async fn ask<S: GuestSocket>(
                 "together",
                 "join: guest {gid} has the stream's controller on {console}"
             );
-            return Some(Admit::New(console, gid));
+            return Admit::New(console, gid);
         }
-        let seat = seat_profile(&console, player);
+        // A stranger never sits in the host's own profile: the TV asks them instead.
+        let seat = seat_profile(&console, player).filter(|s| !(stranger && s.owner));
         let r = open_slot(&console, player, &pad_token, seat.as_ref()).await;
         let now = Instant::now();
         if r.is_ok() {
-            let ok = with_party(&key, |p| {
+            let ok = with_party(key, |p| {
                 // Still in: a kick while the pad was made leaves nobody to close it.
                 p.guest_mut(gid).filter(|g| g.active()).map(|g| {
                     g.slot_open = true;
@@ -3908,17 +4469,17 @@ async fn ask<S: GuestSocket>(
                         token: pad_token,
                     },
                 );
-                return Some(Admit::Refused("closed"));
+                return Admit::Refused("closed");
             }
             crate::log_at!(
                 Info,
                 "together",
                 "join: guest {gid} is Player {player} on {console}"
             );
-            return Some(Admit::New(console, gid));
+            return Admit::New(console, gid);
         }
         // Not made: this guest record goes (quietly: they never played).
-        with_party(&key, |p| p.guests.retain(|g| g.id != gid));
+        with_party(key, |p| p.guests.retain(|g| g.id != gid));
         match r {
             link::OpenResult::Busy => {
                 crate::log_at!(
@@ -3928,7 +4489,7 @@ async fn ask<S: GuestSocket>(
                 );
                 tried.push(player)
             }
-            r => return Some(Admit::Refused(r.why())),
+            r => return Admit::Refused(r.why()),
         }
     }
 }
@@ -4220,6 +4781,11 @@ async fn play<S: GuestSocket>(
     if let Some(f) = friend {
         joined["friend"] = serde_json::Value::String(f);
     }
+    // The room's lobby on the hub (Friends lookups, Play again over the internet), and what this
+    // engine's rooms can do.
+    joined["lobby"] = crate::join_net::lobby::lobby_id().into();
+    joined["proto"] = crate::join_room::PROTO.into();
+    joined["caps"] = crate::join_room::caps().into();
     let ended = socket.send(say(joined)).await.is_err();
     // Play Rooms chat and voice (join_comms.rs): after the joined message, on this socket.
     let mut comms = crate::join_comms::attach(&console, id, &name, Some(player), false);
@@ -4427,6 +4993,12 @@ async fn play<S: GuestSocket>(
     .unwrap_or_default();
     apply(&console, fx);
 }
+
+#[path = "join_room_api.rs"]
+pub(crate) mod room_api;
+pub use room_api::{close, kick, preview, room, rooms_proxy, seat, unblock};
+#[cfg(test)]
+use room_api::{CloseBody, KickBody};
 
 // ── Host API ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -4750,7 +5322,12 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
             "expires_in_s": expires_in_s,
         })
     });
-    serde_json::json!({
+    // The Play Room (its settings, lock, listing, blocks) and its chat and voice (counts and
+    // modes only, never lines): PS5Upload Play's My room shows and changes them.
+    let room = with_party(&host_key(&c), |p| room_api::room_view(p, now));
+    // The stream's PS5 user (the one in front), for actions only they may take on the TV.
+    let front = with_party(&host_key(&c), |p| p.front_user.clone()).flatten();
+    let mut v = serde_json::json!({
         "open": true,
         "playing": playing,
         "invite": invite,
@@ -4758,7 +5335,15 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
         "guests": guests,
         "settings": settings,
         "max_guests": MAX_GUESTS,
-    })
+        "room": room,
+        "session": {"user": front},
+    });
+    crate::join_comms::extend_state(&c, &mut v);
+    if let Some(r) = v.get_mut("room").and_then(|r| r.as_object_mut()) {
+        // The chat log stays with the host's own views.
+        r.remove("chat_log");
+    }
+    v
 }
 
 #[derive(serde::Deserialize)]
@@ -4932,24 +5517,15 @@ pub(crate) async fn open_party(addr: &str) -> Result<(), OpenErr> {
         let now = Instant::now();
         with_party(&key, |p| p.invite(false, now));
         crate::log_at!(Info, "together", "join: Play Together open on {addr}");
+        room_api::spawn_marker(key.clone(), addr.to_string());
         spawn_watch(key);
+        room_api::hand_modes(addr, &settings().room);
+        crate::join_net::lobby::changed();
     }
     Ok(())
 }
 
 /// `POST /api/join/close {addr}`: every guest out, invites void.
-pub async fn close(
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    Json(b): Json<AddrBody>,
-) -> Response {
-    if let Some(r) = guard(&peer, &headers) {
-        return r;
-    }
-    close_party(&b.addr);
-    Json(state_json(&b.addr)).into_response()
-}
-
 /// Closes Play Together on `addr`: every guest out, invites void. Whether one was open.
 pub(crate) fn close_party(addr: &str) -> bool {
     let key = host_key(addr);
@@ -4958,6 +5534,7 @@ pub(crate) fn close_party(addr: &str) -> bool {
     let was = fx.is_some();
     crate::join_comms::room_closed(addr);
     apply(addr, fx.unwrap_or_default());
+    crate::join_net::lobby::changed();
     was
 }
 
@@ -5106,36 +5683,6 @@ pub struct PlayerBody {
     #[serde(alias = "console", alias = "host")]
     addr: String,
     player: u8,
-}
-
-/// `POST /api/join/kick {addr, player}`: let a guest go (their token stops working).
-pub async fn kick(
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    Json(b): Json<PlayerBody>,
-) -> Response {
-    if let Some(r) = guard(&peer, &headers) {
-        return r;
-    }
-    let ok = kick_player(&b.addr, b.player);
-    Json(serde_json::json!({ "ok": ok })).into_response()
-}
-
-/// Lets Player `player` on `addr` go (their token stops working). Whether one was in.
-pub(crate) fn kick_player(addr: &str, player: u8) -> bool {
-    let now = Instant::now();
-    let fx = with_party(&host_key(addr), |p| {
-        let id = p
-            .guests
-            .iter()
-            .find(|g| g.active() && g.player == player)
-            .map(|g| g.id)?;
-        Some(p.leave(id, "kicked", now))
-    })
-    .flatten();
-    let ok = fx.is_some();
-    apply(addr, fx.unwrap_or_default());
-    ok
 }
 
 /// Answers ask `id` on `addr` only (PS5Upload Play acts on its own console's Play Together). The
@@ -5534,6 +6081,11 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/join/invite", post(invite))
         .route("/api/join/decide", post(decide))
         .route("/api/join/kick", post(kick))
+        .route("/api/join/room", post(room))
+        .route("/api/join/unblock", post(unblock))
+        .route("/api/join/seat", post(seat))
+        .route("/api/join/preview", get(preview))
+        .route("/api/join/rooms", get(rooms_proxy))
         .route("/api/join/playing", post(playing))
         .route("/api/join/settings", post(set_settings))
         .route("/api/join/profiles", get(profiles))
@@ -5808,6 +6360,9 @@ pub(crate) mod link {
         Reopened { slot: u8, seat: OpenResult },
         /// The helper no longer has the slot for us and cannot make it again.
         Lost { slot: u8 },
+        /// The helper read who sits in Player `slot`'s pad (13.0 helpers, `vpad.hb`): a user other
+        /// than the one it was made for (a pick), once per change.
+        Owner { slot: u8, user: Option<u32> },
     }
 
     pub(crate) type EventFn = Arc<dyn Fn(Event) + Send + Sync>;
@@ -5931,6 +6486,8 @@ pub(crate) mod link {
         last_call: Instant,
         last_input: Instant,
         out_last: Option<Output>,
+        /// The last owner reading the helper gave (`vpad.hb` `has_user`), to tell a change.
+        owner_seen: Option<bool>,
         out_due: Instant,
         out_fast_until: Instant,
     }
@@ -5956,6 +6513,7 @@ pub(crate) mod link {
                 last_call: now,
                 last_input: now,
                 out_last: None,
+                owner_seen: None,
                 out_due: now,
                 out_fast_until: now,
             }
@@ -6312,6 +6870,14 @@ pub(crate) mod link {
                                 // another call or the network): what the guest still holds
                                 // (a stick, R2) goes again, though it hasn't changed.
                                 s.io.force = true;
+                            }
+                            // Who sits in the pad (a 13.0 helper): a pick of another user than
+                            // the one it was made for is told once.
+                            if a.has_user.is_some() && a.has_user != s.owner_seen {
+                                s.owner_seen = a.has_user;
+                                if a.has_user == Some(true) {
+                                    (self.events)(Event::Owner { slot, user: a.user });
+                                }
                             }
                         }
                     }
@@ -7873,6 +8439,7 @@ mod tests {
             name: "B".into(),
             client: ClientInfo::default(),
             answer: atx,
+            meta: Meta::default(),
         });
         let (fx, keep) = p.tick(t, None);
         assert!(keep);
@@ -7880,9 +8447,9 @@ mod tests {
         assert_eq!(byes(fx), vec!["host_stopped"]);
         assert_eq!(arx.try_recv().unwrap(), Decision::HostStopped);
         assert_eq!(p.guests_in(), 1, "still counted: they may come back");
-        // the pads go after the grace
+        // the pads stay through the host's restart (nobody picks a user again)
         let (fx, _) = p.tick(t + HOST_GRACE, None);
-        assert_eq!(links(&fx), vec!["close2"]);
+        assert!(links(&fx).is_empty(), "{:?}", links(&fx));
         // the guest is not timed out while the host is away (only the whole party is)
         let (_, keep) = p.tick(t + RESUME_WINDOW - Duration::from_millis(1), None);
         assert!(keep && p.guests_in() == 1);
@@ -7892,8 +8459,8 @@ mod tests {
         assert_eq!(p.session, 2);
         assert!(p.host_gone.is_none());
         assert!(
-            !p.guest_mut(id).unwrap().slot_open,
-            "their pad is made again on resume"
+            p.guest_mut(id).unwrap().slot_open,
+            "their pad was kept: nothing to pick again on resume"
         );
         // and if the host never comes back: closed
         let mut q = party();
@@ -8153,6 +8720,7 @@ mod tests {
             name: "B".into(),
             client: ClientInfo::default(),
             answer: atx,
+            meta: Meta::default(),
         });
         p.invite(false, t);
         let fx = p.close(t);
@@ -9894,17 +10462,20 @@ mod tests {
         assert_eq!(s["invite"]["key"], key.as_str());
         let mut sam3 = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
         assert_eq!(next(&mut sam3).await["stage"], "waiting");
-        until("pad removed after the grace", || {
-            f.log().contains(&"close2".to_string())
-        })
-        .await;
+        // Their pad is kept through the host's restart (nobody picks a user again).
+        tokio::time::sleep(HOST_GRACE + Duration::from_millis(500)).await;
+        assert!(
+            !f.log().contains(&"close2".to_string()),
+            "the pad stays while the host restarts: {:?}",
+            f.log()
+        );
         set_live(console, 2);
         let j = next(&mut sam3).await;
         assert_eq!(j["stage"], "joined", "{j}");
         assert_eq!(
             f.log().iter().filter(|l| *l == "open2").count(),
-            2,
-            "the pad is made again"
+            1,
+            "the pad was kept, not made again"
         );
 
         // Kicked: told, the pad removed, the token void.
@@ -9914,9 +10485,10 @@ mod tests {
             kick(
                 ci,
                 h,
-                Json(PlayerBody {
+                Json(KickBody {
                     addr: console.into(),
                     player: 2,
+                    block: None,
                 }),
             )
             .await,
@@ -9937,8 +10509,10 @@ mod tests {
             close(
                 ci,
                 h,
-                Json(AddrBody {
+                Query(Default::default()),
+                Json(CloseBody {
                     addr: console.into(),
+                    confirm_friends: true,
                 }),
             )
             .await,
@@ -10056,8 +10630,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10157,8 +10733,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10211,8 +10789,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10543,8 +11123,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10648,8 +11230,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10663,6 +11247,11 @@ mod tests {
     }
 
     // Internet invites (join_net): the same session over a WebRTC data channel.
+    // Play Rooms (join_room.rs, join_room_api.rs, join_net/lobby.rs).
+    mod rooms {
+        include!("join_room_tests.rs");
+    }
+
     mod internet {
         include!("join_net/join_tests.rs");
     }
@@ -10726,22 +11315,27 @@ mod tests {
         drop(kim);
 
         // The host closes Play Together; Sam asks again with the pass and no name: it opens for
-        // the ask, the host is asked (by Sam's name), and lets them in.
+        // the ask and, people you've played with getting in without asking (Play Rooms' default,
+        // scenario audit), lets them straight in by Sam's name.
         close_party(console);
         assert_eq!(open_playing_count(), 0);
         let mut sam = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
-        assert_eq!(next(&mut sam).await["stage"], "asking");
-        let s = host_state(console).await;
-        assert_eq!(s["pending"][0]["name"], "Sam", "{s}");
-        allow_next(console, true).await;
         let j = next(&mut sam).await;
+        let s = host_state(console).await;
+        assert_eq!(s["guests"][0]["name"], "Sam", "{s}");
         assert_eq!(j["stage"], "joined", "{j}");
         assert!(j.get("friend").is_none(), "a pass is not given again: {j}");
         sam.send(TMsg::Text(r#"{"leave":1}"#.into())).await.unwrap();
         drop(sam);
 
-        // Closed again; this time the host says no: Play Together closes again.
+        // Closed again; the host now wants to be asked, and says no: Play Together closes again.
         close_party(console);
+        {
+            let mut g = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = g.clone().unwrap_or_default();
+            st.room.approval.friends = false;
+            *g = Some(st);
+        }
         tokio::time::sleep(crate::join_friends::AGAIN_GAP).await;
         let mut sam = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
         assert_eq!(next(&mut sam).await["stage"], "asking");

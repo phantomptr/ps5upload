@@ -206,6 +206,16 @@ fn inbox_on(v: Option<&Value>, ours: Option<&str>) -> Option<(String, String)> {
 
 /// A new pass for a guest the host just let in on `console`: the pass (for "joined"), or None
 /// (no randomness). A guest app that gives the same waiting room again replaces its old pass.
+/// Friend passes this engine keeps (Play again over the internet needs the room's lobby on the
+/// hub while any exist: join_net/lobby.rs).
+pub(crate) fn count() -> usize {
+    let t = unix_now();
+    with_store(|s| {
+        s.prune(t);
+        s.friends.len()
+    })
+}
+
 pub(crate) fn issue(console: &str, name: &str, inbox: Option<(String, String)>) -> Option<String> {
     let pass = crate::join_net::random_b64(32)?;
     let mut idb = [0u8; 4];
