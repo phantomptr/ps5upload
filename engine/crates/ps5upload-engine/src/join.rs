@@ -3457,6 +3457,10 @@ pub(crate) trait GuestSocket: Send + 'static {
     fn knock_only(&self) -> bool {
         false
     }
+    /// A knock on the lobby: the console of the room the lobby stood for when the knock came.
+    fn lobby_console(&self) -> Option<String> {
+        None
+    }
     /// The guest's client id in the room's lobby on the hub (limits and blocks key on it).
     fn hub_cid(&self) -> Option<String> {
         self.net()
@@ -3713,6 +3717,20 @@ enum Entry {
     Again(String),
     /// Many controllers: another player of a PS5 already in (its console and that player's id).
     Group(String, u64),
+    /// A knock from a room's card (the lobby on the hub, or Rooms / Friends on this network): the
+    /// console of the room the engine's one lobby stands for (`room_api::lobby_console`).
+    Lobby(String),
+}
+
+/// A knock from a room's card: on the hub's lobby, or a hello that says it came from Rooms or
+/// Friends. Not the mesh presence's Nearby join.
+fn lobby_knock<S: GuestSocket>(socket: &S, hello: &Hello) -> bool {
+    use crate::join_room::Via;
+    socket.knock_only()
+        || matches!(
+            hello.knock_field("via").as_deref().and_then(Via::from_word),
+            Some(Via::Rooms | Via::Friends)
+        )
 }
 
 static WRONG_CODES: Mutex<Option<HashMap<IpAddr, VecDeque<Instant>>>> = Mutex::new(None);
@@ -3914,6 +3932,17 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
                 None
             }
         },
+        // A knock from a room's card (the hub's lobby, or Rooms / Friends on this network): the
+        // lobby's room, whichever other console hosts on this engine too.
+        _ if hello.resume.is_none() && near && lobby_knock(&socket, &hello) => {
+            match socket.lobby_console().or_else(room_api::lobby_console) {
+                Some(c) => Some(Entry::Lobby(c)),
+                None => {
+                    again_refused = Some("closed");
+                    None
+                }
+            }
+        }
         // a "Playing nearby" join (the mesh presence): no credential, the host decides
         _ if hello.resume.is_none() && near => Some(Entry::Nearby),
         _ => None,
@@ -3963,7 +3992,9 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             Some(e) => {
                 let over_hub = socket.knock_only();
                 meta.via = Some(match &e {
-                    Entry::Nearby => knock_way(hello.knock_field("via").as_deref(), over_hub),
+                    Entry::Nearby | Entry::Lobby(_) => {
+                        knock_way(hello.knock_field("via").as_deref(), over_hub)
+                    }
                     Entry::Again(_) => crate::join_room::Via::Again,
                     Entry::Group(..) => crate::join_room::Via::Group,
                     Entry::Key(_) | Entry::Code(_) => crate::join_room::Via::Invite,
@@ -4557,6 +4588,13 @@ async fn ask<S: GuestSocket>(
                 .map(|p| (host_key(console), p.console.clone()))
                 .ok_or("not_playing");
         }
+        if let Entry::Lobby(console) = &entry {
+            // The lobby's room closed since the knock came.
+            return m
+                .get(&host_key(console))
+                .map(|p| (host_key(console), p.console.clone()))
+                .ok_or("closed");
+        }
         if m.is_empty() {
             return Err("closed");
         }
@@ -4576,7 +4614,7 @@ async fn ask<S: GuestSocket>(
             .find(|(_, p)| match &entry {
                 Entry::Key(k) => p.key_ok(k, now),
                 Entry::Code(c) => p.code_ok(c, now),
-                Entry::Nearby | Entry::Again(_) | Entry::Group(..) => false,
+                Entry::Nearby | Entry::Again(_) | Entry::Group(..) | Entry::Lobby(_) => false,
             })
             .map(|(k, p)| (k.clone(), p.console.clone()));
         if let Some(h) = hit {

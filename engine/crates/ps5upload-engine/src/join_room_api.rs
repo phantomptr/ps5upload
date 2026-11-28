@@ -56,16 +56,41 @@ pub async fn close(
     Json(v).into_response()
 }
 
-/// The lobby's listing as every open room shows it (join_net/lobby.rs).
+/// The lobby's listing as the room it lists shows it (join_net/lobby.rs). A room open on another
+/// console of this engine isn't on the hub (one lobby per engine): "not listed right now".
 pub(crate) fn set_listed(l: jr::Listed) {
     with_parties(|m| {
-        for p in m.values_mut() {
-            p.room.listed = l.clone();
+        let lobby = lobby_key(m);
+        for (k, p) in m.iter_mut() {
+            p.room.listed = if Some(k) == lobby.as_ref() || matches!(l, jr::Listed::Off) {
+                l.clone()
+            } else {
+                jr::Listed::Not("other_console".into())
+            };
         }
     });
 }
 
-/// What the lobby's card is made from (the first open room: one lobby per engine).
+/// The console whose room the engine's one lobby on the hub stands for: the room opened first
+/// (it stays the lobby's while it is open). Its card, its preview and every knock on the lobby
+/// are that room's, whatever other console also hosts on this engine (13.0.0 audit: the card was
+/// the map's first and a knock with two rooms open was refused).
+pub(crate) fn lobby_console() -> Option<String> {
+    with_parties(|m| lobby_key(m).and_then(|k| m.get(&k).map(|p| p.console.clone())))
+}
+
+fn lobby_key(m: &std::collections::HashMap<String, Party>) -> Option<String> {
+    m.iter()
+        .min_by(|a, b| {
+            a.1.room
+                .opened_at
+                .cmp(&b.1.room.opened_at)
+                .then(a.0.cmp(b.0))
+        })
+        .map(|(k, _)| k.clone())
+}
+
+/// What the lobby's card is made from (the lobby's room: one lobby per engine).
 pub(crate) struct CardIn {
     pub console: String,
     pub host: String,
@@ -78,7 +103,7 @@ pub(crate) struct CardIn {
 
 pub(crate) fn card_input() -> Option<CardIn> {
     let c = with_parties(|m| {
-        let p = m.values().next()?;
+        let p = m.get(&lobby_key(m)?)?;
         Some(CardIn {
             console: p.console.clone(),
             host: crate::join_names::effective(&p.host_name).to_string(),
@@ -96,9 +121,9 @@ pub(crate) fn card_input() -> Option<CardIn> {
     })
 }
 
-/// The preview of the first open room (the hub's relayed preview).
+/// The preview of the lobby's room (the hub's relayed preview).
 pub(crate) fn preview_any() -> Option<serde_json::Value> {
-    let key = with_parties(|m| m.keys().next().cloned())?;
+    let key = with_parties(|m| lobby_key(m))?;
     preview_of(&key)
 }
 

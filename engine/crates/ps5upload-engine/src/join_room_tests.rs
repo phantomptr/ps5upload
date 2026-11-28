@@ -614,6 +614,58 @@ async fn names_stay_unique_at_once_and_a_returning_device_keeps_its_name() {
     fresh_settings();
 }
 
+/// Two consoles host on one engine (13.0.0 audit): the engine's one lobby stands for the room
+/// opened first. Its card and preview are that room's, a knock from a card reaches that room (it
+/// was refused "key" with two rooms open), and the other room says it isn't listed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_lobby_is_one_rooms_with_two_consoles_hosting() {
+    let _turn = PARTY_TESTS.lock().await;
+    fresh_settings();
+    let (a, b) = ("10.77.0.48", "10.77.0.49");
+    for c in [a, b] {
+        set_helper(c, Arc::new(FakeHelper::default()));
+        set_live(c, 1);
+    }
+    let url = serve().await;
+    open_room(a).await;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    open_room(b).await;
+    let (code, v) = set_room(b, serde_json::json!({"visibility": "public"})).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(room_api::lobby_console().as_deref(), Some(a));
+    assert_eq!(room_api::card_input().map(|c| c.console).as_deref(), Some(a));
+    room_api::set_listed(jr::Listed::Listing);
+    let (sa, sb) = (host_state(a).await, host_state(b).await);
+    assert_eq!(sa["room"]["listed"]["state"], "listing", "{sa}");
+    assert_eq!(
+        (&sb["room"]["listed"]["state"], &sb["room"]["listed"]["why"]),
+        (&"not_listed".into(), &"other_console".into()),
+        "{sb}"
+    );
+    // A knock from the card: asks on the lobby's room only.
+    let mut jo = guest(
+        &url,
+        serde_json::json!({"hello": {"name": "Jo", "proto": 2, "device": "devJo-0000000048",
+            "knock": {"via": "rooms"}}}),
+    )
+    .await;
+    assert_eq!(next(&mut jo).await["stage"], "asking");
+    let (sa, sb) = (host_state(a).await, host_state(b).await);
+    assert_eq!(sa["pending"].as_array().map(Vec::len), Some(1), "{sa}");
+    assert_eq!(sb["pending"].as_array().map(Vec::len), Some(0), "{sb}");
+    allow_next(a, true).await;
+    assert_eq!(next_with(&mut jo, "stage").await["stage"], "joined");
+    // The first room closes: the lobby is the other one's now.
+    drop(jo);
+    test_close_party(a);
+    assert_eq!(room_api::lobby_console().as_deref(), Some(b));
+    test_close_party(b);
+    for c in [a, b] {
+        set_live(c, 0);
+    }
+    fresh_settings();
+}
+
 /// The preview: what the host chose to show, never an address, and one per address per 10 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_preview_shows_the_room_and_no_address() {

@@ -780,6 +780,8 @@ fn start_knock(
         hello: Some(json!({"hello": hello}).to_string()),
         left: Some(left_rx),
         via: jr::Via::from_word(&via).unwrap_or(jr::Via::Rooms),
+        // The room the card showed: the lobby's, whatever other console hosts here too.
+        console: crate::join::room_api::lobby_console(),
     };
     tokio::spawn(crate::join::guest_session(sock, ip));
 }
@@ -793,6 +795,8 @@ pub(crate) struct KnockSocket {
     hello: Option<String>,
     left: Option<oneshot::Receiver<()>>,
     via: jr::Via,
+    /// The console of the room the lobby stood for when the knock came.
+    console: Option<String>,
 }
 
 impl KnockSocket {
@@ -862,6 +866,10 @@ impl crate::join::GuestSocket for KnockSocket {
 
     fn knock_only(&self) -> bool {
         true
+    }
+
+    fn lobby_console(&self) -> Option<String> {
+        self.console.clone()
     }
 
     fn hub_cid(&self) -> Option<String> {
@@ -944,6 +952,7 @@ mod tests {
             hello: None,
             left: None,
             via: jr::Via::Rooms,
+            console: None,
         };
         assert_eq!(
             k.answer(&json!({"stage": "asking"})),
