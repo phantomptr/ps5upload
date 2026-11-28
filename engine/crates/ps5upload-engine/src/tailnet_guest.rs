@@ -410,6 +410,8 @@ mod tests {
             ("POST", "/api/join/decide"),
             ("POST", "/api/play/app/pair"),
             ("POST", "/api/play/app/unpair"),
+            ("POST", "/api/play/app/moved"),
+            ("POST", "/api/play/app/pair_confirm"),
             ("POST", "/api/join/ws"),
             ("DELETE", "/api/play/app"),
         ] {

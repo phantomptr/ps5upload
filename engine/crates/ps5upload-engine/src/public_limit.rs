@@ -119,8 +119,7 @@ impl Limit {
         c.tokens = (c.tokens + dt / r.every_s).min(r.burst);
         c.at = now;
         // Calm for a while since the last refusal: the run of refusals is over.
-        if c
-            .refused_at
+        if c.refused_at
             .is_some_and(|t| now.saturating_duration_since(t) >= CALM_FOR)
         {
             c.refused_since = None;
