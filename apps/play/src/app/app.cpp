@@ -1014,8 +1014,17 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
         const platform::Chords ch = platform::chords();
         if (ch.leave_now)
         {
-            log("app: leave chord");
-            leave_game();
+            // others from this PS5 still play: only this player's place goes (release)
+            if (seats_.playing() > 0 && !released_ && guest_->release())
+            {
+                log("app: leave chord: released (others from this PS5 play on)");
+                released_ = true;
+            }
+            else
+            {
+                log("app: leave chord");
+                leave_game();
+            }
         }
         if (ch.ps_sent)
             ps_note_until_ = now + 2500000;
@@ -1047,6 +1056,7 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
         voice::Allow off;
         platform::voice_allow(off);
     }
+    seats_frame(now);
     // The game gets "nothing pressed" while the Room menu or any other screen is up.
     platform::pad_to_menu(streaming_ && (ov_open_ || screen_ != Screen::playing));
     // The resume token kept on disk (back after the host restarts or the app closes).
@@ -1547,6 +1557,8 @@ void App::draw_joining(Canvas &c, const GuestView &v) noexcept
         c.text_wrap(Font::title, kLeft + 110, 392, 1150, msg, col::text);
         if (v.phase == GuestView::asking)
             c.text(Font::body, kLeft + 110, 470, tr(S::st_asking_sub), col::muted);
+        // Players on this PS5: one tile per signed-in controller
+        draw_seats_strip(c, 640);
         // the real round trip on the join's way, before a seat is taken (the design's 6.4)
         if (v.route_rtt_ms >= 0 && (v.phase == GuestView::asking || v.phase == GuestView::waiting))
         {

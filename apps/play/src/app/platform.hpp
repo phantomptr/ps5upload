@@ -37,6 +37,26 @@ void pad_to_menu(bool on) noexcept;
 // Create is push-to-talk and never reaches the game (the Play Rooms design's 7A.3).
 void ptt_on_create(bool on) noexcept;
 
+// ---- many controllers on one PS5 (integration design (d); src/ps5/padio.cpp) ----------------
+struct LocalPad
+{
+    int user = -1; // -1: none in this place
+    char name[40] = {};
+    bool connected = false;
+    bool cross = false; // ✕ held now
+    bool in_front = true;
+};
+constexpr int kLocalPads = 3; // the other signed-in users' controllers
+int local_pads(LocalPad *out) noexcept;
+// Sends that user's controller to a seat of its own (null: stop).
+void attach_pad(int user, Guest *g) noexcept;
+// That controller's leave chord completed (latched until read).
+bool pad_leave(int user) noexcept;
+// A seat's sinks (its rumble and light go to that user's controller; no picture or sound) and
+// its message buffer.
+GuestSinks &seat_sinks(int place, int user) noexcept;
+std::uint8_t *seat_buffer(int place, std::size_t *cap) noexcept;
+
 // ---- room voice (docs/ROOMS.md; src/ps5/voice.cpp) --------------------------------------------
 // What may be sent (the app fills in the room's parts each frame; the capture thread adds the
 // console's silent state, the app in front and Create held).

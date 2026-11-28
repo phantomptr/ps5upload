@@ -5,6 +5,7 @@
 #include "../core/friends.hpp"
 #include "../core/invite.hpp"
 #include "../core/rooms.hpp"
+#include "../core/seats.hpp"
 #include "../core/settings.hpp"
 #include "../core/textkb.hpp"
 #include "../core/voice.hpp"
@@ -95,6 +96,20 @@ class App
     // For screenshots: the keyboard, the confirm dialog, the welcome page, the host's tab.
     void fake_keyboard(const char *title, const char *text, bool secret) noexcept;
     void fake_confirm_close() noexcept;
+    // For screenshots: another controller on this PS5 (state 0 idle, 1 asking, 2 playing, 3 away).
+    void fake_seat(int user, const char *name, int state, int player) noexcept
+    {
+        seats_.pad(user, name, true, 1);
+        if (state >= 1)
+        {
+            seats_.hold(user, true, 1);
+            seats_.hold(user, true, 2000001);
+        }
+        if (state >= 2)
+            seats_.joined(user, player, "t");
+        if (state == 3)
+            seats_.pad(user, name, false, 2000002);
+    }
     void fake_page(int welcome_page, int host_tab) noexcept
     {
         welcome_page_ = welcome_page;
@@ -360,6 +375,18 @@ class App
     bool mic_on_ = false;
     voice::Ptt ptt_;
     bool password_asked_ = false;
+    // many controllers on one PS5 (seats_app.cpp)
+    seats::Seats seats_;
+    Guest *seat_[3] = {};
+    int seat_user_[3] = {-1, -1, -1};
+    int seat_phase_[3] = {-1, -1, -1};
+    alignas(Guest) unsigned char seat_mem_[3][sizeof(Guest)];
+    char seat_toast_[160] = {};
+    std::uint64_t seat_toast_until_ = 0;
+    bool released_ = false; // the first player left; the others from this PS5 play on
+    void seats_frame(std::uint64_t now) noexcept;
+    int draw_seats_strip(ui::Canvas &c, int y) noexcept;
+    void seat_toast(ui::S what, const char *name) noexcept;
     bool notice_sent_ = false;        // {"notice": n} went on this join
     std::uint32_t refused_seen_ = 0;  // the last comms refusal shown
     std::uint64_t ov_note_until_ = 0; // a refusal's words over the game

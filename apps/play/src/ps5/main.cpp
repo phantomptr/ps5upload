@@ -97,6 +97,39 @@ class Sinks final : public GuestSinks
 };
 Sinks sinks_instance;
 
+// A seat of its own for another controller on this PS5: no picture or sound, its rumble and light
+// to that user's controller.
+class SeatSinks final : public GuestSinks
+{
+  public:
+    int user = -1;
+    void begin(bool) override {}
+    void end() override
+    {
+        ps5::padio::extra_rumble(user, 0, 0);
+    }
+    void video_header(const std::uint8_t *, std::size_t) override {}
+    void video(const std::uint8_t *, std::size_t, std::uint64_t) override {}
+    void audio_header(const std::uint8_t *, std::size_t) override {}
+    void audio(std::uint16_t, const std::uint8_t *, std::size_t) override {}
+    void rumble(std::uint8_t l, std::uint8_t r) override
+    {
+        ps5::padio::extra_rumble(user, l, r);
+    }
+    void light(std::uint8_t r, std::uint8_t g, std::uint8_t b) override
+    {
+        ps5::padio::extra_light(user, r, g, b);
+    }
+    bool wants_keyframe() override
+    {
+        return false;
+    }
+    void stats(char *out, std::size_t cap) override
+    {
+        std::snprintf(out, cap, "\"frames\":0,\"decoder\":\"none\"");
+    }
+};
+
 std::uint8_t *load_asset(const char *path, std::size_t *len) noexcept
 {
     *len = 0;
@@ -170,6 +203,45 @@ void voice_duck(int level) noexcept
 std::uint32_t voice_speaking() noexcept
 {
     return ps5::voice_io::speaking();
+}
+int local_pads(LocalPad *out) noexcept
+{
+    ps5::padio::Extra e[ps5::padio::kExtra];
+    const int n = ps5::padio::extras(e);
+    for (int i = 0; i < kLocalPads && i < ps5::padio::kExtra; ++i)
+    {
+        out[i] = LocalPad{};
+        out[i].user = e[i].user;
+        std::snprintf(out[i].name, sizeof out[i].name, "%s", e[i].name);
+        out[i].connected = e[i].connected;
+        out[i].cross = e[i].cross;
+        out[i].in_front = e[i].in_front;
+    }
+    return n;
+}
+void attach_pad(int user, Guest *g) noexcept
+{
+    ps5::padio::attach(user, g);
+}
+bool pad_leave(int user) noexcept
+{
+    return ps5::padio::extra_leave(user);
+}
+GuestSinks &seat_sinks(int place, int user) noexcept
+{
+    static SeatSinks s[kLocalPads];
+    SeatSinks &x = s[place < 0 ? 0 : place % kLocalPads];
+    x.user = user;
+    return x;
+}
+std::uint8_t *seat_buffer(int place, std::size_t *cap) noexcept
+{
+    static std::uint8_t *b[kLocalPads] = {};
+    const int i = place < 0 ? 0 : place % kLocalPads;
+    if (!b[i])
+        b[i] = ps5::big_alloc(256 * 1024);
+    *cap = b[i] ? 256 * 1024 : 0;
+    return b[i];
 }
 bool video_showing() noexcept
 {

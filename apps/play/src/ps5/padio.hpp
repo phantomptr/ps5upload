@@ -20,6 +20,23 @@ void rumble(std::uint8_t left, std::uint8_t right) noexcept;
 void light(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept;
 void light_reset() noexcept;
 unsigned sent() noexcept;
+
+// Many controllers on one PS5 (integration design (d)): the other signed-in users' controllers.
+// Each is read on the same thread; one with a connection of its own (attach) sends to it.
+constexpr int kExtra = 3;
+struct Extra
+{
+    int user = -1;           // -1: none in this place
+    char name[40] = {};
+    bool connected = false;
+    bool cross = false;      // ✕ held now (hold 1 s to come along)
+    bool in_front = true;
+};
+int extras(Extra *out) noexcept; // kExtra places
+void attach(int user, Guest *g) noexcept; // null: stop sending that controller
+bool extra_leave(int user) noexcept;      // its leave chord completed (latched until read)
+void extra_rumble(int user, std::uint8_t left, std::uint8_t right) noexcept;
+void extra_light(int user, std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept;
 // Rumble changes applied to the controller (scePadSetVibration calls), and the last one's result.
 struct Rumbles
 {

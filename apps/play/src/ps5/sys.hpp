@@ -46,6 +46,7 @@ extern "C"
     int scePadResetLightBar(std::int32_t handle);
     int scePadSetMotionSensorState(std::int32_t handle, bool enable);
     int scePadGetControllerInformation(std::int32_t handle, void *info);
+    int scePadClose(std::int32_t handle);
     // audio
     int sceAudioOutInit();
     int sceAudioOutOpen(std::int32_t user, std::int32_t type, std::int32_t index, std::uint32_t len,

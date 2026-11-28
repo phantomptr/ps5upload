@@ -54,6 +54,7 @@ bool Guest::start(const char *addr, std::uint16_t port, const char *code, const 
     pthread_mutex_unlock(&lock_);
     stop_ = leave_ = nudge_ = false;
     joined_ = raw_pad_ = false;
+    released_ = false;
     have_offset_ = false;
     switch_to_ = -1;
     last_skipped_ = -1;
@@ -108,7 +109,7 @@ void Guest::set_phase(GuestView::Phase p, const char *why) noexcept
 
 bool Guest::send_pad(const proto::PadState &s) noexcept
 {
-    if (!joined_.load())
+    if (!joined_.load() || released_.load())
         return false;
     std::uint8_t f[proto::kPadFrameMax];
     const std::size_t n = proto::pad_frame(f, sizeof f, pad_seq_.fetch_add(1), s, raw_pad_.load());
@@ -383,6 +384,14 @@ bool Guest::send_notice(int version) noexcept
     char m[48];
     std::snprintf(m, sizeof m, "{\"notice\":%d}", version);
     return joined_.load() && ws_.send_text(m);
+}
+
+bool Guest::release() noexcept
+{
+    if (!joined_.load() || !ws_.send_text("{\"release\":1}"))
+        return false;
+    released_ = true;
+    return true;
 }
 
 bool Guest::send_flag(int sid) noexcept

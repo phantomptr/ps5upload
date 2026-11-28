@@ -403,6 +403,11 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
         char line[160] = {};
         if (v.chat_unread && !ov_open_)
             std::snprintf(line, sizeof line, tr(S::chat_new), v.chat_unread);
+        if (seat_toast_until_ && net::now_us() < seat_toast_until_)
+        {
+            const std::size_t o = std::strlen(line);
+            std::snprintf(line + o, sizeof line - o, "%s%s", o ? " · " : "", seat_toast_);
+        }
         if (mic_on_)
         {
             const platform::MicState ms = fake_.on ? platform::MicState{} : platform::mic_state();

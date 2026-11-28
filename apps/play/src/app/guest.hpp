@@ -175,6 +175,9 @@ class Guest
     bool send_password(const char *pw) noexcept;
     // {"notice": n} once the responsibility notice is accepted; {"flag": sid}: "Tell the host".
     bool send_notice(int version) noexcept;
+    // {"release": 1}: this player's place is freed, the picture and sound stay for the others
+    // from this PS5 (integration design (d), item 3). The pad stops going.
+    bool release() noexcept;
     bool send_flag(int sid) noexcept;
     // A copy of the chat (the guest thread adds to it).
     void chat_copy(chat::Log &out) noexcept;
@@ -247,6 +250,7 @@ class Guest
     char challenge_[48] = {};
     char room_pk_[100] = {};
     bool host_restarting_ = false; // the engine said "waiting": its session restarts (a longer window)
+    std::atomic<bool> released_{false};
     void handle_room_text(const char *t, std::size_t n) noexcept;
     bool seal_and_send(const char *pw) noexcept;
 };

@@ -103,6 +103,22 @@ MicState mic_state() noexcept
 void voice_volume(int, int, bool) noexcept {}
 void voice_duck(int) noexcept {}
 std::uint32_t voice_speaking() noexcept { return 0; }
+int local_pads(LocalPad *out) noexcept
+{
+    for (int i = 0; i < kLocalPads; ++i)
+        out[i] = LocalPad{};
+    return 0;
+}
+void attach_pad(int, Guest *) noexcept {}
+bool pad_leave(int) noexcept { return false; }
+GuestSinks &seat_sinks(int, int) noexcept { return null_sinks; }
+std::uint8_t *seat_buffer(int, std::size_t *cap) noexcept
+{
+    static std::uint8_t b[3][64 * 1024];
+    static int at = 0;
+    *cap = sizeof b[0];
+    return b[at++ % 3];
+}
 bool video_showing() noexcept { return false; }
 void present(const std::uint32_t *ui) noexcept { presented = const_cast<std::uint32_t *>(ui); }
 void overlay(const std::uint32_t *, int, int) noexcept {}
@@ -376,6 +392,11 @@ int main(int argc, char **argv)
     r.guest.route_rtt_ms = 31;
     r.guest.tier = 3;
     shot("asking-ping", App::Screen::joining, r);
+    // many controllers on this PS5: one asking, one playing, one still to hold ✕
+    app.fake_seat(1001, "Mia", 2, 3);
+    app.fake_seat(1002, "Dad", 0, 0);
+    app.fake_seat(1003, "Kai", 3, 4);
+    shot("asking-seats", App::Screen::joining, r);
     // in game: chat lines over the picture, the Room menu
     r.guest = GuestView{};
     r.guest.phase = GuestView::joined;
