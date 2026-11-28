@@ -5318,6 +5318,18 @@ pub(crate) mod link {
     #[cfg(test)]
     pub(crate) static TEST_PORTS: Mutex<Option<HashMap<String, Arc<dyn Port>>>> = Mutex::new(None);
 
+    /// A stand-in helper for a console that is not there: a recorded session played as a live
+    /// host (rp_dev_replay.rs, a test engine only). Set once, at start.
+    static DEV_PORTS: Mutex<Option<HashMap<String, Arc<dyn Port>>>> = Mutex::new(None);
+
+    pub(crate) fn set_dev_port(console: &str, port: Arc<dyn Port>) {
+        DEV_PORTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .insert(host_key(console), port);
+    }
+
     /// The helper port for `console` (a test may put a fake one in).
     pub(crate) fn port_for(console: &str) -> Arc<dyn Port> {
         #[cfg(test)]
@@ -5327,7 +5339,12 @@ pub(crate) mod link {
                 return p.clone();
             }
         }
-        let _ = console;
+        {
+            let g = DEV_PORTS.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = g.as_ref().and_then(|m| m.get(&host_key(console))) {
+                return p.clone();
+            }
+        }
         Arc::new(HelperPort)
     }
 

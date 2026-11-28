@@ -2511,6 +2511,96 @@ pub async fn player() -> impl IntoResponse {
     Html(include_str!("rp_player.html"))
 }
 
+/// A recorded session played as the running one (rp_dev_replay.rs: a test engine started with
+/// `PS5UPLOAD_DEV_REPLAY_HOST`, never the app): its pictures, sound and rumble go through the
+/// same [`Sink`] the console's stream feeds, so Play Together guests, watchers and the page get
+/// exactly what a live session gives them.
+pub(crate) struct DevSession {
+    sink: Sink,
+}
+
+impl DevSession {
+    /// Becomes the running session for `host`, unless one runs already. `picture_off`: as a host
+    /// with the picture off on their device (a guest may get the stream's controller).
+    pub(crate) fn start(host: &str, hevc: bool, hdr: bool, picture_off: bool) -> Option<Self> {
+        let mut g = LIVE.lock().ok()?;
+        if g.as_ref().is_some_and(|l| !l.stop.load(Ordering::Relaxed)) {
+            return None;
+        }
+        let live = Arc::new(Live::new(host.into(), hevc, DEFAULT_KEEP_ALIVE));
+        live.hdr.store(hdr, Ordering::Relaxed);
+        live.page_off.store(picture_off, Ordering::Relaxed);
+        live.playing.store(true, Ordering::Relaxed);
+        *g = Some(live.clone());
+        Some(DevSession {
+            sink: Sink {
+                live,
+                t0: Instant::now(),
+            },
+        })
+    }
+
+    /// This session's id.
+    pub(crate) fn session(&self) -> u64 {
+        self.sink.live.session
+    }
+
+    /// The codec header.
+    pub(crate) fn video_header(&mut self, header: &[u8]) {
+        self.sink.video(header, true);
+    }
+
+    /// An access unit, and whether the recording called it a keyframe.
+    pub(crate) fn picture(&mut self, au: &[u8], key: bool) {
+        self.sink.video_known(au, false, Some(key));
+    }
+
+    /// The audio header (`header`) or one frame as the session carries it (`[u16 BE index][Opus]`).
+    pub(crate) fn audio(&mut self, frame: &[u8], header: bool) {
+        self.sink.audio(frame, header);
+    }
+
+    /// The game's rumble on the stream's controller.
+    pub(crate) fn rumble(&mut self, left: u8, right: u8) {
+        self.sink.rumble(left, right);
+    }
+
+    /// Someone (a page, a watcher, a player, instant replay) waits for a keyframe.
+    pub(crate) fn wants_keyframe(&mut self) -> bool {
+        self.sink.wants_keyframe()
+    }
+
+    /// The next controller state for the console (the page's, phones', a guest's on the stream's
+    /// controller), merged.
+    pub(crate) fn input(&mut self) -> Option<ControllerState> {
+        self.sink.input()
+    }
+
+    /// Stopped (`POST /api/ps5/rp/stop`), or another session took its place.
+    pub(crate) fn ended(&self) -> bool {
+        self.sink.live.stop.load(Ordering::Relaxed)
+            || !live().is_some_and(|l| Arc::ptr_eq(&l, &self.sink.live))
+    }
+}
+
+/// Ends the running session as `POST /api/ps5/rp/stop` would (tests).
+#[cfg(test)]
+pub(crate) fn stop_running() {
+    if let Some(l) = live() {
+        l.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for DevSession {
+    fn drop(&mut self) {
+        if let Ok(mut g) = LIVE.lock() {
+            if g.as_ref().is_some_and(|l| Arc::ptr_eq(l, &self.sink.live)) {
+                *g = None;
+            }
+        }
+    }
+}
+
 /// A session in [`LIVE`] for other modules' tests (hold [`LIVE_TEST_LOCK`]).
 #[cfg(test)]
 pub(crate) mod test_live {

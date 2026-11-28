@@ -117,6 +117,7 @@ mod remote;
 mod remote_download;
 mod remote_pkg;
 mod remove_backport;
+mod rp_dev_replay;
 mod rp_diag;
 mod rp_golive;
 mod rp_keyboard;
@@ -13612,6 +13613,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     pkg_install::spawn_stale_upload_sweep(sweep_installs);
     // What the other devices see of this engine, with no window open to say so.
     mesh_api::spawn_presence(state_jobs_for_presence);
+    // A test engine only: a recorded session played as a live Play Together host
+    // (PS5UPLOAD_DEV_REPLAY_HOST, rp_dev_replay.rs). Nothing without the variable.
+    rp_dev_replay::start_from_env();
     // Server copies an earlier run left behind (an extract that failed, then the app closed)
     // are removed here: nothing else knows them after a restart.
     tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
