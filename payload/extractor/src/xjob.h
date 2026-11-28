@@ -73,6 +73,7 @@ typedef struct xjob {
     int durable;       /* every file is flushed and its folder noted for xs_barrier */
     int count_written; /* xs_write counts bytes_done itself (the free mode's progress) */
     int freed_any;     /* a part is gone: free space may lag behind it, so only the writes judge room */
+    int deleting;      /* a part may be gone: said in the status before the first delete */
     unsigned parts, parts_freed, parts_left, free_not_removed;
     uint64_t bytes_freed;
     /* The plan: the archive's size (every part), what it unpacks to (0: not known), the most room

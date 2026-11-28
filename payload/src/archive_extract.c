@@ -172,7 +172,7 @@ typedef struct {
     uint64_t files, dirs, bytes, skipped, unsafe, links, created;
     /* Freeing the archive as it is unpacked (payload/extractor/src/xfree.h). */
     char free_mode[8], left_first[256], free_why[400];
-    uint64_t checking, parts, parts_freed, bytes_freed, parts_left, free_not_removed;
+    uint64_t checking, deleting, parts, parts_freed, bytes_freed, parts_left, free_not_removed;
     uint64_t archive_bytes, unpacked, free_peak, same_drive, plan_known;
 } xstatus_t;
 
@@ -201,6 +201,7 @@ static int read_status(const char *id, xstatus_t *s) {
     (void)fsj_json_str(buf, "left_first", s->left_first, sizeof s->left_first);
     (void)fsj_json_str(buf, "free_why", s->free_why, sizeof s->free_why);
     (void)fsj_json_u64(buf, "checking", &s->checking);
+    (void)fsj_json_u64(buf, "deleting", &s->deleting);
     (void)fsj_json_u64(buf, "parts", &s->parts);
     (void)fsj_json_u64(buf, "parts_freed", &s->parts_freed);
     (void)fsj_json_u64(buf, "bytes_freed", &s->bytes_freed);
@@ -274,9 +275,12 @@ void archive_extract_sweep(void) {
             (void)fsj_json_u64(sbuf, "pid", &spid);
             (void)fsj_json_str(sbuf, "state", state, sizeof state);
         }
-        uint64_t sfreed = 0;
-        if (read_small(EXTRACT_STATUS, sbuf, sizeof sbuf) > 0) (void)fsj_json_u64(sbuf, "parts_freed", &sfreed);
-        if (freed || sfreed) {
+        uint64_t sfreed = 0, sdeleting = 0;
+        if (read_small(EXTRACT_STATUS, sbuf, sizeof sbuf) > 0) {
+            (void)fsj_json_u64(sbuf, "parts_freed", &sfreed);
+            (void)fsj_json_u64(sbuf, "deleting", &sdeleting);
+        }
+        if (freed || sfreed || sdeleting) {
             /* Part of the archive is gone: the files written are the only copy of what it held. */
             fprintf(stderr, "extract: a helper died mid-extraction after parts of the archive were deleted; keeping %s\n",
                     dest);
@@ -345,10 +349,11 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
         if (read_status(id, &cur)) {
             have = 1;
             /* What a helper that dies now leaves behind, for the next start's sweep. */
-            if (cur.pid != rec_pid || (int)cur.created != rec_created || (int)(cur.parts_freed > 0) != rec_freed) {
+            if (cur.pid != rec_pid || (int)cur.created != rec_created ||
+                (int)(cur.parts_freed > 0 || cur.deleting) != rec_freed) {
                 rec_pid = cur.pid;
                 rec_created = (int)cur.created;
-                rec_freed = cur.parts_freed > 0;
+                rec_freed = cur.parts_freed > 0 || cur.deleting;
                 write_record(rec_pid, rec_created, rec_freed, dest);
             }
             *s = cur;
@@ -645,7 +650,7 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         }
         ava1_op_message(c, "%s", "");
         status = AVA1_STATUS_OK;
-    } else if (s.parts_freed) {
+    } else if (s.parts_freed || s.deleting) {
         /* Part of the archive is gone, so what was written is the only copy of what it held: the
          * folder stays, whatever stopped it, and the message says so first (the cause after it). */
         char cause[400];

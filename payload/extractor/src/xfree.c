@@ -142,11 +142,20 @@ static void count_freed(xjob_t *j, const xfvols_t *v, unsigned k) {
     j->freed_any = 1;
 }
 
+/* Said in the status before the first delete: should this process die between a delete and its next
+ * status, the helper still knows the folder holds the only copy of what is gone. */
+static void about_to_delete(xjob_t *j) {
+    if (j->deleting) return;
+    j->deleting = 1;
+    if (j->progress) j->progress(j, 1);
+}
+
 int xf_release(xjob_t *j, xfvols_t *v, unsigned upto) {
     if (upto > v->count) upto = v->count;
     if (upto <= v->freed || v->stuck) return 0;
     /* Everything unpacked from these parts is on the drive before they go. */
     if (xs_barrier(j) != 0) return -1;
+    about_to_delete(j);
     while (v->freed < upto) {
         unsigned k = v->freed;
         if (v->drop) v->drop(v->drop_ctx, k);
@@ -167,6 +176,7 @@ int xf_release(xjob_t *j, xfvols_t *v, unsigned upto) {
 
 int xf_finish(xjob_t *j, xfvols_t *v) {
     if (xs_barrier(j) != 0) return -1;
+    if (v->freed < v->count) about_to_delete(j);
     for (unsigned k = v->freed; k < v->count; k++) {
         if (v->drop) v->drop(v->drop_ctx, k);
         if (unlink(v->path[k]) != 0 && errno != ENOENT) {

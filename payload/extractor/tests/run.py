@@ -886,6 +886,7 @@ def free_case(root, name, archive_args, prefix, groups_fn=None):
     s = run(root, parts[0], dest, free=True, env={"XTEST_FREE_TRACE": tr})
     check(name, s["state"] == "done" and tree(dest) == tree(src), s)
     check(name, s["free_mode"] == "parts" and s["parts"] == len(parts) and s["parts_freed"] == len(parts), s)
+    check(name, s["deleting"] and not s["checking"], s)
     check(name, s["bytes_freed"] == sum(len(b) for b in keep.values()), s)
     check(name, not any(os.path.exists(p) for p in parts) and not os.listdir(vol), os.listdir(vol))
     check(name, s["plan_known"] and s["same_drive"] and s["free_peak"] < s["unpacked"], s)
@@ -1024,7 +1025,7 @@ def test_free_damage_found_before_anything_goes(root):
     with open(last, "wb") as f:
         f.write(bad)
     s = run(root, parts[0], os.path.join(root, "o"), free=True)
-    check("damage", s["state"] == "failed" and s["parts_freed"] == 0, s)
+    check("damage", s["state"] == "failed" and s["parts_freed"] == 0 and not s["deleting"], s)
     check("damage", all(os.path.exists(p) for p in parts) and not os.path.exists(os.path.join(root, "o")), "touched")
     check("damage", not any(n.endswith(".partial-deleted") for n in os.listdir(os.path.dirname(parts[0]))), "renamed")
     # Whole again (the damaged part fetched again): the same job simply runs.

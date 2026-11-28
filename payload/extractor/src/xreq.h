@@ -7,7 +7,7 @@
  *   {"id","pid","state":"running|done|failed","files_done","files_total","bytes_done","bytes_total",
  *    "files","dirs","bytes","skipped","unsafe","links","created_dest","current","message"
  *    [,"top":"a/b/c","top_dirs":"a","top_more":false when the request listed]
- *    [,"free_mode":"parts|end","checking","parts","parts_freed","bytes_freed","parts_left","free_not_removed",
+ *    [,"free_mode":"parts|end","checking","deleting","parts","parts_freed","bytes_freed","parts_left","free_not_removed",
  *      "archive_bytes","unpacked","free_peak","same_drive","plan_known","left_first" when it asked to free]}
  * `message` is empty or the cause token of a failure (fs_extract_...). The helper's side is
  * payload/src/archive_extract.c. */

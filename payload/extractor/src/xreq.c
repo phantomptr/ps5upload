@@ -231,10 +231,11 @@ int xstatus_format(char *out, size_t cap, const xjob_t *j, const char *state, lo
     if (j->free_req) {
         if (at + 400 + XJ_NAME * 6 >= cap) return -1;
         at += (size_t)snprintf(out + at, cap - at,
-                               ",\"free_mode\":\"%s\",\"checking\":%s,\"parts\":%u,\"parts_freed\":%u,\"bytes_freed\":%llu,"
+                               ",\"free_mode\":\"%s\",\"checking\":%s,\"deleting\":%s,\"parts\":%u,\"parts_freed\":%u,\"bytes_freed\":%llu,"
                                "\"parts_left\":%u,\"free_not_removed\":%u,\"archive_bytes\":%llu,\"unpacked\":%llu,"
                                "\"free_peak\":%llu,\"same_drive\":%s,\"plan_known\":%s,\"left_first\":",
-                               j->free_mode, j->checking ? "true" : "false", j->parts, j->parts_freed,
+                               j->free_mode, j->checking ? "true" : "false", j->deleting ? "true" : "false", j->parts,
+                               j->parts_freed,
                                (unsigned long long)j->bytes_freed, j->parts_left, j->free_not_removed,
                                (unsigned long long)j->archive_bytes, (unsigned long long)j->unpacked,
                                (unsigned long long)j->free_peak, j->same_drive ? "true" : "false",
