@@ -32,7 +32,11 @@ import { pageCss } from "./vite.pageCss";
 // 840 (was 829): "Play on my PS5" (join/ps5Handoff.ts, Ps5Page.tsx): 4 KiB of code, its strings in 21 languages 15.
 // 842 (837.6 measured): the connection's tier in a word beside its way (join/routeTier.ts, in every
 // language), about 4 KiB on top of "Play on my PS5".
-const RAW_BUDGET = 842 * 1024;
+// 960 (13.0.0): Play Rooms on the page: a room from the website's Rooms list (knock, sealed
+// password), the room strip, chat, voice (capture, Opus encode, jitter buffers, per-person volume),
+// the responsibility notice and the room's refusals, in 21 languages. Measured 891.9 KiB with the
+// room strings in English only; the translations add about 50 KiB.
+const RAW_BUDGET = 960 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */

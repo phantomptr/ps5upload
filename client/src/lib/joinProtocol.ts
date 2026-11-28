@@ -7,6 +7,7 @@
 
 import type { PadState } from "./remotePlayStream";
 import { lanPage } from "../join/lanHint";
+import { parseRoomFragment } from "../join/roomFragment";
 
 /** Why the host's engine did not let a guest in. Anything else reads as "refused". */
 export type RefuseWhy =
@@ -620,6 +621,17 @@ export function parseJoinLink(text: string): JoinLink | null {
       net,
       lan,
       ts,
+    };
+  }
+  // A Play Room handed over from the website's Rooms page: knock on its lobby (no invite).
+  const room = parseRoomFragment(u.hash);
+  if (room) {
+    return {
+      origin: `https://${room.hub}`,
+      invite: null,
+      name: room.host,
+      code: null,
+      room: { lobby: room.lobby, hub: room.hub, via: room.via, pk: null, password: null, tag: room.tag },
     };
   }
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));

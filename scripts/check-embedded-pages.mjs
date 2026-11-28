@@ -14,6 +14,8 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const pages = [
   ["build:join", ["engine/crates/ps5upload-engine/src/join_page.html", "site/join/index.html"]],
   ["build:pad", ["engine/crates/ps5upload-engine/src/pad_page.html", "site/pad/index.html"]],
+  // The website's Rooms page (Play Rooms, 13.0.0): the site only, no engine copy.
+  ["build:rooms", ["site/rooms/index.html"]],
 ];
 
 const stale = [];

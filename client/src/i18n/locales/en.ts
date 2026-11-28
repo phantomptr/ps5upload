@@ -10615,6 +10615,12 @@ tv_stay: "Stay",
 "rooms_friend_open": "{name}'s room is open",
 "rooms_nearby": "Nearby",
 "rooms_nearby_game": "{name}'s game",
+"rooms_page_intro": "Open Play Rooms you can ask to join. The host decides who plays.",
+"rooms_first_run": "Rooms are open games you can ask to join. The host decides who plays.",
+"rooms_got_it": "Got it",
+"rooms_on_ps5": "On a PS5? Play on the TV with PS5Upload Play: install it from ProsperoStore or from PS5Upload, open it and pick Join. The same rooms are there.",
+"rooms_join_browser": "Join in this browser",
+"rooms_open_app": "Open in PS5Upload",
 };
 
 export default en;

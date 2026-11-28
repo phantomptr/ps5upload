@@ -75,6 +75,7 @@ export function RoomsBrowserCore({
   onCode,
   onCreate,
   ensureNotice,
+  knockForm = true,
   testId = "rooms",
 }: {
   source: RoomsSource | null;
@@ -90,6 +91,9 @@ export function RoomsBrowserCore({
   onCreate?: () => void;
   /** The responsibility notice before anything from Rooms on this device. */
   ensureNotice: () => Promise<boolean>;
+  /** Ask for the name and password here (the apps); false: the caller does (the website hands
+   *  over to its join page, which asks them as for an invite). */
+  knockForm?: boolean;
   testId?: string;
 }) {
   const tr = useTr();
@@ -139,7 +143,8 @@ export function RoomsBrowserCore({
   const ask = async (c: RoomCard) => {
     if (!(await ensureNotice())) return;
     setDetails(null);
-    setKnock(c);
+    if (knockForm) setKnock(c);
+    else onJoin(c, { name: "", password: null });
   };
 
   const muted = dark ? "text-white/60" : "text-[var(--color-muted)]";

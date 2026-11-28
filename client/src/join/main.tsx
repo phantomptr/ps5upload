@@ -16,6 +16,7 @@ import { fpOf, parsePs5Fragment } from "../lib/joinProtocol";
 import { freshTarget, saveInvite, saveTarget } from "./ps5Handoff";
 import { Ps5Page } from "./Ps5Page";
 import { installArrowNav } from "../lib/tvNav";
+import { parseRoomFragment } from "./roomFragment";
 
 // A TV's remote (#926): the arrows move from button to button, OK presses one.
 installArrowNav();
@@ -34,6 +35,8 @@ if (play) saveInvite(play);
 // connection stays on it (ICE), and a link from a newer host names its page there (`lan`) for
 // when the hub can't be reached ("Open on this Wi-Fi").
 const net = handoff ? null : parseInternetFragment(location.hash);
+// A Play Room from the website's Rooms page (or a friend's room): the same join, knocking first.
+const roomFrag = handoff || net ? null : parseRoomFragment(location.hash);
 // An invite opened on this phone: offered to the PS5 scanned on it (for 30 minutes).
 if (net || hash.get("i")) saveInvite(location.href);
 // The hub's socket first, before React draws anything: in the room by the time the friend has
@@ -42,6 +45,8 @@ if (net) prejoinHub(net);
 const root = createRoot(document.getElementById("root")!);
 if (handoff) {
   root.render(<Ps5Page target={ps5 ?? freshTarget()} />);
+} else if (roomFrag) {
+  root.render(<JoinFlow url={hubSocketUrl(roomFrag.hub)} invite={null} host={roomFrag.host} room={roomFrag} />);
 } else if (net) {
   const transport = rtcTransport(net, { video: true, log: (m) => console.info(`[join] ${m}`) });
   const lan = lanPage(location.hash, "join");
