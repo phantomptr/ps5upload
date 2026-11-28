@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlugins";
+import { oneLangPerSelector, pageModuleSwap, pageStrings, pruneCss } from "./vite.pagePlugins";
 import { pageCss } from "./vite.pageCss";
 
 // 768 KiB in 12.1.0, once the page stopped importing the host's whole Remote Play store for rpInput
@@ -37,7 +37,10 @@ import { pageCss } from "./vite.pageCss";
 // per-person volume), the responsibility notice and the room's refusals, about 50 KiB of code and
 // 100 KiB of their words in 21 languages. The words the page never shows (region names, the Rooms
 // list's misses, name and knock hints) live in their own modules so they stay out of it.
-const RAW_BUDGET = 1000 * 1024;
+// 900 (886.7 measured, was 994.5): the strings go packed (the keys once, not once per language:
+// vite.pagePlugins.ts packStrings), words of code the bundle dropped stay out (stillNamed), and
+// the shared stylesheet's rules for classes the page never names go (pruneCss).
+const RAW_BUDGET = 900 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */
@@ -87,6 +90,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     oneLangPerSelector(),
+    pruneCss(),
     singleFile(),
   ],
   build: {

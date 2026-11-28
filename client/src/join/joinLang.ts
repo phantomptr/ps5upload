@@ -3,14 +3,15 @@
 // own components use, in every language, picked at build time from src/i18n/locales. The
 // friend's browser language chooses (or the app's saved choice, on a device that has it).
 
-import strings from "virtual:join-strings";
+import packed from "virtual:join-strings";
+import { unpack } from "./unpackStrings";
 
 type Vars = Record<string, string | number>;
 
 const RTL = new Set(["ar", "fa"]);
 
 function pickLang(): string {
-  const have = Object.keys(strings);
+  const have = Object.keys(packed.l);
   try {
     const saved = localStorage.getItem("ps5upload.lang");
     if (saved && have.includes(saved)) return saved;
@@ -37,8 +38,8 @@ if (typeof document !== "undefined") {
   document.documentElement.lang = lang;
   document.documentElement.dir = RTL.has(lang) ? "rtl" : "ltr";
 }
-const dict = strings[lang] ?? {};
-const en = strings.en ?? {};
+const dict = unpack(packed, lang);
+const en = lang === "en" ? dict : unpack(packed, "en");
 
 const fill = (s: string, vars?: Vars) => (vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s);
 
