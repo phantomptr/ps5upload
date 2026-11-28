@@ -1126,6 +1126,32 @@ int webui_proc_game_running(const char *json, size_t n, const char *tid, int oth
     return each_process(json, n, game_find_fn, &g);
 }
 
+struct app_id_find {
+    const char *tid;
+    uint64_t id;
+};
+
+static int app_id_find_fn(const char *el, size_t len, void *ctx) {
+    struct app_id_find *f = (struct app_id_find *)ctx;
+    char kind[16], tid[32];
+    uint64_t id;
+    if (webui_json_str(el, len, "kind", kind, sizeof kind) != 1 || strcmp(kind, "app") != 0) return 0;
+    if (webui_json_str(el, len, "title_id", tid, sizeof tid) != 1 || strcmp(tid, f->tid) != 0) return 0;
+    if (webui_json_u64(el, len, "app_id", &id) != 1 || id == 0 || id > 0xffffffffu) return 0;
+    f->id = id;
+    return 1;
+}
+
+int webui_proc_title_app_id(const char *json, size_t n, const char *tid, uint64_t *app_id) {
+    struct app_id_find f;
+    int r;
+    f.tid = tid ? tid : "";
+    f.id = 0;
+    r = each_process(json, n, app_id_find_fn, &f);
+    if (r == 1 && app_id) *app_id = f.id;
+    return r;
+}
+
 /* ---- search index ---- */
 
 /* 1-255 bytes with no '"', '\\' or control character (the index handlers scan quote to quote). */

@@ -20,6 +20,7 @@ import {
   shareOf,
   slowFriend,
   streamSeatFriend,
+  type CodecWarning,
   type JoinGuest,
   type JoinHostState,
   type NetPeer,
@@ -59,6 +60,19 @@ export function guestWayText(tr: Tr, g: JoinGuest): string | null {
   // An older engine names only an internet friend's connection.
   if (g.via === "internet")
     return g.path === "direct" ? `${tr("net_internet", undefined, "Internet")} · ${tr("pt_path_direct", undefined, "Direct")}` : tr("net_internet", undefined, "Internet");
+  return null;
+}
+
+/** A picture a friend's PS5 app said it can't show, and what to do, in words (null: none). */
+export function codecWarningText(tr: Tr, w: CodecWarning | undefined): string | null {
+  if (w === "hevc")
+    return tr(
+      "pt_codec_hevc",
+      undefined,
+      "Their PS5 can't show this stream's video format (HEVC). Set Video format to H.264 and start again.",
+    );
+  if (w === "main10")
+    return tr("pt_codec_main10", undefined, "Their PS5 can't show HDR. Set Video format to Auto or H.264 and start again.");
   return null;
 }
 
@@ -232,6 +246,11 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 {way}
               </span>
             )}
+            {guest.onPs5 && guest.status !== "left" && (
+              <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-xs font-medium" data-testid="pt-player-ps5">
+                {tr("pt_on_ps5", undefined, "On a PS5")}
+              </span>
+            )}
             {guest.rttMs != null && guest.status !== "left" && (
               <span className={`text-xs tabular-nums ${TONE[tone]}`} data-testid="pt-player-delay" data-tone={tone}>
                 {Math.round(guest.rttMs)} ms
@@ -284,6 +303,11 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
               </span>
             )}
           </div>
+          {guest.codecWarning && guest.status !== "left" && (
+            <p className="text-xs text-[var(--color-warn)]" data-testid="pt-player-codec" data-codec={guest.codecWarning}>
+              {codecWarningText(tr, guest.codecWarning)}
+            </p>
+          )}
           {guest.status !== "left" && (
             <Button
               size="sm"
@@ -684,6 +708,16 @@ export function PlayTogetherPanel({
                 {state.asks.map((a) => (
                   <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
                     <span className="min-w-0 flex-1 truncate font-medium">{friendName(tr, a.name)}</span>
+                    {a.onPs5 && (
+                      <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-xs font-medium" data-testid="pt-ask-ps5">
+                        {tr("pt_on_ps5", undefined, "On a PS5")}
+                      </span>
+                    )}
+                    {a.codecWarning && (
+                      <span className="order-last w-full text-xs text-[var(--color-warn)]" data-testid="pt-ask-codec">
+                        {codecWarningText(tr, a.codecWarning)}
+                      </span>
+                    )}
                     <Button size="sm" variant="primary" onClick={() => void joinApi.decide(addr, a.id, true)}>
                       {tr("pt_allow", undefined, "Allow")}
                     </Button>
@@ -917,7 +951,7 @@ export function JoinAsks({
       // may be nearly as wide, so its two buttons stay inside the picture (German wrapped them
       // out of it).
       className={`pointer-events-auto absolute left-1/2 top-28 z-40 flex w-max max-w-[min(32rem,calc(100%-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 bg-black/85 px-4 py-2 text-sm text-white shadow-lg phone:top-2 phone:max-w-[calc(100%-1rem)] phone:justify-center phone:gap-x-2 phone:gap-y-1 phone:rounded-2xl phone:px-3 phone:py-1.5 phone:text-xs ${
-        seatNext || nextProfile ? "rounded-2xl" : "rounded-full"
+        seatNext || nextProfile || a.codecWarning ? "rounded-2xl" : "rounded-full"
       }`}
       data-testid="pt-ask"
       onClick={(e) => e.stopPropagation()}
@@ -925,7 +959,16 @@ export function JoinAsks({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <Users size={14} />
-      <span>{tr("pt_asks", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you`)}</span>
+      <span>
+        {a.onPs5
+          ? tr("pt_asks_ps5", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you on a PS5`)
+          : tr("pt_asks", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you`)}
+      </span>
+      {a.codecWarning && (
+        <span className="order-last w-full text-xs text-amber-200" data-testid="pt-ask-overlay-codec">
+          {codecWarningText(tr, a.codecWarning)}
+        </span>
+      )}
       {seatNext && <SeatNextNote name={friendName(tr, a.name)} className="order-last w-full text-xs text-white/75" />}
       {!seatNext && nextProfile && (
         <ProfileNextNote name={friendName(tr, a.name)} profile={nextProfile} className="order-last w-full text-xs text-white/75" />

@@ -27,6 +27,7 @@
 #include "sigpipe_guard.h"
 #include "wake_watchdog.h"
 #include "tailnet_node.h"
+#include "app_api.h"
 #include "icon_keeper.h"
 #include "fakelib_overlay.h"
 #include "vinput.h"
@@ -950,6 +951,12 @@ int main(void) {
     if (tailnet_node_boot() != 0) fprintf(stderr, "[tailnet] not started\n");
     startup_trace("TAILNET_STARTED");
 
+    /* PS5Upload Play's loopback API (app_api.h): 127.0.0.1:9181, on whatever the Minion switch says.
+     * After AVA1 (its requests run inside the local-RPC gate). A bind failure is retried by its own
+     * thread (an old helper may still hold the port for a moment); a start failure is logged. */
+    if (app_api_start() != 0) fprintf(stderr, "[appapi] not started\n");
+    startup_trace("APPAPI_STARTED");
+
     /* The AVA1 server runs on its own threads; this thread has nothing left to serve. It waits for
      * node.shutdown or the takeover flag (runtime_request_shutdown), then tears down. */
     runtime_wait_for_shutdown(&state);
@@ -989,6 +996,7 @@ int main(void) {
      * (this does NOT return while one runs: only the exit watchdog armed above (8 s, or up to 60 s while a Sony call runs) can end the
      * process then), then stop the data layer so journals are closed and durable jobs resume. */
     webui_stop(); /* bounded: joins its workers within 2 s, detaches a stuck one */
+    app_api_stop(); /* never waits: its thread closes the listener within a slice */
     startup_trace("STOP_WEBUI_DONE");
 
     {

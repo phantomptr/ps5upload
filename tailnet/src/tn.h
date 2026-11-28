@@ -457,6 +457,8 @@ int tn_fwd_sleep_ms(tn_ctx *c);
 int tn_fwd_map(tn_ctx *c, uint8_t proto, uint32_t rip, uint16_t rport, uint16_t want, uint16_t *lport);
 void tn_fwd_unmap(tn_ctx *c, uint8_t proto, uint16_t lport);
 int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip);
+/* A serving node: a TCP segment for a connection lwIP already has (a reply on a tn_map dial). */
+int tn_fwd_tcp_known(tn_ctx *c, const tn_ip_info *ip);
 void tn_fwd_stats(tn_ctx *c, uint32_t *udp_flows, uint32_t *tcp_conns);
 
 /* Which peers may open flows to served ports (tn_set_peer_allow). */

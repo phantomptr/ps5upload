@@ -136,6 +136,8 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     engine/Cargo.toml \
     engine/Cargo.lock \
     client/src-tauri/Cargo.lock
+  # PS5Upload Play's contentVersion, once the app is in the tree.
+  if [ -f apps/play/sce_sys/param.json ]; then git add apps/play/sce_sys/param.json; fi
   git commit -m "Release ${tag}"
 fi
 

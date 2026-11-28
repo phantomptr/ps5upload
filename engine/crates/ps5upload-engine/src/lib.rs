@@ -107,6 +107,7 @@ mod pkg_install;
 mod pkg_name_api;
 mod pkg_sidecar;
 mod play_app;
+mod play_app_install;
 mod play_discovery;
 mod pldmgr_api;
 mod profile_image;
@@ -14405,6 +14406,11 @@ fn build_app_and_mcp(
         .route("/api/play/app/pair", post(play_app::pair))
         .route("/api/play/app/unpair", post(play_app::unpair))
         .route("/api/play/app/paired", get(play_app::paired))
+        // PS5Upload Play on a PS5: install, update, remove, open (play_app_install.rs).
+        .route("/api/play/app/installed", get(play_app_install::installed))
+        .route("/api/play/app/install", post(play_app_install::install))
+        .route("/api/play/app/remove", post(play_app_install::remove))
+        .route("/api/play/app/open", post(play_app_install::open))
         // Share: an app's things to a friend (share/mod.rs).
         .route("/share", get(share::page))
         .route("/api/share/ws", get(share::ws))

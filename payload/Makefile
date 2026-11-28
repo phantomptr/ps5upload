@@ -169,10 +169,13 @@ CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
         -lSceNotification -lSceRegMgr -lSceFsInternalForVsh -lkernel_sys
 
-# The home-screen tile's icon0.png (512x512, the app icon client/src-tauri/icons/icon.png),
-# embedded as a C array by xxd: webui_tile_icon0_png[] + webui_tile_icon0_png_len, which
+# The home-screen tile's icon0.png (512x512, branding/icon-minion.svg: the app icon with a browser
+# badge; scripts/release/brand-assets.py renders it), embedded as a C array by xxd:
+# webui_tile_icon0_png[] + webui_tile_icon0_png_len, which
 # webui_tile.c writes into /data/ps5upload/tile/PSUP00001/sce_sys/. Generated under build/
 # (git-ignored); `cd assets` keeps xxd's symbol names independent of the path.
+# A changed icon re-registers the tile on the next helper start (webui_tile.c), so the home
+# screen picks it up.
 WEBUI_TILE_ICON_PNG := assets/webui_tile_icon0.png
 WEBUI_TILE_ICON_C := build/webui_tile_icon.c
 
@@ -258,7 +261,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/app_dump.c src/app_dump_core.c src/app_dump_pkg.c src/app_dump_fself.c src/app_dump_self.c src/app_dump_sha256.c $(WEBUI_TILE_ICON_C) $(EXTRACTOR_ELF_C) \
         src/pkg_info.c src/webui_pkg.c $(WEBUI_INSTALLER_C) \
         src/webui_smb.c src/smb_shares.c src/smb_client.c smb/smbd_json.c smb/smbd_path.c $(SMBD_ELF_C) \
-        src/tailnet_node.c \
+        src/tailnet_node.c src/app_api.c src/app_api_server.c src/play_app.c \
         src/save_sfo.c src/save_owner.c src/trophy_fix.c src/title_restore.c \
         src/helper_uninstall.c \
         src/file_compare.c \

@@ -11,6 +11,7 @@ import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pollWhileVisible } from "../ui/visiblePoll";
 import { TaskRow } from "./TaskRow";
+import { PlayAppCard } from "./PlayAppCard";
 import { HomeDeviceAsks } from "../settings/Devices";
 import { useJobs, visibleJobs, type Job } from "./useJobs";
 
@@ -335,6 +336,9 @@ export function HomeView(p: HomeViewProps) {
           <div className="cw-game-text cw-dim">{p.status ? t(p.onOpenCheats ? "cw_home_no_game_next" : "cw_home_no_game_plain") : t("cw_home_loading")}</div>
         )}
       </section>
+
+      {/* PS5Upload Play: Install / Update / Open (hidden while there is nothing to show). */}
+      <PlayAppCard />
 
       <section className="cw-home-section">
         <h2 className="cw-h2">{t("cw_home_tasks")}</h2>

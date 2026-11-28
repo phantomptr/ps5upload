@@ -1416,6 +1416,131 @@ static int do_announce(const uint8_t caller[32], const char *body, size_t n, cha
     return r < 0 || (size_t)r >= cap ? -1 : r;
 }
 
+/* ---- the engines the console knows (PS5Upload Play's loopback app API, app_api.h) ---- */
+
+/* The first {"kind":"play_host",...} object in a presence array: 1 (span in *v, *vl), else 0. */
+static int find_play_item(const char *s, size_t n, const char **v, size_t *vl) {
+    size_t i = 0;
+    skip_ws(s, n, &i);
+    if (i >= n || s[i] != '[') return 0;
+    i++;
+    for (;;) {
+        size_t st;
+        char kind[16];
+        skip_ws(s, n, &i);
+        if (i >= n || s[i] == ']') return 0;
+        st = i;
+        if (skip_value(s, n, &i) != 0) return 0;
+        if (s[st] == '{' && webui_json_str(s + st, i - st, "kind", kind, sizeof kind) == 1 &&
+            !strcmp(kind, "play_host")) {
+            *v = s + st;
+            *vl = i - st;
+            return 1;
+        }
+        skip_ws(s, n, &i);
+        if (i < n && s[i] == ',') i++;
+    }
+}
+
+/* A path from the item ("/..." with no quote, backslash or control character), or "" (shown as null). */
+static void item_path(const char *item, size_t il, const char *key, char *out, size_t cap) {
+    size_t i;
+    out[0] = 0;
+    if (!item || webui_json_str(item, il, key, out, cap) != 1 || out[0] != '/') {
+        out[0] = 0;
+        return;
+    }
+    for (i = 0; out[i]; i++)
+        if ((unsigned char)out[i] < 0x21 || out[i] == '"' || out[i] == '\\' || out[i] == 0x7f) {
+            out[0] = 0;
+            return;
+        }
+}
+
+/* One engine as the app reads it; `item` is its play_host presence item (NULL: none). */
+static void put_engine(buf_t *b, const dev_t_ *d, const char *item, size_t il) {
+    char ipt[16], path[128];
+    uint64_t port = 0;
+    ip_text(d->ip, ipt);
+    puts_(b, "{\"name\":");
+    putstr(b, shown_name(d));
+    puts_(b, ",\"kind\":");
+    putstr(b, d->kind);
+    puts_(b, ",\"version\":");
+    putstr(b, d->app);
+    putf(b, ",\"addr\":\"%s\",\"tailnet\":%s", ipt, is_tailnet_ip(d->ip) ? "true" : "false");
+    if (item && webui_json_u64(item, il, "port", &port) == 1 && port > 0 && port < 65536)
+        putf(b, ",\"port\":%u", (unsigned)port);
+    else
+        puts_(b, ",\"port\":null");
+    item_path(item, il, "join_ws", path, sizeof path);
+    if (path[0]) {
+        puts_(b, ",\"join_ws\":");
+        putstr(b, path);
+    } else {
+        puts_(b, ",\"join_ws\":null");
+    }
+    item_path(item, il, "app_ws", path, sizeof path);
+    if (path[0]) {
+        puts_(b, ",\"app_ws\":");
+        putstr(b, path);
+    } else {
+        puts_(b, ",\"app_ws\":null");
+    }
+    puts_(b, "}");
+}
+
+int mesh_engines_json(char *out, size_t cap) {
+    mesh_online_t *on;
+    int non, i, first = 1, best = -1;
+    uint64_t best_at = 0;
+    buf_t b = { out, 0, cap, 0 };
+    if (!out || cap < 64) return -1;
+    /* Heap: the caller's stack is small. */
+    if (!(on = calloc(MESH_MAX_DEVICES, sizeof *on))) return fail(out, cap, "out_of_memory");
+    non = M.h.online ? M.h.online(on, MESH_MAX_DEVICES) : 0;
+    pthread_mutex_lock(&g_mu);
+    /* The engine the app should dial: the online device whose presence carries a play_host item,
+     * the one heard from last when there are several. */
+    for (i = 0; i < MESH_MAX_DEVICES; i++) {
+        const dev_t_ *d = &M.dev[i];
+        const char *v;
+        size_t vl;
+        if (!d->used || d->blocked || !d->ip || !is_online(d->key, on, non)) continue;
+        if (!find_play_item(d->activity, strlen(d->activity), &v, &vl)) continue;
+        if (best < 0 || d->activity_at > best_at) {
+            best = i;
+            best_at = d->activity_at;
+        }
+    }
+    puts_(&b, "{\"engine\":");
+    if (best >= 0) {
+        const char *v = NULL;
+        size_t vl = 0;
+        const dev_t_ *d = &M.dev[best];
+        (void)find_play_item(d->activity, strlen(d->activity), &v, &vl);
+        put_engine(&b, d, v, vl);
+    } else {
+        puts_(&b, "null");
+    }
+    /* Every device connected now: an engine that does not publish the item yet still says where it is. */
+    puts_(&b, ",\"online\":[");
+    for (i = 0; i < MESH_MAX_DEVICES; i++) {
+        const dev_t_ *d = &M.dev[i];
+        const char *v = NULL;
+        size_t vl = 0;
+        if (!d->used || d->blocked || !is_online(d->key, on, non)) continue;
+        if (!find_play_item(d->activity, strlen(d->activity), &v, &vl)) v = NULL;
+        if (!first) puts_(&b, ",");
+        put_engine(&b, d, v, vl);
+        first = 0;
+    }
+    puts_(&b, "]}");
+    pthread_mutex_unlock(&g_mu);
+    free(on);
+    return b.err ? fail(out, cap, "reply_too_large") : (int)b.len;
+}
+
 int mesh_call(int which, const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap) {
     mesh_online_t *on = NULL;
     int non = 0, r;

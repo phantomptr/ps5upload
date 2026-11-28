@@ -56,6 +56,9 @@
 #include "webui_smb.h"
 #include "webui_strings.h"
 #include "webui_tile.h"
+#include "ava1_thread.h"
+#include "play_app.h"
+#include "register.h"
 
 #define API_OUT_MAX (256u * 1024u)   /* an AVA1 reply's ceiling (the server's RPC_OUT_MAX) */
 #define API_LIST_JSON (64u * 1024u)  /* one fs.list page as JSON: entries past it page on */
@@ -1607,6 +1610,307 @@ static void r_apps_register(const char *b, size_t n, uint8_t *out, int fd) {
     st = call_text(AVA1_METHOD_APP_REGISTER, req, k + 2, out, &ol, &t, &tl);
     free(req);
     send_text_reply(fd, st, out, ol, t, tl);
+}
+
+/* ---- PS5Upload Play (play_app.h): its state, and Install / Update as a helper-side job ----
+ *
+ * The install itself is play_app_install: the homebrew store app's way, exactly (the rules are at the
+ * top of include/play_app.h; the engine's twin is engine/crates/ps5upload-engine/src/play_app_install.rs).
+ * Around it, this job: the app is closed first when it runs (APP_LIFECYCLE kill, as Home's Close),
+ * and afterwards the title is registered the way the console expects it: when ShadowMount+ runs (a
+ * process whose name has "shadowmountplus" in it), it scans /data/homebrew and registers the folder
+ * itself, so we do not (a fresh install is then watched in app.db for up to PLAY_REG_WAIT_S and
+ * reported pending if it has not appeared); otherwise APP_REGISTER (register.c, as the Register
+ * button) when app.db does not have the title yet. The outcome goes to PLAY_APP_INSTALL_JSON. One job
+ * at a time; /api/play-app reports its progress. Opening the app is /api/apps/launch. */
+
+#define PLAY_REG_WAIT_S 90
+#define PLAY_CLOSE_WAIT_MS 15000
+
+enum { PJ_IDLE = 0, PJ_CLOSING, PJ_COPYING, PJ_REGISTERING, PJ_DONE, PJ_FAILED };
+
+static pthread_mutex_t g_play_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    int state;
+    uint64_t done, total;
+    char error[64];
+    char registered_by[16]; /* "shadowmount" | "ps5upload" | "" */
+    int pending;            /* left to ShadowMount+, not in app.db yet */
+    char register_error[64];
+} g_play;
+
+static const char *play_state_name(int s) {
+    switch (s) {
+    case PJ_CLOSING: return "closing";
+    case PJ_COPYING: return "copying";
+    case PJ_REGISTERING: return "registering";
+    case PJ_DONE: return "done";
+    case PJ_FAILED: return "failed";
+    default: return "idle";
+    }
+}
+
+static void play_set(int state, const char *error) {
+    pthread_mutex_lock(&g_play_mu);
+    g_play.state = state;
+    if (error) snprintf(g_play.error, sizeof g_play.error, "%s", error);
+    pthread_mutex_unlock(&g_play_mu);
+}
+
+static void play_progress(void *ctx, uint64_t done, uint64_t total) {
+    (void)ctx;
+    pthread_mutex_lock(&g_play_mu);
+    g_play.done = done;
+    g_play.total = total;
+    pthread_mutex_unlock(&g_play_mu);
+}
+
+/* One AVA1 text call from the job's own thread, inside the local-RPC gate (the exit waits for it,
+ * and refuses it once the exit has begun: AVA1_ERR_BUSY). On an error the cause, if any, is the
+ * text (*t, *tl) instead of the reply. */
+static int play_call(uint16_t method, const char *body, size_t len, uint8_t *out, const uint8_t **t, size_t *tl) {
+    size_t ol = 0;
+    int st;
+    *t = NULL;
+    *tl = 0;
+    if (ava1_server_local_rpc_enter() != 0) return AVA1_ERR_BUSY;
+    st = call_text(method, body, len, out, &ol, t, tl);
+    ava1_server_local_rpc_leave();
+    if (st != AVA1_STATUS_OK) {
+        *t = out;
+        *tl = ol;
+    }
+    return st;
+}
+
+/* The process list's verdict on the app: 1 runs (with *app_id), 0 not, -1 unreadable. Also whether
+ * ShadowMount+ runs, when asked. */
+static int play_running(uint8_t *out, uint64_t *app_id, int *shadowmount) {
+    const uint8_t *t;
+    size_t tl;
+    int r;
+    if (play_call(AVA1_METHOD_PROC_PROCESS_LIST, NULL, 0, out, &t, &tl) != AVA1_STATUS_OK) return -1;
+    if (shadowmount) *shadowmount = play_app_has_nocase((const char *)t, tl, "shadowmountplus");
+    r = webui_proc_game_running((const char *)t, tl, PLAY_APP_TITLE_ID, 0);
+    if (r == 1 && app_id) {
+        *app_id = 0;
+        (void)webui_proc_title_app_id((const char *)t, tl, PLAY_APP_TITLE_ID, app_id);
+    }
+    return r;
+}
+
+static void nap(unsigned ms) {
+    struct timespec ts = { (time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+
+static void *play_job(void *arg) {
+    uint8_t *out = malloc(API_OUT_MAX);
+    play_app_env_t env;
+    play_app_result_t res;
+    const char *err = NULL;
+    uint64_t app_id = 0;
+    int sm = 0, run, reg;
+    (void)arg;
+    proc_name_set_self("ps5upload-play");
+    ava1_server_set_rpc_peer(k_console_id);
+    if (!out) {
+        play_set(PJ_FAILED, "out_of_memory");
+        return NULL;
+    }
+    /* 1. Closed first when it runs. */
+    run = play_running(out, &app_id, NULL);
+    if (run == 1) {
+        char req[64];
+        const uint8_t *t;
+        size_t tl;
+        unsigned waited = 0;
+        int k;
+        play_set(PJ_CLOSING, NULL);
+        if (app_id) {
+            k = snprintf(req, sizeof req, "{\"action\":\"kill\",\"app_id\":%lu}", (unsigned long)app_id);
+            (void)play_call(AVA1_METHOD_APP_LIFECYCLE, req, (size_t)k, out, &t, &tl);
+        }
+        while ((run = play_running(out, NULL, NULL)) == 1 && waited < PLAY_CLOSE_WAIT_MS) {
+            nap(500);
+            waited += 500;
+        }
+        if (run != 0) {
+            play_set(PJ_FAILED, run == 1 ? "close_failed" : "process_list_unreadable");
+            free(out);
+            return NULL;
+        }
+    } else if (run < 0) {
+        play_set(PJ_FAILED, "process_list_unreadable");
+        free(out);
+        return NULL;
+    }
+    /* 2. The files, the store's way, and its receipt. */
+    play_set(PJ_COPYING, NULL);
+    memset(&env, 0, sizeof env);
+    env.root = "";
+    env.now = time(NULL);
+    env.progress = play_progress;
+    if (play_app_install(&env, &res, &err) != 0) {
+        fprintf(stderr, "[play-app] install failed: %s\n", err ? err : "?");
+        play_set(PJ_FAILED, err ? err : "install_failed");
+        free(out);
+        return NULL;
+    }
+    fprintf(stderr, "[play-app] %s %s in %s\n", res.update ? "updated to" : "installed", res.version, res.location);
+    /* 3. Registered the way the console expects. */
+    play_set(PJ_REGISTERING, NULL);
+    (void)play_running(out, NULL, &sm);
+    reg = register_appdb_has_title(PLAY_APP_TITLE_ID);
+    if (sm) {
+        int waited = 0;
+        while (reg != 1 && !res.update && waited < PLAY_REG_WAIT_S) {
+            nap(3000);
+            waited += 3;
+            reg = register_appdb_has_title(PLAY_APP_TITLE_ID);
+        }
+        pthread_mutex_lock(&g_play_mu);
+        snprintf(g_play.registered_by, sizeof g_play.registered_by, "shadowmount");
+        g_play.pending = reg != 1;
+        pthread_mutex_unlock(&g_play_mu);
+    } else {
+        if (reg != 1) {
+            char req[2 * API_PATH + 48], path[API_PATH];
+            const uint8_t *t;
+            size_t tl, k;
+            int st;
+            snprintf(path, sizeof path, "%s/%s", res.location, PLAY_APP_TITLE_ID);
+            k = (size_t)snprintf(req, sizeof req, "{\"src_path\":\"");
+            k += webui_json_escape(req + k, sizeof req - k, path, strlen(path));
+            memcpy(req + k, "\"}", 3);
+            st = play_call(AVA1_METHOD_APP_REGISTER, req, k + 2, out, &t, &tl);
+            if (st != AVA1_STATUS_OK) {
+                char cause[64];
+                size_t cl = tl < sizeof cause - 1 ? tl : sizeof cause - 1, i;
+                if (t && cl) memcpy(cause, t, cl);
+                cause[cl] = 0;
+                for (i = 0; i < cl; i++) /* a token: printable ASCII only */
+                    if ((unsigned char)cause[i] < 0x20 || (unsigned char)cause[i] > 0x7e) cause[i] = '?';
+                fprintf(stderr, "[play-app] register failed: %s\n", cause[0] ? cause : status_token(st));
+                pthread_mutex_lock(&g_play_mu);
+                snprintf(g_play.register_error, sizeof g_play.register_error, "%s", cause[0] ? cause : status_token(st));
+                pthread_mutex_unlock(&g_play_mu);
+            }
+        }
+        pthread_mutex_lock(&g_play_mu);
+        snprintf(g_play.registered_by, sizeof g_play.registered_by, "ps5upload");
+        pthread_mutex_unlock(&g_play_mu);
+    }
+    (void)play_app_write_install_json("", res.version, res.location, sm ? "shadowmount" : "ps5upload", time(NULL));
+    play_set(PJ_DONE, NULL);
+    free(out);
+    return NULL;
+}
+
+/* {} -> {"installed":{"version","path","registered"}|null,"staged":{"version"}|null,"store_managed",
+ * "store_busy","running","install":{"state","done","total","error"?,"registered_by"?,"pending"?,
+ * "register_error"?}} */
+static void r_play_app(const char *b, size_t n, uint8_t *out, int fd) {
+    char loc[PLAY_APP_LOCATION_MAX], dir[PLAY_APP_LOCATION_MAX + 16], iv[PLAY_APP_VERSION_MAX], sv[PLAY_APP_VERSION_MAX];
+    char json[2048];
+    size_t at = 0;
+    int have_i, have_s, running;
+    (void)b;
+    (void)n;
+    (void)play_app_target("", loc, sizeof loc);
+    snprintf(dir, sizeof dir, "%s/%s", loc, PLAY_APP_TITLE_ID);
+    have_i = play_app_version("", dir, iv, sizeof iv) == 1;
+    have_s = play_app_version("", PLAY_APP_KEPT_DIR, sv, sizeof sv) == 1;
+    running = play_running(out, NULL, NULL) == 1;
+    put_fmt(json, sizeof json, &at, "{\"installed\":");
+    if (have_i) {
+        put_fmt(json, sizeof json, &at, "{");
+        put_str(json, sizeof json, &at, "version", iv);
+        put_fmt(json, sizeof json, &at, ",");
+        put_str(json, sizeof json, &at, "path", dir);
+        put_fmt(json, sizeof json, &at, ",\"registered\":%s}",
+                register_appdb_has_title(PLAY_APP_TITLE_ID) == 1 ? "true" : "false");
+    } else {
+        put_fmt(json, sizeof json, &at, "null");
+    }
+    put_fmt(json, sizeof json, &at, ",\"staged\":");
+    if (have_s) {
+        put_fmt(json, sizeof json, &at, "{");
+        put_str(json, sizeof json, &at, "version", sv);
+        put_fmt(json, sizeof json, &at, "}");
+    } else {
+        put_fmt(json, sizeof json, &at, "null");
+    }
+    put_fmt(json, sizeof json, &at, ",\"store_managed\":%s,\"store_busy\":%s,\"running\":%s,\"install\":{",
+            have_i && play_app_store_managed("", loc, iv) ? "true" : "false", play_app_store_busy("") ? "true" : "false",
+            running ? "true" : "false");
+    pthread_mutex_lock(&g_play_mu);
+    put_fmt(json, sizeof json, &at, "\"state\":\"%s\",\"done\":%llu,\"total\":%llu", play_state_name(g_play.state),
+            (unsigned long long)g_play.done, (unsigned long long)g_play.total);
+    if (g_play.state == PJ_FAILED) {
+        put_fmt(json, sizeof json, &at, ",");
+        put_str(json, sizeof json, &at, "error", g_play.error);
+    }
+    if (g_play.state == PJ_DONE) {
+        put_fmt(json, sizeof json, &at, ",");
+        put_str(json, sizeof json, &at, "registered_by", g_play.registered_by);
+        put_fmt(json, sizeof json, &at, ",\"pending\":%s", g_play.pending ? "true" : "false");
+        if (g_play.register_error[0]) {
+            put_fmt(json, sizeof json, &at, ",");
+            put_str(json, sizeof json, &at, "register_error", g_play.register_error);
+        }
+    }
+    pthread_mutex_unlock(&g_play_mu);
+    put_fmt(json, sizeof json, &at, "}}");
+    send_json(fd, 200, json, at);
+}
+
+/* {"confirm_store"?:bool}: starts the job. 409 install_running, store_busy, store_managed (a copy the
+ * other app installed, without confirm_store); 404 not_staged. */
+static void r_play_app_install(const char *b, size_t n, uint8_t *out, int fd) {
+    char loc[PLAY_APP_LOCATION_MAX], dir[PLAY_APP_LOCATION_MAX + 16], iv[PLAY_APP_VERSION_MAX], sv[PLAY_APP_VERSION_MAX];
+    int confirm = 0, busy;
+    pthread_t th;
+    pthread_attr_t attr;
+    (void)out;
+    if (webui_json_bool(b, n, "confirm_store", &confirm) < 0) {
+        send_bad(fd, "bad_confirm_store");
+        return;
+    }
+    if (play_app_store_busy("")) {
+        send_error(fd, 409, "store_busy", 10);
+        return;
+    }
+    if (play_app_version("", PLAY_APP_KEPT_DIR, sv, sizeof sv) != 1) {
+        send_error(fd, 404, "not_staged", 10);
+        return;
+    }
+    (void)play_app_target("", loc, sizeof loc);
+    snprintf(dir, sizeof dir, "%s/%s", loc, PLAY_APP_TITLE_ID);
+    if (!confirm && play_app_version("", dir, iv, sizeof iv) == 1 && play_app_store_managed("", loc, iv)) {
+        send_error(fd, 409, "store_managed", 13);
+        return;
+    }
+    pthread_mutex_lock(&g_play_mu);
+    busy = g_play.state == PJ_CLOSING || g_play.state == PJ_COPYING || g_play.state == PJ_REGISTERING;
+    if (!busy) {
+        memset(&g_play, 0, sizeof g_play);
+        g_play.state = PJ_CLOSING; /* taken: a second request is refused from here */
+    }
+    pthread_mutex_unlock(&g_play_mu);
+    if (busy) {
+        send_error(fd, 409, "install_running", 15);
+        return;
+    }
+    if (pthread_attr_init(&attr) != 0 || pthread_attr_setstacksize(&attr, AVA1_MGMT_STACK) != 0 ||
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0 || pthread_create(&th, &attr, play_job, NULL) != 0) {
+        pthread_attr_destroy(&attr);
+        play_set(PJ_FAILED, "start_failed");
+        send_error(fd, 500, "start_failed", 12);
+        return;
+    }
+    pthread_attr_destroy(&attr);
+    send_json(fd, 200, "{\"started\":true}", 16);
 }
 
 /* {title_id, hidden}: APP_ICON_SET (#407): only app.db's visible flag changes; the title stays
@@ -3311,6 +3615,8 @@ static const struct {
     { "/api/smb/jobs", webui_smb_jobs },
     { "/api/library/scan", webui_library_scan },
     { "/api/apps/register", r_apps_register },
+    { "/api/play-app", r_play_app },
+    { "/api/play-app/install", r_play_app_install },
     { "/api/cleanup/scan", r_cleanup_scan },
     { "/api/cleanup/status", r_cleanup_status },
     { "/api/cleanup/apply", r_cleanup_apply },

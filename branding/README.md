@@ -13,6 +13,7 @@ to use the files.
 | `icon.svg` | App icon: black mark on a white rounded tile |
 | `icon-dark.svg` | White mark on a black rounded tile |
 | `icon-play.svg` | PS5Upload Play app icon: the mark with a play badge |
+| `icon-minion.svg` | The Minion home-screen tile: the app icon with a black round badge holding a white browser window, bottom right (`payload/assets/webui_tile_icon0.png`) |
 | `mark.svg`, `mark-white.svg` | The mark alone, transparent |
 | `lockup-horizontal-black.svg`, `-white.svg` | Mark beside the name, transparent |
 | `lockup-stacked-black.svg`, `-white.svg` | Mark above the name, transparent |

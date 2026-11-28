@@ -84,4 +84,15 @@ enum {
  * or -1 when even a refusal does not fit. */
 int mesh_call(int which, const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap);
 
+/* The engines connected now, for PS5Upload Play (the helper's loopback app API, app_api.h):
+ *   {"engine": E | null, "online": [E, ...]}
+ *   E = {"name","kind","version","addr":"a.b.c.d","tailnet":bool,"port":N|null,
+ *        "join_ws":"/..."|null,"app_ws":"/..."|null}
+ * An engine says where PS5Upload Play reaches it with one item in its presence (MESH_ACTIVITY):
+ *   {"kind":"play_host","port":<its HTTP port>,"join_ws":"/api/join/ws","app_ws":"/api/play/app"}
+ * "engine" is the online device carrying that item (the one heard from last when there are
+ * several); "addr" is the address its AVA1 session comes from, never one the item names. Blocked
+ * devices are left out. Returns the length, or -1. */
+int mesh_engines_json(char *out, size_t cap);
+
 #endif

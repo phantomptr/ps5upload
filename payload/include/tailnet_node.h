@@ -8,7 +8,12 @@
  *   UDP 9302  Remote Play discovery/wake -> 127.0.0.1:9302 (relayed)
  *   TCP 9120  this helper (AVA1)         -> 127.0.0.1:9120 (lwIP, spliced)
  * Nothing else reaches the console from the tailnet, and the console never dials out
- * over it. Rest mode: the wake watchdog's power phase (power_phase.h) pauses the node
+ * over it, with ONE narrow exception: PS5Upload Play's forward (tailnet_node_forward_open
+ * below). On request of the app (its loopback API, app_api.h), one TCP listener on
+ * 127.0.0.1:PLAY_APP_FORWARD_PORT is mapped to one TCP port of one tailnet peer the node
+ * knows now (the host's PS5Upload engine), so the app on a friend's PS5 reaches that engine.
+ * Only TCP, only one mapping at a time, only a current peer's address, only loopback on the
+ * console side; it goes with the node (off, sign-out, restart) and is never saved. Rest mode: the wake watchdog's power phase (power_phase.h) pauses the node
  * (no sockets) while the console goes to rest and until it has settled after a wake, then
  * resumes it; the core also notices the clock jump on wake by itself, rebinds,
  * re-handshakes and opens a new control session. errno 163 (or another "network going
@@ -81,6 +86,22 @@ void tailnet_node_test_rest_wake(void);
 /* Tests: a TCP connection from this tailnet IPv4 (host order) to `port`, as the core notes one
  * the list turns away (nothing when the node is off or the address is let in). */
 void tailnet_node_test_denied(unsigned int ip, unsigned int port);
+
+/* PS5Upload Play's forward: the one exception to "the console never dials out on the tailnet"
+ * (see the top of this file and tailnet_node.c). Map 127.0.0.1:PLAY_APP_FORWARD_PORT (TCP) to
+ * `peer` (a tailnet IPv4, host order) port `port`. Replaces a forward to another target; the same
+ * target again is a no-op. 0 with *local_port set, or -1 with *err one of:
+ *   tailnet_off   the node is not running
+ *   unknown_peer  not the address of a peer the node knows now (or not a tailnet address)
+ *   bad_port      port 0
+ *   port_busy     the local port could not be opened
+ *   failed        anything else */
+int tailnet_node_forward_open(unsigned int peer, unsigned int port, unsigned int *local_port, const char **err);
+/* Close the forward (nothing open: a no-op). */
+void tailnet_node_forward_close(void);
+/* {"state":"on","local_port":9182,"peer":"100.x.y.z","port":N} | {"state":"off"} (no forward)
+ * | {"state":"tailnet_off"} (the node is not running). Returns the length, or -1. */
+int tailnet_node_forward_json(char *out, size_t cap);
 
 /* Tests: use another state directory (before anything else). */
 void tailnet_node_set_dir(const char *dir);

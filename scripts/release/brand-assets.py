@@ -8,7 +8,8 @@ outlines, so nothing here needs the font installed. This writes:
   client/src-tauri/icons/sources/macos_squircle_1024.png  the app icon source; then run
         `npx tauri icon` on it (desktop sizes, .icns, .ico) and the Android and iOS scripts
   client/public/logo-square.png        favicon, sidebar, About, the console page's top bar
-  payload/assets/webui_tile_icon0.png  the PS5 home-screen tile (512x512, no transparency)
+  payload/assets/webui_tile_icon0.png  Minion's PS5 home-screen tile, from branding/icon-minion.svg (512x512,
+        no transparency)
   site/assets/logo.png, favicon.png    the website
   engine/.../src/app_icon/, site/app-icon/  a phone's Home Screen icons for the web pages the
         engine serves (/app-icon/*) and the website's /join and /pad: apple-touch-icon.png
@@ -105,8 +106,9 @@ def main() -> None:
     # In the app and the console page.
     out = render(icon, ROOT / "client/public/logo-square.png", w=256)
     optimise(out)
-    # The PS5 tile: square, opaque (the console rounds it itself).
-    square = re.sub(r'rx="58"', 'rx="0"', icon.read_text())
+    # Minion's PS5 tile: the icon with its browser badge, square and opaque (the console rounds
+    # it itself).
+    square = re.sub(r'rx="58"', 'rx="0"', (B / "icon-minion.svg").read_text())
     with tempfile.TemporaryDirectory() as tmp:
         t = render(square, Path(tmp) / "tile.png", w=512)
         Image.open(t).convert("RGB").save(ROOT / "payload/assets/webui_tile_icon0.png", optimize=True)

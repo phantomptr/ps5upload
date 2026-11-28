@@ -814,6 +814,13 @@ static void proc_guards(void) {
     CHECK(webui_proc_game_running(j, n, "NPXS40087", 0) == 0); /* system apps are not games */
     CHECK(webui_proc_game_running("{\"procs\":[]}", strlen("{\"procs\":[]}"), "X", 1) == 0);
     CHECK(webui_proc_game_running("{\"x\":1}", 7, "X", 1) == -1);
+    {
+        uint64_t id = 0;
+        CHECK(webui_proc_title_app_id(j, n, "PPSA01650", &id) == 1 && id == 77);
+        CHECK(webui_proc_title_app_id(j, n, "NPXS40087", &id) == 0); /* not an app */
+        CHECK(webui_proc_title_app_id(j, n, "FAKE99261", &id) == 0);
+        CHECK(webui_proc_title_app_id("{\"x\":1}", 7, "X", &id) == -1);
+    }
 }
 
 static void array_strings(void) {

@@ -12,6 +12,7 @@ import TailnetPanel from "../Connection/TailnetPanel";
 import { payloadCardLink } from "../Payloads/payloadTabs";
 import { AutoBringUpToggle, BringUpPlaylistSelect } from "./ConsoleBringUp";
 import { MinionConsoleSettings } from "./MinionSettings";
+import { PlayAppInstall } from "../Play/PlayAppInstall";
 import { PlayTogetherGuestProfiles } from "./PlayTogetherGuestProfiles";
 import { RemovePs5Upload } from "./RemovePs5Upload";
 import { GroupHeading, Section } from "./SettingsLayout";
@@ -110,6 +111,10 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
 
       <Section title={tr("cw_settings_app_name", undefined, "PS5Upload Minion")} full>
         <MinionConsoleSettings host={host} />
+      </Section>
+
+      <Section title={tr("pa_title", undefined, "PS5Upload Play")} full>
+        <PlayAppInstall host={host} bare />
       </Section>
 
       <GroupHeading>{tr("settings_group_console", undefined, "Console")}</GroupHeading>

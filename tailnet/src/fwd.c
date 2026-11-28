@@ -27,6 +27,7 @@
 #include "lwip/ip4.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "lwip/priv/tcp_priv.h" /* tcp_active_pcbs, tcp_tw_pcbs (tn_fwd_tcp_known) */
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
 
@@ -940,5 +941,27 @@ int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip)
 		    m->rport == ip->sport)
 			return 1;
 	}
+	return 0;
+}
+
+/* A serving node's mapped (dialed-out) TCP connection: is this segment for a connection lwIP
+ * already has, by its four-tuple (the peer's address and port, our tailnet address and port)?
+ * Only connections this node opened or accepted have a pcb, so a match is a reply, never a new
+ * flow; a listener is never matched. Without this a node that serves ports drops the replies
+ * to its own tn_map connections (their port is not a served one). */
+int tn_fwd_tcp_known(tn_ctx *c, const tn_ip_info *ip)
+{
+	tn_fwd *w = c->fwd;
+	struct tcp_pcb *lists[2];
+	if (!w || ip->proto != TN_IPPROTO_TCP || ip->dst != w->addr)
+		return 0;
+	lists[0] = tcp_active_pcbs;
+	lists[1] = tcp_tw_pcbs;
+	for (int l = 0; l < 2; l++)
+		for (struct tcp_pcb *p = lists[l]; p; p = p->next)
+			if (p->remote_port == ip->sport && p->local_port == ip->dport &&
+			    ip4_addr_get_u32(ip_2_ip4(&p->remote_ip)) == htonl(ip->src) &&
+			    ip4_addr_get_u32(ip_2_ip4(&p->local_ip)) == htonl(ip->dst))
+				return 1;
 	return 0;
 }

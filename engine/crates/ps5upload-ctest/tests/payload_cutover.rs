@@ -131,6 +131,14 @@ fn c_payload_binds_only_9120() {
         "power_phase.c must never listen"
     );
     binders.retain(|p| p != "src/power_phase.c");
+    // PS5Upload Play's app API (app_api.h) listens on the console's loopback only, whatever
+    // Minion's LAN setting says: never INADDR_ANY.
+    let app_api = std::fs::read_to_string(payload().join("src/app_api_server.c")).unwrap();
+    assert!(
+        app_api.contains("htonl(INADDR_LOOPBACK)") && !app_api.contains("INADDR_ANY"),
+        "the app API must listen on 127.0.0.1 only"
+    );
+    binders.retain(|p| p != "src/app_api_server.c");
     binders.sort();
     assert_eq!(
         binders,

@@ -67,8 +67,9 @@ jobs:
   build-payload:
     name: build-payload
     runs-on: ubuntu-24.04
-    # 45: the converter's Docker toolchain is built here when engine-ci's cache of it is gone.
-    timeout-minutes: 45
+    # 45: the converter's Docker toolchain is built here when engine-ci's cache of it is gone; +20
+    # for PS5Upload Play's Docker build when its cache is gone too.
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -212,6 +213,38 @@ jobs:
             payload/ps5upload.elf payload/ps5upload.elf.gz \
             payload/installer/ps5upload-installer.elf payload/installer/ps5upload-installer.elf.gz
 
+      # PS5Upload Play (apps/play), the native PS5 app: built in Docker by its own Makefile, checked
+      # against VERSION, and handed on with the ELFs as payload/play/PS5Upload-Play-FAKE99261-<v>.zip.
+      # The engine embeds it from there (engine build.rs) in every build that downloads this
+      # artifact, and create-release attaches it. Skipped while the app is not in the tree.
+      - name: Is PS5Upload Play in this tree?
+        id: play
+        run: scripts/play-app-ci.sh present | tee -a "$GITHUB_OUTPUT"
+
+      # engine-ci's cache of the app's toolchain when main has saved one (same key); not saved here.
+      - name: Restore PS5Upload Play's toolchain
+        id: play-cache
+        if: steps.play.outputs.present == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/play-toolchain.tar
+            apps/play/.deps
+          key: ${{ runner.os }}-${{ runner.arch }}-play-toolchain-${{ hashFiles('apps/play/docker/**', 'apps/play/tooling/**', 'apps/play/tools/**', 'apps/play/Makefile') }}
+
+      - name: Load PS5Upload Play's toolchain image
+        if: steps.play.outputs.present == 'true' && steps.play-cache.outputs.cache-hit == 'true'
+        run: if [ -s "$RUNNER_TEMP/play-toolchain.tar" ]; then docker load -i "$RUNNER_TEMP/play-toolchain.tar"; fi
+
+      - name: Build PS5Upload Play
+        if: steps.play.outputs.present == 'true'
+        timeout-minutes: 30
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          scripts/play-app-ci.sh build payload/play
+          ls -la payload/play
+
       - name: Upload payload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -221,6 +254,7 @@ jobs:
             payload/ps5upload.elf.gz
             payload/installer/ps5upload-installer.elf
             payload/installer/ps5upload-installer.elf.gz
+            payload/play/*.zip
           if-no-files-found: error
 
   # No `needs: build-payload`: setup (checkout, Node, Rust, npm ci, apt) runs while the payload
@@ -471,6 +505,8 @@ jobs:
           test -s payload/ps5upload.elf.gz
           test -s payload/installer/ps5upload-installer.elf.gz
           ls -la payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
+          # PS5Upload Play rides along once the app is in the tree (the engine embeds it).
+          if [ -f apps/play/Makefile ]; then ls -la payload/play/PS5Upload-Play-FAKE99261-*.zip; fi
 
       - name: Build engine sidecar binary
         shell: bash
@@ -842,6 +878,8 @@ jobs:
           test -s payload/ps5upload.elf.gz
           test -s payload/installer/ps5upload-installer.elf.gz
           ls -la payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
+          # PS5Upload Play rides along once the app is in the tree (the engine embeds it).
+          if [ -f apps/play/Makefile ]; then ls -la payload/play/PS5Upload-Play-FAKE99261-*.zip; fi
 
       - name: Resolve NDK
         shell: bash
@@ -988,6 +1026,7 @@ jobs:
         run: |
           test -s payload/ps5upload.elf.gz
           test -s payload/installer/ps5upload-installer.elf.gz
+          if [ -f apps/play/Makefile ]; then ls -la payload/play/PS5Upload-Play-FAKE99261-*.zip; fi
 
       - name: Scaffold iOS project (gen/ is gitignored)
         working-directory: client
@@ -1226,6 +1265,10 @@ jobs:
             cp -v artifacts/ps5upload-payload/ps5upload.elf \
               "release/ps5upload-${TAG_VERSION}.elf"
           fi
+          # PS5Upload Play, the native PS5 app (title FAKE99261), once it is in the tree.
+          for f in artifacts/ps5upload-payload/play/PS5Upload-Play-FAKE99261-*.zip; do
+            cp -v "$f" "release/PS5Upload-Play-FAKE99261-${TAG_VERSION}.zip"
+          done
           if [ -f artifacts/ps5upload-android/PS5Upload-android.apk ]; then
             cp -v artifacts/ps5upload-android/PS5Upload-android.apk \
               "release/PS5Upload-${TAG_VERSION}-android.apk"
@@ -1285,6 +1328,12 @@ jobs:
               missing=$((missing + 1))
             fi
           done
+          # PS5Upload Play is required once the app is in the tree (scripts/release/verify-release.sh
+          # reads the same rule from the tag).
+          if [ -f apps/play/Makefile ] && [ ! -s "release/PS5Upload-Play-FAKE99261-${TAG_VERSION}.zip" ]; then
+            echo "::error::release asset missing or empty: PS5Upload-Play-FAKE99261-${TAG_VERSION}.zip"
+            missing=$((missing + 1))
+          fi
           if [ "$missing" -gt 0 ]; then
             echo "::error::$missing expected release asset(s) missing — not creating the release"
             exit 1
