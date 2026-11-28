@@ -2382,7 +2382,18 @@ async fn session(mut socket: WebSocket) {
     // Pings since the page was last heard from. Counted, not timed: a computer waking from sleep
     // has its clock moved on, not a silent page.
     let mut quiet = 0u32;
+    // The host's side of Play Rooms chat and voice (join_comms.rs): this page talks and hears as
+    // the host. Nothing reaches it until the host accepts the notice and a room is open.
+    let mut comms = crate::join_comms::attach(
+        &live.host,
+        crate::join_comms::HOST_PID,
+        &crate::mesh_api::device_name(),
+        None,
+        true,
+    );
     loop {
+        // Pictures waiting: room voice goes in 40 ms bundles (join_comms.rs).
+        let pictures_waiting = !video_rx.is_empty();
         tokio::select! {
             // Audio and status first: a big keyframe must not hold up sound.
             biased;
@@ -2409,8 +2420,16 @@ async fn session(mut socket: WebSocket) {
                 }
                 None => break,
             },
+            // Room voice, then chat, after the picture (join_comms.rs).
+            m = comms.next(pictures_waiting) => {
+                if !send_limited(&mut socket, m).await {
+                    reason = "gone";
+                    break;
+                }
+            },
             inc = socket.recv() => { quiet = 0; match inc {
                 Some(Ok(Message::Text(t))) => {
+                    comms.on_text(t.as_str());
                     if let Ok(m) = serde_json::from_str::<ClientMsg>(t.as_str()) {
                         if let Some(p) = pong(&m) {
                             let _ = pong_tx.try_send(p);
@@ -2463,6 +2482,10 @@ async fn session(mut socket: WebSocket) {
                             note_decoder(&live.host, id, d);
                         }
                     }
+                }
+                // The host's room voice (join_voice.rs).
+                Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::join_voice::KIND_VOICE_UP) => {
+                    comms.on_binary(&b);
                 }
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&KIND_MIC) => {
                     live.mic_frame(id, &b[1..]);
