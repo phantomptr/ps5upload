@@ -1009,7 +1009,11 @@ pub(crate) struct Applying(String);
 
 impl Applying {
     fn begin(k: String) -> Option<Self> {
-        lock().applying.insert(k.clone()).then_some(Self(k))
+        // The lock is let go before a hold is made: `then_some(Self(k))` made one even when the
+        // pair was taken, and dropping it there (locking again, under the guard still held)
+        // hung every save sync call for good, and would have freed the other hold.
+        let fresh = lock().applying.insert(k.clone());
+        fresh.then(|| Self(k))
     }
 
     /// [`Self::begin`] for the background look: an apply refused meanwhile says so.
@@ -2081,6 +2085,27 @@ pub(crate) mod tests {
         );
         merge_items(&mut into, from, &[], "p", false);
         assert_eq!(into.items[&k], applied);
+    }
+
+    #[test]
+    fn a_taken_pair_is_refused_without_hanging_or_freeing_the_other_hold() {
+        // Found on hardware: a call made while the background look held the consoles hung the
+        // engine's save sync for good.
+        let k = "test-hold|a|b".to_string();
+        let first = Applying::begin(k.clone()).expect("free");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let k2 = k.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Applying::begin(k2).is_none());
+        });
+        let refused = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a second hold must answer, not hang");
+        assert!(refused);
+        assert!(lock().applying.contains(&k), "the first hold is kept");
+        drop(first);
+        assert!(!lock().applying.contains(&k));
+        assert!(Applying::begin(k).is_some());
     }
 
     #[test]
