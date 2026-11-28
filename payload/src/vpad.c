@@ -155,6 +155,12 @@ typedef struct {
     unsigned taken, refused, resumes;
     int last_err;
     long long refuse_logged_ms, resume_logged_ms;
+    /* Who the console has on the pad now (vpad_read_owners): seen_ms the last reading's time (0:
+     * none yet), seen_ok whether it was read, seen_user its owner (0: nobody yet), seen_code the
+     * answer (0, or the Sony / companion code). Logged when it changes. */
+    long long seen_ms;
+    int seen_ok, seen_code;
+    uint32_t seen_user;
 } slot_t;
 
 #define VPAD_REFUSE_LOG_MS 60000
@@ -245,18 +251,27 @@ static int tick_locked(long long now_ms) {
 }
 
 static void *watchdog_main(void *arg) {
+    long long next_read = 0;
     (void)arg;
     proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     for (;;) {
+        long long now;
         usleep(VPAD_WATCHDOG_STEP_MS * 1000u);
         pthread_mutex_lock(&g_lock);
-        (void)tick_locked(vpad_now_ms());
+        now = vpad_now_ms();
+        (void)tick_locked(now);
         if (!open_count_locked()) {
             g_wd_running = 0;
             pthread_mutex_unlock(&g_lock);
             return NULL;
         }
         pthread_mutex_unlock(&g_lock);
+        /* Who is on each pad: outside the lock (the companion answers within 200 ms, and the
+         * other players' input must not wait for it). */
+        if (now >= next_read) {
+            next_read = now + VPAD_OWNER_READ_MS;
+            (void)vpad_read_owners(now);
+        }
     }
 }
 
@@ -297,6 +312,63 @@ int vpad_tick(long long now_ms) {
     r = tick_locked(now_ms);
     pthread_mutex_unlock(&g_lock);
     return r;
+}
+
+int vpad_read_owners(long long now_ms) {
+    int handles[VPAD_SLOTS], codes[VPAD_SLOTS], idx[VPAD_SLOTS], n = 0, rc;
+    uint32_t owners[VPAD_SLOTS];
+    const vpad_binder_t *b;
+    pthread_mutex_lock(&g_lock);
+    b = g_binder;
+    for (int i = 0; i < VPAD_SLOTS; i++)
+        if (g_slots[i].open) {
+            handles[n] = g_slots[i].handle;
+            idx[n++] = i;
+        }
+    pthread_mutex_unlock(&g_lock);
+    if (!n || !b || !b->owners) return 0;
+    /* Keep the companion up while guests' pads are open (and start it): the reading needs it. */
+    if (b->hold) (void)b->hold();
+    memset(codes, 0, sizeof codes);
+    memset(owners, 0, sizeof owners);
+    rc = b->owners(handles, n, codes, owners);
+    pthread_mutex_lock(&g_lock);
+    for (int k = 0; k < n; k++) {
+        slot_t *s = &g_slots[idx[k]];
+        int ok = rc == 0 && codes[k] == 0;
+        uint32_t user = ok ? owners[k] : 0;
+        /* Still that pad (a close or another open may have come meanwhile)? */
+        if (!s->open || s->handle != handles[k]) continue;
+        if (!s->seen_ms || ok != s->seen_ok || user != s->seen_user)
+            fprintf(stderr, "[vpad] player %d: pad %d %s (0x%08x, code %d)\n", player_of(s), s->handle,
+                    !ok ? "owner unreadable" : user ? "is seated in a user" : "has nobody on it yet", (unsigned)user,
+                    rc != 0 ? rc : codes[k]);
+        s->seen_ok = ok;
+        s->seen_user = user;
+        s->seen_code = rc != 0 ? rc : codes[k];
+        s->seen_ms = now_ms > 0 ? now_ms : 1;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return rc == 0 ? n : -1;
+}
+
+void vpad_seats(vpad_seat_t out[VPAD_SLOTS]) {
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < VPAD_SLOTS; i++) {
+        const slot_t *s = &g_slots[i];
+        out[i].slot = player_of(s);
+        out[i].open = s->open;
+        out[i].handle = s->open ? s->handle : -1;
+        out[i].has_user = !s->open || !s->seen_ms || !s->seen_ok ? -1 : s->seen_user != 0;
+        out[i].user = s->open && s->seen_ok ? s->seen_user : 0;
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
+/* has_user as JSON: true, false or null (not read yet, or unreadable). */
+static const char *has_user_json(const slot_t *s) {
+    if (!s->seen_ms || !s->seen_ok) return "null";
+    return s->seen_user ? "true" : "false";
 }
 
 int vpad_open_count(void) {
@@ -845,7 +917,9 @@ int vpad_hb_json(const char *body, size_t n, long long now_ms, char *out, size_t
     } else {
         s->last_alive_ms = now_ms;
         if (live) s->last_live_ms = now_ms;
-        rc = answer(cap, snprintf(out, cap, "{\"ok\":true,\"neutral\":%s}", s->neutral ? "true" : "false"));
+        rc = answer(cap, snprintf(out, cap, "{\"ok\":true,\"neutral\":%s,\"has_user\":%s,\"user\":%u,\"seen_ms\":%lld}",
+                                  s->neutral ? "true" : "false", has_user_json(s),
+                                  (unsigned)(s->seen_ok ? s->seen_user : 0), s->seen_ms ? now_ms - s->seen_ms : -1LL));
     }
     pthread_mutex_unlock(&g_lock);
     return rc;
@@ -914,11 +988,12 @@ int vpad_status_json(long long now_ms, char *out, size_t cap) {
             w = snprintf(out + len, cap - len,
                          "%s{\"slot\":%d,\"player\":%d,\"open\":true,\"owner\":\"%08x\",\"user\":%u,\"since_ms\":%lld,"
                          "\"last_state_ms\":%lld,\"neutral\":%s,\"neutral_ms\":%lld,\"bound\":%u,\"taken\":%u,\"refused\":%u,"
-                         "\"last_err\":%d}",
+                         "\"last_err\":%d,\"has_user\":%s,\"seen_user\":%u,\"seen_ms\":%lld,\"seen_code\":%d}",
                          i ? "," : "", player_of(s), player_of(s), (unsigned)token_hash(s->token), (unsigned)s->user,
                          now_ms - s->opened_ms, s->last_state_ms < 0 ? -1LL : now_ms - s->last_state_ms,
                          s->neutral ? "true" : "false", s->neutral ? now_ms - s->neutral_ms : 0LL, (unsigned)s->bound,
-                         s->taken, s->refused, s->last_err);
+                         s->taken, s->refused, s->last_err, has_user_json(s), (unsigned)(s->seen_ok ? s->seen_user : 0),
+                         s->seen_ms ? now_ms - s->seen_ms : -1LL, s->seen_code);
         else
             w = snprintf(out + len, cap - len, "%s{\"slot\":%d,\"player\":%d,\"open\":false}", i ? "," : "",
                          player_of(s), player_of(s));

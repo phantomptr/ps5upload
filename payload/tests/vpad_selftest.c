@@ -422,7 +422,7 @@ static void test_watchdog_by_hand(void) {
     CHECK(vpad_tick(t0 + 1401) == 1 && block_is_neutral(f_pads[h].block) && f_pads[h].inserts == 3);
     CHECK(vpad_tick(t0 + 1500) == 0 && vpad_tick(t0 + 5000) == 0 && f_pads[h].inserts == 3);
     CHECK(vpad_status_json(t0 + 5000, g_out, sizeof g_out) > 0 && HAS("\"neutral\":true,\"neutral_ms\":3599"));
-    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", t0 + 5000) > 0 && strcmp(g_out, "{\"ok\":true,\"neutral\":true}") == 0);
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", t0 + 5000) > 0 && strcmp(g_out, "{\"ok\":true,\"neutral\":true,\"has_user\":null,\"user\":0,\"seen_ms\":-1}") == 0);
     /* the next state takes over again */
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":2,\"buttons\":16384}", t0 + 6000) > 0 && HAS("\"applied\":true"));
     CHECK(rd32(f_pads[h].block + 0x0C) == VPAD_BTN_CROSS);
@@ -476,13 +476,13 @@ static void test_close_output_status(void) {
     CHECK(HAS("{\"ok\":true,\"slots\":[{\"slot\":2,\"player\":2,\"open\":false},{\"slot\":3,\"player\":3,\"open\":false},"
               "{\"slot\":4,\"player\":4,\"open\":true,\"owner\":\""));
     CHECK(HAS("\"user\":9,\"since_ms\":500,\"last_state_ms\":300,\"neutral\":false,\"neutral_ms\":0,\"bound\":0,"
-              "\"taken\":1,\"refused\":0,\"last_err\":0}]}"));
+              "\"taken\":1,\"refused\":0,\"last_err\":0,\"has_user\":null,\"seen_user\":0,\"seen_ms\":-1,\"seen_code\":0}]}"));
     /* a state the console refuses is counted with its errno (the helper log says so too) */
     f_insert_err = -EIO;
     CHECK(vstate("{\"slot\":4,\"token\":\"" TOK_A "\",\"seq\":2}", 1300) > 0 && HAS("vpad_failed"));
     CHECK(vstate("{\"slot\":4,\"token\":\"" TOK_A "\",\"seq\":3}", 1300) > 0 && HAS("vpad_failed"));
     f_insert_err = 0;
-    CHECK(vpad_status_json(1500, g_out, sizeof g_out) > 0 && HAS("\"taken\":1,\"refused\":2,\"last_err\":-5}]}"));
+    CHECK(vpad_status_json(1500, g_out, sizeof g_out) > 0 && HAS("\"taken\":1,\"refused\":2,\"last_err\":-5,\"has_user\":null"));
     CHECK(!HAS(TOK_A) && !HAS("0123456789")); /* the token never shows */
     {
         char tiny[16];
@@ -611,7 +611,23 @@ static int fb_bind(int handle, uint32_t user, uint32_t age_ms, int *code, uint32
 static void fb_forget(int handle) {
     if (fb_nforgot < 8) fb_forgot[fb_nforgot++] = handle;
 }
-static const vpad_binder_t FB = {fb_hold_fn, fb_signed_in, fb_bind, fb_forget};
+/* Who the console has on each pad (the companion's OWNERS): by handle; fo_rc a failed read. */
+static uint32_t fo_owner[MAXH];
+static int fo_code[MAXH], fo_rc, fo_reads, fo_last_n, fo_stop_in_read;
+static int fb_owners(const int *handles, int n, int *codes, uint32_t *owners) {
+    fo_reads++;
+    fo_last_n = n;
+    if (fo_stop_in_read) vpad_stop();
+    if (fo_rc) return fo_rc;
+    for (int i = 0; i < n; i++) {
+        CHECK(handles[i] > 0 && handles[i] < MAXH);
+        codes[i] = fo_code[handles[i]];
+        owners[i] = fo_owner[handles[i]];
+    }
+    return 0;
+}
+static const vpad_binder_t FB = {fb_hold_fn, fb_signed_in, fb_bind, fb_forget, fb_owners};
+static const vpad_binder_t FB_NO_READ = {fb_hold_fn, fb_signed_in, fb_bind, fb_forget, NULL};
 
 static void fb_reset(void) {
     fb_hold = "running";
@@ -712,6 +728,78 @@ static void test_bind(void) {
     fresh();
 }
 
+/* Who is on each pad: nothing known before a reading (has_user null, user 0, seen_ms -1); nobody
+ * picked yet (false); a user picked (true, that user); a failed read is null again; a pad closed
+ * meanwhile keeps nothing; the readings ride in vpad.hb, vpad.status and vpad_seats, and the
+ * companion is held for each reading. */
+static void test_owners(void) {
+    int h2, h3;
+    vpad_seat_t seats[VPAD_SLOTS];
+    fresh();
+    fb_reset();
+    memset(fo_owner, 0, sizeof fo_owner);
+    memset(fo_code, 0, sizeof fo_code);
+    fo_rc = fo_reads = fo_stop_in_read = 0;
+    vpad_set_binder(&FB);
+    CHECK(vpad_read_owners(100) == 0 && fo_reads == 0); /* no pad: nothing asked */
+    CHECK(vopen("{\"slot\":2,\"token\":\"" TOK_A "\"}", 0) > 0);
+    h2 = handle_from_answer();
+    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\"}", 0) > 0);
+    h3 = handle_from_answer();
+    /* not read yet */
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 10) > 0 &&
+          HAS("\"has_user\":null,\"user\":0,\"seen_ms\":-1"));
+    CHECK(vpad_status_json(10, g_out, sizeof g_out) > 0 && HAS("\"has_user\":null,\"seen_user\":0,\"seen_ms\":-1"));
+    /* nobody picked on either */
+    fb_holds = 0;
+    CHECK(vpad_read_owners(1000) == 2 && fo_last_n == 2 && fb_holds == 1);
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 1250) > 0 &&
+          HAS("\"has_user\":false,\"user\":0,\"seen_ms\":250"));
+    /* a user picked on player 3's pad */
+    fo_owner[h3] = 0x2000;
+    CHECK(vpad_read_owners(2000) == 2);
+    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 2000) > 0 && HAS("\"has_user\":true,\"user\":8192,\"seen_ms\":0"));
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 2000) > 0 && HAS("\"has_user\":false"));
+    CHECK(vpad_status_json(2000, g_out, sizeof g_out) > 0 &&
+          HAS("\"has_user\":true,\"seen_user\":8192,\"seen_ms\":0,\"seen_code\":0") &&
+          HAS("\"has_user\":false,\"seen_user\":0,\"seen_ms\":0,\"seen_code\":0"));
+    vpad_seats(seats);
+    CHECK(seats[0].slot == 2 && seats[0].open && seats[0].handle == h2 && seats[0].has_user == 0 && seats[0].user == 0);
+    CHECK(seats[1].slot == 3 && seats[1].open && seats[1].has_user == 1 && seats[1].user == 0x2000);
+    CHECK(seats[2].slot == 4 && !seats[2].open && seats[2].handle == -1 && seats[2].has_user == -1);
+    /* one pad the bus does not answer for: that one is unknown, the other still read */
+    fo_code[h2] = (int)0x809b0005u;
+    CHECK(vpad_read_owners(3000) == 2);
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 3000) > 0 && HAS("\"has_user\":null,\"user\":0"));
+    CHECK(vpad_status_json(3000, g_out, sizeof g_out) > 0 && HAS("\"seen_code\":-2137325563"));
+    fo_code[h2] = 0;
+    /* the companion away: every pad unknown, with its code */
+    fo_rc = -20;
+    CHECK(vpad_read_owners(4000) == -1);
+    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 4000) > 0 && HAS("\"has_user\":null,\"user\":0"));
+    CHECK(vpad_status_json(4000, g_out, sizeof g_out) > 0 && HAS("\"seen_code\":-20"));
+    fo_rc = 0;
+    CHECK(vpad_read_owners(5000) == 2);
+    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 5000) > 0 && HAS("\"has_user\":true,\"user\":8192"));
+    /* a pad that goes while the companion answers keeps nothing; a new pad in that slot starts unknown */
+    fo_stop_in_read = 1;
+    (void)vpad_read_owners(6000);
+    fo_stop_in_read = 0;
+    CHECK(vpad_open_count() == 0);
+    fresh();
+    vpad_set_binder(&FB);
+    CHECK(vopen("{\"slot\":3,\"token\":\"" TOK_B "\"}", 0) > 0);
+    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 10) > 0 && HAS("\"has_user\":null"));
+    /* a binder that cannot read (an older companion build): nothing asked, still null */
+    vpad_set_binder(&FB_NO_READ);
+    fo_reads = 0;
+    CHECK(vpad_read_owners(7000) == 0 && fo_reads == 0);
+    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 7000) > 0 && HAS("\"has_user\":null"));
+    (void)h2;
+    vpad_set_binder(NULL);
+    fresh();
+}
+
 int main(void) {
     vpad_test_no_watchdog(1);
     test_encode();
@@ -725,6 +813,7 @@ int main(void) {
     test_watchdog_thread();
     test_threads();
     test_bind();
+    test_owners();
     if (failures) {
         fprintf(stderr, "vpad selftest: %d failure(s)\n", failures);
         return 1;

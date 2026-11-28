@@ -152,7 +152,10 @@ enum {
     R_MESH,
     R_FWD_OPEN,
     R_FWD_GET,
-    R_FWD_CLOSE
+    R_FWD_CLOSE,
+    R_ROOM,
+    R_GRANTS,
+    R_INTENT
 };
 
 uint32_t app_api_tailnet_ip(const char *s) {
@@ -192,6 +195,10 @@ static const struct {
     { "POST", "/v1/tailnet/forward", R_FWD_OPEN },
     { "GET", "/v1/tailnet/forward", R_FWD_GET },
     { "POST", "/v1/tailnet/forward/close", R_FWD_CLOSE },
+    { "GET", "/v1/room", R_ROOM },
+    { "GET", "/v1/play/grants", R_GRANTS },
+    { "POST", "/v1/play/grants", R_GRANTS },
+    { "GET", "/v1/intent", R_INTENT },
 };
 
 /* The route for (method, path): its id, 0 unknown path, -1 known path with another method. */
@@ -224,14 +231,49 @@ static int rp_answer(const app_api_ops_t *ops, char *out, size_t cap) {
     return k;
 }
 
-/* {"helper":{"version"},"rp":..,"mesh":..,"forward":..}: a part that cannot be read is null. */
+/* /v1/room's whole answer into out; with no op, the empty one. */
+static int room_answer(const app_api_ops_t *ops, char *out, size_t cap) {
+    if (ops->room) return ops->room(ops->ctx, out, cap);
+    return snprintf(out, cap, "{\"room\":null,\"rooms\":[]}");
+}
+
+/* Only the "room" object of /v1/room (for /v1/status): -1 when there is none (written as null). */
+static int room_value(const app_api_ops_t *ops, char *out, size_t cap) {
+    const char *v, *p;
+    int n = room_answer(ops, out, cap), depth = 0, in_str = 0;
+    size_t i, len;
+    if (n <= 0 || (size_t)n >= cap) return -1;
+    p = strstr(out, "\"room\":");
+    if (!p) return -1;
+    v = p + 7;
+    if (*v != '{') return -1;
+    /* the object's end: balanced braces outside strings */
+    for (i = 0; v[i]; i++) {
+        char c = v[i];
+        if (in_str) {
+            if (c == '\\' && v[i + 1]) i++;
+            else if (c == '"') in_str = 0;
+            continue;
+        }
+        if (c == '"') in_str = 1;
+        else if (c == '{') depth++;
+        else if (c == '}' && --depth == 0) break;
+    }
+    if (!v[i]) return -1;
+    len = i + 1;
+    memmove(out, v, len);
+    out[len] = 0;
+    return (int)len;
+}
+
+/* {"helper":{"version"},"rp":..,"mesh":..,"forward":..,"room":..}: a part that cannot be read is null. */
 static int status_answer(const app_api_ops_t *ops, char *out, size_t cap) {
     char *part = malloc(APP_API_OUT_MAX), ver[96];
     size_t at = 0;
     int k;
     if (!part) return -1;
     webui_json_escape(ver, sizeof ver, ops->version ? ops->version : "", strlen(ops->version ? ops->version : ""));
-    k = snprintf(out, cap, "{\"helper\":{\"version\":\"%s\"},\"rp\":", ver);
+    k = snprintf(out, cap, "{\"helper\":{\"version\":\"%s\",\"api\":%d},\"rp\":", ver, APP_API_VERSION);
     if (k < 0 || (size_t)k >= cap) goto fail;
     at = (size_t)k;
 #define APPEND_PART(call, key)                                                         \
@@ -247,7 +289,8 @@ static int status_answer(const app_api_ops_t *ops, char *out, size_t cap) {
     } while (0)
     APPEND_PART(rp_answer(ops, part, APP_API_OUT_MAX), ",\"mesh\":");
     APPEND_PART(ops->mesh ? ops->mesh(ops->ctx, part, APP_API_OUT_MAX) : -1, ",\"forward\":");
-    APPEND_PART(ops->forward_status ? ops->forward_status(ops->ctx, part, APP_API_OUT_MAX) : -1, "}");
+    APPEND_PART(ops->forward_status ? ops->forward_status(ops->ctx, part, APP_API_OUT_MAX) : -1, ",\"room\":");
+    APPEND_PART(room_value(ops, part, APP_API_OUT_MAX), "}");
 #undef APPEND_PART
     out[at] = 0;
     free(part);
@@ -355,6 +398,19 @@ size_t app_api_handle(const char *req, size_t len, unsigned port, const app_api_
         break;
     case R_FWD_CLOSE:
         if (ops->forward_close) n = ops->forward_close(ops->ctx, b, APP_API_OUT_MAX);
+        break;
+    case R_ROOM: n = room_answer(ops, b, APP_API_OUT_MAX); break;
+    case R_INTENT:
+        n = ops->intent_take ? ops->intent_take(ops->ctx, b, APP_API_OUT_MAX)
+                             : snprintf(b, APP_API_OUT_MAX, "{\"intent\":null}");
+        break;
+    case R_GRANTS:
+        if (ops->grants_allow && !ops->grants_allow(ops->ctx)) {
+            free(b);
+            return respond_err(out, cap, 429, "slow_down");
+        }
+        n = ops->grants_take ? ops->grants_take(ops->ctx, b, APP_API_OUT_MAX)
+                             : snprintf(b, APP_API_OUT_MAX, "{\"grants\":[]}");
         break;
     default: break;
     }

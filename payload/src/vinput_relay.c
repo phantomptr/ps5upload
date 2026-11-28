@@ -740,6 +740,39 @@ void vinput_relay_forget(uint32_t device) {
     pthread_mutex_unlock(&g_mu);
 }
 
+int vinput_relay_owners(const uint32_t *devices, int n, int32_t *sce, uint32_t *owner) {
+    uint8_t p[1 + 4 * VWIRE_OWNERS_MAX], x[VWIRE_MAX_PAYLOAD];
+    size_t got = 0;
+    int rc;
+    if (n < 1 || n > VWIRE_OWNERS_MAX) return VWIRE_RC_BAD_REQUEST;
+    for (int i = 0; i < n; i++) {
+        sce[i] = VWIRE_RC_FAILED;
+        owner[i] = 0;
+    }
+    p[0] = (uint8_t)n;
+    for (int i = 0; i < n; i++) vwire_put32(p + 1 + 4 * i, devices[i]);
+    pthread_mutex_lock(&g_mu);
+    if (g_st != ST_RUNNING) {
+        pthread_mutex_unlock(&g_mu);
+        return VRELAY_BIND_NOT_RUNNING;
+    }
+    if (!g_mbus) {
+        pthread_mutex_unlock(&g_mu);
+        return VWIRE_RC_UNSUPPORTED;
+    }
+    rc = call_locked(VWIRE_OWNERS, p, 1 + 4 * (size_t)n, x, sizeof x, &got);
+    pthread_mutex_unlock(&g_mu);
+    if (rc == IO_ERR) return VRELAY_BIND_LOST;
+    if (rc != VWIRE_RC_OK) return rc;
+    /* The answer's payload after the rc: n x (sce, owner). */
+    if (got < 8 * (size_t)n) return VWIRE_RC_FAILED;
+    for (int i = 0; i < n; i++) {
+        sce[i] = (int32_t)vwire_get32(x + 8 * i);
+        owner[i] = vwire_get32(x + 8 * i + 4);
+    }
+    return VWIRE_RC_OK;
+}
+
 int vinput_relay_pid(void) {
     int pid;
     pthread_mutex_lock(&g_mu);

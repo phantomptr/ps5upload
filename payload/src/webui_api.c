@@ -61,6 +61,8 @@
 #include "webui_tile.h"
 #include "ava1_thread.h"
 #include "play_app.h"
+#include "play_host.h"
+#include "mesh.h"
 #include "register.h"
 
 #define API_OUT_MAX (256u * 1024u)   /* an AVA1 reply's ceiling (the server's RPC_OUT_MAX) */
@@ -1333,6 +1335,37 @@ static void r_jobs_status(const char *b, size_t n, uint8_t *out, int fd) {
 }
 
 /* APP_LIFECYCLE kill, as the engine sends it: {"action":"kill","app_id":N}. */
+/* While a Play Room runs on this console (play_host.h), ending the game ends it for every player
+ * too: a close or a kill must say it knows ("room_ok":true, the page asked naming the players).
+ * Without it (an older stored page, a script): 409 room_active with who plays, so the page can ask.
+ * 1 when refused (answered). */
+static int room_refuses(const char *b, size_t n, int fd) {
+    static const char head[] = "{\"error\":\"room_active\",";
+    const size_t hl = sizeof head - 1; /* 23 */
+    int ok = 0, playing = 0;
+    char *json;
+    int jn;
+    if (webui_json_bool(b, n, "room_ok", &ok) == 1 && ok) return 0;
+    if (!play_room_active((uint64_t)mono_ms(), &playing)) return 0;
+    json = malloc(PLAY_HOST_OUT_MAX + 64);
+    if (!json) {
+        send_error(fd, 409, "room_active", 11);
+        return 1;
+    }
+    play_host_set_lookup(mesh_engine_info);
+    /* The room answer written one byte before the head ends, then its own "{" covered by the head:
+     * {"error":"room_active","room":...,"rooms":[...]} */
+    jn = play_room_json((uint64_t)mono_ms(), json + hl - 1, PLAY_HOST_OUT_MAX + 64 - hl);
+    if (jn > 1) {
+        memcpy(json, head, hl);
+        send_json(fd, 409, json, hl - 1 + (size_t)jn);
+    } else {
+        send_error(fd, 409, "room_active", 11);
+    }
+    free(json);
+    return 1;
+}
+
 static void r_app_close(const char *b, size_t n, uint8_t *out, int fd) {
     char req[64];
     const uint8_t *t;
@@ -1343,6 +1376,7 @@ static void r_app_close(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_app_id");
         return;
     }
+    if (room_refuses(b, n, fd)) return;
     k = snprintf(req, sizeof req, "{\"action\":\"kill\",\"app_id\":%lu}", (unsigned long)app_id);
     st = call_text(AVA1_METHOD_APP_LIFECYCLE, req, (size_t)k, out, &ol, &t, &tl);
     if (st != AVA1_STATUS_OK) send_status_error(fd, st, out, ol);
@@ -1968,6 +2002,49 @@ static void *play_job(void *arg) {
     return NULL;
 }
 
+/* {} -> play_room_json: the Play Room an engine hosts on this console, read only (Minion's "Your
+ * room" card; the room's rules come from the engine, play_host.h). */
+static void r_room(const char *b, size_t n, uint8_t *out, int fd) {
+    char *json = malloc(PLAY_HOST_OUT_MAX);
+    int jn;
+    (void)b;
+    (void)n;
+    (void)out;
+    if (!json) {
+        send_error(fd, 500, "out_of_memory", 13);
+        return;
+    }
+    play_host_set_lookup(mesh_engine_info);
+    jn = play_room_json((uint64_t)mono_ms(), json, PLAY_HOST_OUT_MAX);
+    if (jn < 0) send_error(fd, 500, "internal", 8);
+    else send_json(fd, 200, json, (size_t)jn);
+    free(json);
+}
+
+/* {intent?: "join"|"host"|"rooms"} -> {}: opens PS5Upload Play, at that screen when the app reads the
+ * intent (GET 127.0.0.1:9181/v1/intent). Refused like /api/apps/launch while another game runs
+ * (409 other_game_running): opening it would close that game. */
+static void r_play_app_open(const char *b, size_t n, uint8_t *out, int fd) {
+    char intent[16] = "", req[64];
+    const uint8_t *t;
+    size_t ol, tl;
+    int k, st;
+    if (webui_json_str(b, n, "intent", intent, sizeof intent) < 0 ||
+        (intent[0] && strcmp(intent, "join") != 0 && strcmp(intent, "host") != 0 && strcmp(intent, "rooms") != 0)) {
+        send_bad(fd, "bad_intent");
+        return;
+    }
+    if (game_running(out, PLAY_APP_TITLE_ID, 1)) {
+        send_error(fd, 409, "other_game_running", 18);
+        return;
+    }
+    if (intent[0]) (void)play_intent_set(intent, (uint64_t)mono_ms());
+    k = snprintf(req, sizeof req, "{\"title_id\":\"%s\"}", PLAY_APP_TITLE_ID);
+    st = call_text(AVA1_METHOD_APP_LAUNCH, req, (size_t)k, out, &ol, &t, &tl);
+    if (st != AVA1_STATUS_OK) send_status_error(fd, st, out, ol);
+    else send_json(fd, 200, "{}", 2);
+}
+
 /* {} -> {"installed":{"version","path","registered"}|null,"staged":{"version"}|null,"store_managed",
  * "store_busy","running","install":{"state","done","total","error"?,"registered_by"?,"pending"?,
  * "register_error"?}} */
@@ -2114,6 +2191,7 @@ static void r_proc_kill(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_pid");
         return;
     }
+    if (room_refuses(b, n, fd)) return;
     st = call_text(AVA1_METHOD_PROC_PROCESS_LIST, NULL, 0, out, &ol, &t, &tl);
     if (st != AVA1_STATUS_OK) {
         send_status_error(fd, st, out, ol);
@@ -3828,6 +3906,8 @@ static const struct {
     { "/api/apps/register", r_apps_register },
     { "/api/play-app", r_play_app },
     { "/api/play-app/install", r_play_app_install },
+    { "/api/play-app/open", r_play_app_open },
+    { "/api/room", r_room },
     { "/api/cleanup/scan", r_cleanup_scan },
     { "/api/cleanup/status", r_cleanup_status },
     { "/api/cleanup/apply", r_cleanup_apply },

@@ -1119,7 +1119,7 @@ test-payload: payload
 		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-webui-server-selftest \
 		$(PAYLOAD_DIR)/tests/webui_server_selftest.c $(PAYLOAD_DIR)/src/webui_server.c \
-		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c
+		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c $(PAYLOAD_DIR)/src/rate_gate.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-webui-server-selftest
 	@echo "✓ silent, half-sent and flooding web clients never stall the helper; an idle connection holds no worker; transfers leave one worker for the page"
 	@echo "Running webui codec self-test (host build)..."
@@ -1208,6 +1208,20 @@ test-payload: payload
 		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-api-selftest
 	@echo "✓ the app API answers only 127.0.0.1/localhost Hosts with no Origin, within its size limit; Remote Play turns on only when confirmed"
+	@echo "Running Play Rooms hosted-by marker + one-time grant self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-play-host-selftest \
+		$(PAYLOAD_DIR)/tests/play_host_selftest.c $(PAYLOAD_DIR)/src/play_host.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-play-host-selftest
+	@echo "✓ a room is kept per engine, replaced whole, gone after its time, bounded and cleaned; a grant is handed out once and expires"
+	@echo "Running the helper's request-rate gate self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -pthread \
+		-I$(PAYLOAD_DIR)/include -o $(SELFTEST_DIR)/ps5upload-rate-gate-selftest \
+		$(PAYLOAD_DIR)/tests/rate_gate_selftest.c $(PAYLOAD_DIR)/src/rate_gate.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-rate-gate-selftest
+	@echo "✓ a person's pace is always served; only a source that keeps going while told to wait waits longer, never banned"
 	@echo "Running PS5Upload Play install self-test (host build, ASan + UBSan)..."
 	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
 		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \

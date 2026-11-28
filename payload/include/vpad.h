@@ -37,9 +37,14 @@
  *               err vpad_not_open, vpad_not_owner, vpad_failed (+code), bad_request.
  *   vpad.states {"items":[<vpad.state bodies>, at most VPAD_MAX_BATCH]}
  *               -> {"ok":true,"applied":N,"stale":M,"failed":[{"slot":S,"err":"<token>"}..]}
- *   vpad.hb     {"slot":S,"token":T[,"live":true]} -> {"ok":true,"neutral":B}
+ *   vpad.hb     {"slot":S,"token":T[,"live":true]}
+ *               -> {"ok":true,"neutral":B,"has_user":B|null,"user":U,"seen_ms":N}
  *               keeps the pad (the 90 s timer). "live":true also says the guest is still there with
  *               its last state (the 400 ms timer), for an engine that sends no unchanged states.
+ *               has_user/user: the console user the pad is seated in now, read back about once a
+ *               second (see "Who is on each pad" below): true with that user, false (user 0) when
+ *               nobody has been picked on it yet, null when it cannot be read (no companion yet,
+ *               or the read failed: user 0). seen_ms: how old that reading is (-1: none yet).
  *   vpad.hb     {"companion":true} -> {"ok":true,"companion":"<state>","bind":B}
  *               Play Together is open with a profile chosen: the companion is kept up (started if it
  *               is not) for a minute, so a bind never waits for its start. B: binds can be done now.
@@ -49,8 +54,18 @@
  *               the rumble and light bar the console last asked of that pad. err vpad_not_open,
  *               vpad_failed (+code).
  *   vpad.status {} -> {"ok":true,"slots":[{"slot":S,"player":S,"open":B[,"owner":"<hash>","user":U,
- *                "since_ms":N,"last_state_ms":N|-1,"neutral":B,"neutral_ms":N,"bound":U]}..]}
- *               ages in ms; owner is a hash of the token (never the token); bound the user it is seated in (0: none).
+ *                "since_ms":N,"last_state_ms":N|-1,"neutral":B,"neutral_ms":N,"bound":U,
+ *                "has_user":B|null,"seen_user":U,"seen_ms":N|-1,"seen_code":C]}..]}
+ *               ages in ms; owner is a hash of the token (never the token); user the one the pad
+ *               was made for; bound the user it was seated in by a bind (0: none); has_user /
+ *               seen_user the user the console has on it now (as vpad.hb's has_user / user),
+ *               seen_code the last reading's answer (0 read, else the Sony or companion code).
+ *
+ * Who is on each pad: while any pad is open, the watchdog thread asks the companion about once a
+ * second (VPAD_OWNER_READ_MS) who each open pad is seated in (binder->owners: the companion's
+ * OWNERS, sceMbusGetDeviceInfo_'s owner, include/vinput_wire.h), keeping it up meanwhile
+ * (binder->hold). The engine drives Play Together's "PS works once a user is picked" rule and finds
+ * guests stuck at "Who's using this controller?" with it (has_user false for long).
  *
  * Watchdog (vpad_tick, from a thread that runs while any pad is open): a slot with no state (and no
  * "live" hb) for VPAD_NEUTRAL_MS gets one neutral state (no stuck stick or button while a guest's
@@ -75,9 +90,12 @@
 #define VPAD_IDLE_DELETE_MS 90000LL
 /* How often the watchdog looks: a silent pad is at rest 400-450 ms after its last state. */
 #define VPAD_WATCHDOG_STEP_MS 50
+/* How often the watchdog reads who each open pad is seated in, and how long the companion is kept
+ * up for that per read (binder->hold's lease is the caller's: see runtime.c). */
+#define VPAD_OWNER_READ_MS 1000LL
 /* A request body's bound (a full batch with touch and motion fits), and every answer's. */
 #define VPAD_REQ_MAX 8192u
-#define VPAD_OUT_MAX 1024u
+#define VPAD_OUT_MAX 2048u
 
 /* The device's state and description blocks, and its ioctls on /dev/hid. */
 #define VPAD_BLOCK 0xA8
@@ -149,6 +167,11 @@ typedef struct {
     int (*bind)(int handle, uint32_t user, uint32_t age_ms, int *code, uint32_t *owner);
     /* The pad was removed: no longer watched. Called with vpad's lock held. */
     void (*forget)(int handle);
+    /* Who each of `n` pads is seated in now (the companion's OWNERS, read only): 0 with codes[i]
+     * (0: read) and owners[i] (0: nobody yet), else nonzero (the companion is not there, or cannot
+     * read). Called outside vpad's lock, about once a second while a pad is open. NULL: no readback
+     * (has_user stays null). */
+    int (*owners)(const int *handles, int n, int *codes, uint32_t *owners);
 } vpad_binder_t;
 
 /* The binder in use (NULL: none, a vpad.open with bind_user is refused vpad_bind_unavailable). */
@@ -175,6 +198,21 @@ int vpad_status_json(long long now_ms, char *out, size_t cap);
 /* The watchdog's step at now_ms: rests silent pads, removes abandoned ones. Returns how many pads it
  * rested plus 100 x how many it removed (tests). */
 int vpad_tick(long long now_ms);
+/* Reads who each open pad is seated in (binder->owners) and keeps the answers (the watchdog does
+ * this every VPAD_OWNER_READ_MS; tests call it by hand). Takes the lock itself; the binder is called
+ * outside it. Returns how many pads were read, -1 when the binder could not read. */
+int vpad_read_owners(long long now_ms);
+
+/* One pad as pads.list sees it. */
+typedef struct {
+    int slot;     /* 2..4 */
+    int open;
+    int handle;
+    int has_user; /* 1, 0, or -1 not known */
+    uint32_t user;
+} vpad_seat_t;
+/* The VPAD_SLOTS slots, in order. */
+void vpad_seats(vpad_seat_t out[VPAD_SLOTS]);
 /* How many pads are open. */
 int vpad_open_count(void);
 /* Removes every pad (the helper is stopping). Later opens answer vpad_stopping. Safe any time. */

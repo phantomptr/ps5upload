@@ -206,5 +206,9 @@ MGMT_H1(AVA1_METHOD_VPAD_HB, MGMT_FRAME_VPAD_HB, MGMT_FRAME_VPAD_HB_ACK, 0, hand
 MGMT_H1(AVA1_METHOD_VPAD_CLOSE, MGMT_FRAME_VPAD_CLOSE, MGMT_FRAME_VPAD_CLOSE_ACK, 0, handle_vpad_close, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_VPAD_OUTPUT, MGMT_FRAME_VPAD_OUTPUT, MGMT_FRAME_VPAD_OUTPUT_ACK, 0, handle_vpad_output, mgmt_call_text_keep)
 MGMT_H0(AVA1_METHOD_VPAD_STATUS, MGMT_FRAME_VPAD_STATUS, MGMT_FRAME_VPAD_STATUS_ACK, 0, handle_vpad_status, mgmt_call_text)
+/* ---- Play Rooms (13.0.0): the console's controllers, the hosted-by marker, PS5Upload Play's one-time grants (vpad.c, play_host.c; memory only, no Sony call) ---- */
+MGMT_H0(AVA1_METHOD_PADS_LIST, MGMT_FRAME_PADS_LIST, MGMT_FRAME_PADS_LIST_ACK, 0, handle_pads_list, mgmt_call_text)
+MGMT_H1(AVA1_METHOD_PLAY_ROOM, MGMT_FRAME_PLAY_ROOM, MGMT_FRAME_PLAY_ROOM_ACK, 0, handle_play_room, mgmt_call_text_keep)
+MGMT_H1(AVA1_METHOD_PLAY_GRANT, MGMT_FRAME_PLAY_GRANT, MGMT_FRAME_PLAY_GRANT_ACK, 0, handle_play_grant, mgmt_call_text_keep)
 /* ---- the running game's frame count, for the app's sampled frame rate (game_fps.c, #774) ---- */
 MGMT_H0(AVA1_METHOD_HW_FPS, MGMT_FRAME_HW_FPS, MGMT_FRAME_HW_FPS_ACK, 0, handle_hw_fps, mgmt_call_text)

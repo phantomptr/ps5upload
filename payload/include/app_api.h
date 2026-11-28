@@ -10,9 +10,18 @@
  *   - a request is at most APP_API_REQ_MAX bytes (413 too_large) and arrives within a short deadline.
  *
  * JSON in and out, versioned paths:
- *   GET  /v1/version          {"helper":"<version>","api":1}
- *   GET  /v1/status           {"helper":{"version"},"rp":<GET /v1/rp or null>,"mesh":<GET /v1/mesh or null>,
- *                              "forward":<the forward's state, app_api_server.c>}
+ *   GET  /v1/version          {"helper":"<version>","api":2}
+ *   GET  /v1/status           {"helper":{"version","api"},"rp":<GET /v1/rp or null>,"mesh":<GET /v1/mesh or null>,
+ *                              "forward":<the forward's state, app_api_server.c>,"room":<GET /v1/room's "room">}
+ *   GET  /v1/room             {"room": V | null, "rooms": [V, ...]}: the Play Room an engine hosts on
+ *                             this console (play_host.h: name, visibility, game, players, playing,
+ *                             asks, hosted_from, engine_id, ...); read only
+ *   GET  /v1/play/grants      {"grants":[{"engine_id","name","kind","addr","port","app_ws","grant",
+ *   POST /v1/play/grants       "expires_s"}]}: the one-time pairing grants engines left for PS5Upload
+ *                             Play (play_host.h); each is handed out once, then gone. At most
+ *                             APP_API_GRANT_READS reads a minute (429 slow_down past that)
+ *   GET  /v1/intent           {"intent":"join"|"host"|"rooms"|null}: where Minion asked the app to
+ *                             open ("Join a friend"), taken once, a minute at most (play_host.h)
  *   GET  /v1/rp               Remote Play readiness (app_api_rp_summary)
  *   POST /v1/rp/enable        {"confirm":true} -> the readiness after turning Remote Play on (the
  *                             system service, then this user's permission where the firmware has
@@ -32,7 +41,8 @@
  *                             {"state":"tailnet_off"}
  *   POST /v1/tailnet/forward/close  {"ok":true}
  * Errors are {"error":"<token>"} with a 4xx/5xx status. Wrong method: 405 method_not_allowed;
- * unknown path: 404 not_found.
+ * unknown path: 404 not_found. Too many requests (any route, app_api_server.c's rate gate, generous
+ * enough for any app): 429 slow_down with Retry-After.
  *
  * This file is the pure part (request checks, routing, answers), host-tested with fake operations
  * (payload/tests/app_api_selftest.c); app_api_server.c is the listener and the real operations. */
@@ -42,7 +52,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define APP_API_VERSION 1
+#define APP_API_VERSION 2 /* 2: /v1/room, /v1/play/grants, "room" in /v1/status (13.0.0) */
+#define APP_API_GRANT_READS 20 /* /v1/play/grants reads a minute */
 #define APP_API_REQ_MAX 4096u   /* request line + headers + body */
 #define APP_API_BODY_MAX 1024u  /* a request body */
 #define APP_API_OUT_MAX 16384u  /* an answer's body */
@@ -67,6 +78,14 @@ typedef struct {
      * 100.64.0.0/10; port 1..65535). */
     int (*forward_open)(void *ctx, uint32_t peer, unsigned port, char *out, size_t cap, int *http);
     int (*forward_close)(void *ctx, char *out, size_t cap);
+    /* play_room_json (NULL: {"room":null,"rooms":[]}). */
+    int (*room)(void *ctx, char *out, size_t cap);
+    /* play_grants_take_json: hands every live grant out once (NULL: {"grants":[]}). */
+    int (*grants_take)(void *ctx, char *out, size_t cap);
+    /* 1 when another /v1/play/grants read may be made now (NULL: always). */
+    int (*grants_allow)(void *ctx);
+    /* play_intent_take_json (NULL: {"intent":null}). */
+    int (*intent_take)(void *ctx, char *out, size_t cap);
 } app_api_ops_t;
 
 /* "100.64.0.1" -> host order, 0 when not a dotted IPv4 in 100.64.0.0/10 (Tailscale's range). */
