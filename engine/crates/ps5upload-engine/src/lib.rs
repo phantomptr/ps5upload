@@ -142,6 +142,7 @@ mod settings_backup;
 mod share;
 mod shared_state;
 mod source_removal;
+mod space_check;
 mod state_io;
 mod tailnet_api;
 mod tailnet_discover;
@@ -13796,6 +13797,7 @@ fn build_app_and_mcp(
         .route("/api/ps5/pkg/scan-external", get(ps5_pkg_scan_external))
         .route("/api/ps5/pkg/metadata", get(ps5_pkg_metadata))
         .route("/api/ps5/list-dir", get(ps5_list_dir))
+        .route("/api/ps5/space-check", post(space_check::handler))
         .route("/api/ps5/disk-usage", post(disk_usage::start))
         .route("/api/ps5/disk-usage/{id}", get(disk_usage::status))
         .route("/api/ps5/disk-usage/{id}/cancel", post(disk_usage::cancel))

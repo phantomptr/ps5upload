@@ -524,7 +524,7 @@ describe("humanizeUninstallError", () => {
     const helper = humanizeUninstallError("engine HTTP 502: payload rejected APP_UNREGISTER: uninstall_refused:0x80b21b02");
     expect(helper).toBe(en.err_uninstall_sony_refused.replace("{code}", "0x80B21B02"));
     expect(helper).toContain("sceAppInstUtilAppUnInstall");
-    expect(helper).not.toBe(en.err_install_80b2_generic);
+    expect(helper).not.toBe(en.err_install_80b2_generic_v2);
     // Kraken Mount's remove answers with Sony's code in its own words.
     const kraken = humanizeUninstallError(
       "/api/delete/CUSA00001: Kraken Mount answered HTTP 500 (uninstall failed 0x80B2_1B02)",
@@ -533,7 +533,7 @@ describe("humanizeUninstallError", () => {
     // The shared humanizer agrees for the helper's refusal.
     expect(humanizePs5Error("uninstall_refused:0x80B21B02")).toBe(helper);
     // The install path keeps its own wording.
-    expect(humanizePs5Error("install failed 0x80B21B02")).toBe(en.err_install_80b2_generic);
+    expect(humanizePs5Error("install failed 0x80B21B02")).toBe(en.err_install_80b2_generic_v2);
   });
 
   it("words the other uninstall failures as uninstall failures", () => {

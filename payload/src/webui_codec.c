@@ -292,6 +292,8 @@ static int json_i64(const char *json, size_t n, const char *key, long long *out)
     return 1;
 }
 
+int webui_json_i64(const char *json, size_t n, const char *key, long long *out) { return json_i64(json, n, key, out); }
+
 /* ---- escaping ---- */
 
 typedef struct {
@@ -822,11 +824,58 @@ int webui_is_game_title_id(const char *tid) {
 
 int webui_tz_minutes(int tz_ok, int tz_min, int summer_ok, int summer, long *out) {
     long min;
-    if (!tz_ok || tz_min < -12 * 60 || tz_min > 14 * 60) return 0;
+    if (!tz_ok) return 0;
     min = tz_min;
+    /* Seconds instead of minutes (the key's unit is not confirmed on every firmware): every real
+     * zone is a whole quarter hour, so a value past the minutes range that is a multiple of 900
+     * inside the range as seconds can only be seconds. */
+    if (!webui_tz_offset_ok(min) && min % 900 == 0 && min >= -12L * 3600 && min <= 14L * 3600) min /= 60;
+    if (!webui_tz_offset_ok(min)) return 0;
     if (summer_ok && summer == 1) min += 60;
     *out = min;
     return 1;
+}
+
+int webui_tz_offset_ok(long min) { return min >= -12 * 60 && min <= 14 * 60; }
+
+int webui_tz_setting_ok(long min) { return webui_tz_offset_ok(min) && min % 15 == 0; }
+
+int webui_tz_kernel_minutes(long long utc, long long local, long *out) {
+    long long d = local - utc;
+    if (d % 60 != 0) return 0;
+    d /= 60;
+    if (d < -12 * 60 || d > 14 * 60 || d % 15 != 0) return 0;
+    *out = (long)d;
+    return 1;
+}
+
+int webui_tz_pick(int set_ok, long set_min, int kern_ok, long kern_min, int reg_ok, long reg_min, long *out) {
+    if (set_ok && webui_tz_setting_ok(set_min)) {
+        *out = set_min;
+        return WEBUI_TZ_SETTING;
+    }
+    if (reg_ok && !webui_tz_offset_ok(reg_min)) reg_ok = 0;
+    if (kern_ok && !webui_tz_offset_ok(kern_min)) kern_ok = 0;
+    /* The console's own conversion first. It answering UTC while the registry names a zone is the
+     * one disagreement settled the other way: a clock never given its zone reads UTC. */
+    if (kern_ok && (kern_min != 0 || !reg_ok || reg_min == 0)) {
+        *out = kern_min;
+        return WEBUI_TZ_KERNEL;
+    }
+    if (reg_ok) {
+        *out = reg_min;
+        return WEBUI_TZ_REGISTRY;
+    }
+    return WEBUI_TZ_NONE;
+}
+
+const char *webui_tz_src_name(int src) {
+    switch (src) {
+    case WEBUI_TZ_SETTING: return "setting";
+    case WEBUI_TZ_KERNEL: return "console";
+    case WEBUI_TZ_REGISTRY: return "registry";
+    default: return "none";
+    }
 }
 
 int webui_focus_running(const char *json, size_t n, char *title_id, size_t cap, uint32_t *app_id) {

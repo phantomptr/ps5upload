@@ -21,6 +21,9 @@ int webui_json_str(const char *json, size_t n, const char *key, char *out, size_
 int webui_json_u64(const char *json, size_t n, const char *key, uint64_t *out);
 /* true / false: 1 found (*out 1 or 0), 0 absent, -1 any other value. */
 int webui_json_bool(const char *json, size_t n, const char *key, int *out);
+/* A signed integer value: 1 found, 0 absent, -1 present but not an integer (a string, a fraction,
+ * an exponent, more than 18 digits). */
+int webui_json_i64(const char *json, size_t n, const char *key, long long *out);
 
 /* 1 when top-level `key` is present with the value null, else 0. */
 int webui_json_null(const char *json, size_t n, const char *key);
@@ -141,8 +144,29 @@ int webui_is_game_title_id(const char *tid);
  * offset (`tz_min`: minutes ahead of UTC, without summer time) and its summer-time flag (`summer`:
  * 1 while it is in effect, which moves the clock an hour ahead); tz_ok / summer_ok say whether each
  * could be read. 1 with *out set; 0 when the zone was not read or is no real zone (beyond -12:00 or
- * +14:00), so the page keeps the browser's own. A flag that was not read counts as no summer time. */
+ * +14:00), so the page keeps the browser's own. A flag that was not read counts as no summer time.
+ * A value that can only be seconds (a multiple of 900 past the minutes range, #978) is read as such. */
 int webui_tz_minutes(int tz_ok, int tz_min, int summer_ok, int summer, long *out);
+
+/* Whether `min` is a real zone's offset (-12:00 .. +14:00). */
+int webui_tz_offset_ok(long min);
+/* Whether `min` can be the page's time zone setting: a real offset in whole quarter hours. */
+int webui_tz_setting_ok(long min);
+/* The zone from the console's own clock conversion (#978): `local` is what the console turns the
+ * moment `utc` into (both seconds since 1970). 1 with *out set to local - utc in minutes when that
+ * is a real zone (whole quarter hours, -12:00 .. +14:00); 0 otherwise. */
+int webui_tz_kernel_minutes(long long utc, long long local, long *out);
+
+/* Where the page's time zone came from (/api/status `tz_src`, webui_tz_src_name). */
+enum { WEBUI_TZ_NONE = 0, WEBUI_TZ_SETTING, WEBUI_TZ_KERNEL, WEBUI_TZ_REGISTRY };
+/* The page's time zone (#978): the Minion setting when one is set (set_ok); else the console's own
+ * clock conversion (kern_ok); else the registry (reg_ok). The conversion answering UTC while the
+ * registry names another zone gives the registry's (a clock never given its zone reads UTC).
+ * Values that are no real zone count as not read. Returns the WEBUI_TZ_* source with *out set, or
+ * WEBUI_TZ_NONE with *out untouched. */
+int webui_tz_pick(int set_ok, long set_min, int kern_ok, long kern_min, int reg_ok, long reg_min, long *out);
+/* "setting", "console", "registry" or "none". */
+const char *webui_tz_src_name(int src);
 
 /* From a PROC_FOCUS reply ({"apps":[{"title_id":..,"app_id":..},...],"focus_app_id":N,
  * "big_app_id":N,...}): what Home shows as running (and may close). First the app that owns the

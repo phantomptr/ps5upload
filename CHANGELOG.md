@@ -14,23 +14,49 @@ What's new in ps5upload, written for humans.
 - **Minion shows how fast a copy goes.** A copy from a network share (NAS), a copy or move on the console, an extract, an install, an upload from your phone, a check and a conversion now show the current speed (MiB/s), the time elapsed and about how long is left, next to the percentage. "Stalled" appears when nothing has moved for 15 seconds.
 - In the app, the same figures for a download through Files or Games, a library move, a link download, a decompress or extract, an archive unpack, the console backup, a restore to the home screen, the app update and the speed test. A task started on the console counts its time from when it started there. The Activity panel says "Stalled" too, and a staged install's speed no longer reads nothing and then jumps.
 
+**Files**
+- **Delete the archive as it's unpacked.** Extracting on the console can now free space as it goes, so a game needs about its own size of free space instead of the archive's and its own. A split archive (`.part1.rar`, `.7z.001`, `.zip.001`…) loses each part as soon as everything in it is unpacked; the dialog says how much less space that needs. The whole archive is checked first, so a damaged one is found before anything is deleted. A single-file or solid archive is deleted once everything is out. Off unless you turn it on, since the archive can't be used again; if it stops part way, everything unpacked so far is kept. Convert shows how much less space its own "Free the archive's space" option needs, and keeps a solid multi-part RAR whole until it's all unpacked.
+
+**Save sync**
+- **Keep a game's save in step between two PS5s.** In Saves › Save sync, turn on "Keep this game's save in step" for a game. After you close it on one PS5, its save is copied to the other, as long as the game isn't running there and that save hasn't changed since the last sync. If both changed, both are backed up and you choose which to keep; nothing is overwritten without asking. A PS5 that's off or resting gets the save when it's back (it's only woken if you turn that on). Each game shows In step, Waiting, Conflict or Can't sync (with the reason), and has **Sync now**. The save that gets replaced is always backed up first. PS4 saves can't be kept in step: they can only go back to the same user on the same PS5.
+- **A game the other user hasn't saved yet.** Save sync shows **Copy to <console> (<user> has no save yet)**: the save is copied there once and made theirs, and nothing there is replaced. After that it's kept in step like the others. When it can't be done (the helper there is too old, or that user has never saved a PS5 game on that console), it says so and what to do. A game turned on before that waits, and asks which save to keep once the game saves there by itself.
+- **The PS5's own page shows save sync.** Saves on the console page lists the games kept in step for that user, where each one stands (in step, waiting for the other PS5, choose which to keep, or can't sync) and when the app last updated it. Changes are still made in the app.
+
+## 12.6.46
+
+**Installs**
+- **Deleting a package right after installing it from the console gives its space back (#979).** The installer kept the package open for 10 minutes after the install (longer if the PS5 skipped part of it), so the space stayed used after the delete. It now opens the package only while the PS5 is reading it.
+
+**Clean up**
+- **Space no file uses (#979).** For an M.2 or USB drive, **Check** compares the space the drive counts as used with what its files take, and says how much no file holds. It reads names and sizes only.
+
+**Save sync**
+- **Save sync no longer stops working until a restart** when you pressed Send while its once-a-minute check was running.
+
+## 12.6.45
+
+**PS5Upload Minion**
+- **Save backup times show the PS5's own time (#978).** On some consoles the page still showed backup times in UTC (3 hours ahead in Recife). Minion now reads the time zone the way the PS5's own clock does, and falls back to the old way when it can't. If times still look wrong, **Settings › Time zone** lets you pick your UTC offset by hand. Needs the new helper.
+
+**Play Together**
+- **When a friend's controller does nothing on "Who's using this controller?"** (reported on an early-firmware PS5), the helper log now says whether the PS5 took or refused that controller's input, so a bug report from the host shows where it stops. The friend's guide says to ask the host for one.
+
+**Installs**
+- The message for a 0x80B2 install error is in plain words now, in every language.
+
+## 12.6.44
+
 **TV mode (#976)**
 - **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
 
 **Files**
 - **Folder sizes, without scanning in the background (#974).** A folder shows its size when it's already known (for example "48.2 GiB · 2 days ago"), from "What takes space?", clean-up scans or an earlier measure. **Measure size** (a folder's menu) and **Measure everything here** measure on request, one folder at a time, pausing while anything else runs on that console; a packed game shows the space it really takes. A size is forgotten when PS5Upload changes something inside the folder. "Keep folder sizes fresh" (off by default) re-measures folders you open, at most once a day.
 - Going back in the second pane of the two-pane view highlights the folder you came from, as the PS5 side already did.
-- **Delete the archive as it's unpacked.** Extracting on the console can now free space as it goes, so a game needs about its own size of free space instead of the archive's and its own. A split archive (`.part1.rar`, `.7z.001`, `.zip.001`…) loses each part as soon as everything in it is unpacked; the dialog says how much less space that needs. The whole archive is checked first, so a damaged one is found before anything is deleted. A single-file or solid archive is deleted once everything is out. Off unless you turn it on, since the archive can't be used again; if it stops part way, everything unpacked so far is kept. Convert shows how much less space its own "Free the archive's space" option needs, and keeps a solid multi-part RAR whole until it's all unpacked.
 
 **Games**
 - **"Something wrong?" on the game page** checks the usual reasons a game won't show or start, in order: kstuff for fake packages, the mount layer, the package size limit, missing from the home screen, file permissions and free space. Each says OK, problem or can't tell, with what to do.
 - **Fake packages on firmware 11.61 to 13.60:** the install screen says they need the latest kstuff (fake-package support up to 13.60), and a launch that fails (CE-100022-5) says the same.
 - Game folders made by Convert on the PS5 can be read and started by the console.
-
-**Save sync**
-- **Keep a game's save in step between two PS5s.** In Saves › Save sync, turn on "Keep this game's save in step" for a game. After you close it on one PS5, its save is copied to the other, as long as the game isn't running there and that save hasn't changed since the last sync. If both changed, both are backed up and you choose which to keep; nothing is overwritten without asking. A PS5 that's off or resting gets the save when it's back (it's only woken if you turn that on). Each game shows In step, Waiting, Conflict or Can't sync (with the reason), and has **Sync now**. The save that gets replaced is always backed up first. PS4 saves can't be kept in step: they can only go back to the same user on the same PS5.
-- **A game the other user hasn't saved yet.** Save sync shows **Copy to <console> (<user> has no save yet)**: the save is copied there once and made theirs, and nothing there is replaced. After that it's kept in step like the others. When it can't be done (the helper there is too old, or that user has never saved a PS5 game on that console), it says so and what to do. A game turned on before that waits, and asks which save to keep once the game saves there by itself.
-- **The PS5's own page shows save sync.** Saves on the console page lists the games kept in step for that user, where each one stands (in step, waiting for the other PS5, choose which to keep, or can't sync) and when the app last updated it. Changes are still made in the app.
 
 **Save backups**
 - Network-share backups run every 10 minutes, 30 minutes, 1 hour, 6 hours or once a day (and after a game closes, as before).

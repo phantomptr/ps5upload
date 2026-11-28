@@ -697,6 +697,61 @@ static void tz_minutes(void) {
     CHECK(webui_tz_minutes(1, 841, 1, 0, &m) == 0 && m == 777);
     CHECK(webui_tz_minutes(1, -721, 1, 0, &m) == 0 && m == 777);
     CHECK(webui_tz_minutes(1, 0x7fffffff, 1, 1, &m) == 0 && m == 777);
+    /* #978: a key holding seconds is read as seconds (Recife -10800 s, India +19800 s) */
+    CHECK(webui_tz_minutes(1, -10800, 1, 0, &m) == 1 && m == -180);
+    CHECK(webui_tz_minutes(1, 19800, 1, 0, &m) == 1 && m == 330);
+    CHECK(webui_tz_minutes(1, 3600, 1, 1, &m) == 1 && m == 120);
+    m = 777;
+    CHECK(webui_tz_minutes(1, 1000, 1, 0, &m) == 0 && m == 777);   /* neither */
+    CHECK(webui_tz_minutes(1, 51300, 1, 0, &m) == 0 && m == 777);  /* +14:15 in seconds */
+}
+
+/* #978: the console's own conversion, the hand-chosen setting, and the order they win in. */
+static void tz_pick(void) {
+    long m = 777;
+    const long long now = 1795748513LL; /* 2026-11-27 03:01:53 UTC, the report's backup */
+    /* the conversion: local minus UTC */
+    CHECK(webui_tz_kernel_minutes(now, now - 3 * 3600, &m) == 1 && m == -180);
+    CHECK(webui_tz_kernel_minutes(now, now + 5 * 3600 + 45 * 60, &m) == 1 && m == 345);
+    CHECK(webui_tz_kernel_minutes(now, now, &m) == 1 && m == 0);
+    m = 777;
+    CHECK(webui_tz_kernel_minutes(now, now + 7, &m) == 0 && m == 777);          /* not whole minutes */
+    CHECK(webui_tz_kernel_minutes(now, now + 10 * 60, &m) == 0 && m == 777);    /* not a quarter hour */
+    CHECK(webui_tz_kernel_minutes(now, now + 15 * 3600, &m) == 0 && m == 777);  /* beyond +14:00 */
+    CHECK(webui_tz_kernel_minutes(now, 0, &m) == 0 && m == 777);                /* a call that wrote nothing */
+    /* the setting first, whatever the console says */
+    CHECK(webui_tz_pick(1, -180, 1, 60, 1, 60, &m) == WEBUI_TZ_SETTING && m == -180);
+    CHECK(webui_tz_pick(1, 0, 1, -180, 1, -180, &m) == WEBUI_TZ_SETTING && m == 0);
+    /* a setting that is no real offset is ignored */
+    CHECK(webui_tz_pick(1, -181, 1, -180, 0, 0, &m) == WEBUI_TZ_KERNEL && m == -180);
+    /* then the conversion: the report's console, whose registry said 0 */
+    CHECK(webui_tz_pick(0, 0, 1, -180, 1, 0, &m) == WEBUI_TZ_KERNEL && m == -180);
+    CHECK(webui_tz_pick(0, 0, 1, -180, 0, 0, &m) == WEBUI_TZ_KERNEL && m == -180);
+    CHECK(webui_tz_pick(0, 0, 1, 60, 1, 120, &m) == WEBUI_TZ_KERNEL && m == 60);
+    /* the conversion says UTC, the registry a zone: the registry's */
+    CHECK(webui_tz_pick(0, 0, 1, 0, 1, -180, &m) == WEBUI_TZ_REGISTRY && m == -180);
+    /* both UTC: UTC */
+    CHECK(webui_tz_pick(0, 0, 1, 0, 1, 0, &m) == WEBUI_TZ_KERNEL && m == 0);
+    /* no conversion (a firmware without it): the registry */
+    CHECK(webui_tz_pick(0, 0, 0, 0, 1, -180, &m) == WEBUI_TZ_REGISTRY && m == -180);
+    /* nothing: nothing, *out untouched */
+    m = 777;
+    CHECK(webui_tz_pick(0, 0, 0, 0, 0, 0, &m) == WEBUI_TZ_NONE && m == 777);
+    CHECK(webui_tz_pick(0, 0, 0, 0, 1, 99999, &m) == WEBUI_TZ_NONE && m == 777);
+    /* the setting's own check */
+    CHECK(webui_tz_setting_ok(-720) && webui_tz_setting_ok(840) && webui_tz_setting_ok(345) && webui_tz_setting_ok(0));
+    CHECK(!webui_tz_setting_ok(-735) && !webui_tz_setting_ok(855) && !webui_tz_setting_ok(-181));
+    CHECK(strcmp(webui_tz_src_name(WEBUI_TZ_SETTING), "setting") == 0);
+    CHECK(strcmp(webui_tz_src_name(WEBUI_TZ_KERNEL), "console") == 0);
+    CHECK(strcmp(webui_tz_src_name(WEBUI_TZ_REGISTRY), "registry") == 0);
+    CHECK(strcmp(webui_tz_src_name(WEBUI_TZ_NONE), "none") == 0);
+    /* the signed reader the settings use */
+    {
+        long long v = 0;
+        CHECK(webui_json_i64("{\"tz_min\":-180}", 15, "tz_min", &v) == 1 && v == -180);
+        CHECK(webui_json_i64("{\"tz_min\":\"x\"}", 14, "tz_min", &v) == -1);
+        CHECK(webui_json_i64("{\"a\":1}", 7, "tz_min", &v) == 0);
+    }
 }
 
 static void focus_running(void) {
@@ -1123,6 +1178,7 @@ int main(void) {
     kv_lines();
     fan_status();
     tz_minutes();
+    tz_pick();
     focus_running();
     focus_running_fallback_games_only();
     cheats_status();

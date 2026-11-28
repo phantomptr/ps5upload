@@ -15633,6 +15633,78 @@
         ],
         "type": "object"
       },
+      "SpaceReport": {
+        "properties": {
+          "dirs": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elapsed_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files_bytes": {
+            "description": "What the files and folders on the drive take (allocated blocks).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fs_type": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "skipped": {
+            "description": "Folders not counted (unreadable, another drive mounted inside).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unaccounted_bytes": {
+            "description": "`used_bytes - files_bytes`, never below 0.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used_bytes": {
+            "description": "`total - free` after the count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/SpaceVerdict"
+          }
+        },
+        "required": [
+          "path",
+          "fs_type",
+          "total_bytes",
+          "used_bytes",
+          "files_bytes",
+          "files",
+          "dirs",
+          "skipped",
+          "unaccounted_bytes",
+          "verdict",
+          "elapsed_ms"
+        ],
+        "type": "object"
+      },
+      "SpaceVerdict": {
+        "enum": [
+          "clear",
+          "held",
+          "partial",
+          "busy"
+        ],
+        "type": "string"
+      },
       "Specs": {
         "properties": {
           "age_rating": {
@@ -18794,6 +18866,27 @@
           }
         ],
         "description": "One save kept in step, for `GET /api/save-sync/games`."
+      },
+      "engine.space_check.CheckReq": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
       },
       "engine.tailnet_discover.AddBody": {
         "properties": {
@@ -47408,6 +47501,78 @@
               "host"
             ],
             "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "struct"
+        }
+      }
+    },
+    "/api/ps5/space-check": {
+      "post": {
+        "description": "`POST /api/ps5/space-check`: see the module docs.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.space_check.CheckReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceReport"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Find space on an M.2 or USB drive that no file uses",
+        "tags": [
+          "health"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
             "name": "addr",
             "required": false
           },
