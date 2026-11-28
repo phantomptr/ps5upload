@@ -116,7 +116,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: ios-init ios-build run-ios android-deps android-init android-build android-deploy _android-install-if-device run-android run-android-background
 .PHONY: emu-create emu-start emu-stop emu-status emu-test
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
-.PHONY: sync-version sync-version-check check-helper-version
+.PHONY: sync-version sync-version-check check-helper-version check-play-version play-app
 .PHONY: docker-engine docker-engine-run
 
 # Default target
@@ -177,6 +177,7 @@ help:
 	@echo "Version:"
 	@echo "  make sync-version       - Sync downstream files from VERSION (canonical source)"
 	@echo "  make sync-version-check - Fail if any downstream file drifts from VERSION"
+	@echo "  make check-play-version - Fail if PS5Upload Play's contentVersion differs from VERSION"
 	@echo ""
 	@echo "Packaging:"
 	@echo "  make dist             - Tauri bundle for the current OS"
@@ -449,6 +450,20 @@ sync-version:
 
 sync-version-check:
 	@node scripts/update-version.js --check
+
+# PS5Upload Play (apps/play) carries this version as its contentVersion (13.0.0 -> 13.000.000).
+# With PLAY_ZIP=<file> (or after `make play-app`, the zip in apps/play/dist) the built zip too.
+check-play-version:
+	@if [ -n "$(PLAY_ZIP)" ]; then node scripts/check-play-version.mjs --zip "$(PLAY_ZIP)"; \
+	elif [ -d apps/play/dist ]; then node scripts/check-play-version.mjs --dist; \
+	else node scripts/check-play-version.mjs; fi
+
+# The PS5Upload Play release zip (apps/play/dist/PS5Upload-Play-FAKE99261-<version>.zip), built in
+# Docker by the app's own Makefile; the engine embeds it when present (engine build.rs). Nothing
+# to do while the app is not in the tree.
+play-app:
+	@if [ -f apps/play/Makefile ]; then $(MAKE) -C apps/play release && node scripts/check-play-version.mjs --dist; \
+	else echo "play-app: no apps/play/Makefile in this tree; skipped"; fi
 
 payload: setup-payload installer
 	@echo "Building PS5 payload..."

@@ -23,6 +23,14 @@
  *                                         [workspace.package]; all engine
  *                                         crates inherit it via
  *                                         `version.workspace = true`)
+ *   - apps/play/sce_sys/param.json       (field: contentVersion, in the PS5's
+ *                                         fixed NN.NNN.NNN form: 13.0.0 is
+ *                                         "13.000.000"). PS5Upload Play carries
+ *                                         PS5Upload's version; only this one
+ *                                         value is rewritten, the rest of the
+ *                                         file is the app's own.
+ *                                         scripts/check-play-version.mjs is the
+ *                                         CI gate for it (and for a built zip).
  *
  * The engine reports this same version from `/api/version`, so it stays on
  * par with the client.
@@ -166,6 +174,40 @@ function patchCargoLock(relPath) {
   };
 }
 
+/**
+ * The PS5's form of a version: `contentVersion` in a title's param.json is NN.NNN.NNN (13.0.0 is
+ * "13.000.000", 12.6.44 is "12.006.044"). A pre-release or build suffix has no place there and is
+ * left out. Null when a part does not fit (major over 99, minor or patch over 999).
+ */
+function ps5ContentVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v);
+  if (!m) return null;
+  const [maj, min, pat] = [m[1], m[2], m[3]].map(Number);
+  if (maj > 99 || min > 999 || pat > 999) return null;
+  return `${String(maj).padStart(2, "0")}.${String(min).padStart(3, "0")}.${String(pat).padStart(3, "0")}`;
+}
+
+/**
+ * PS5Upload Play's `contentVersion` (apps/play/sce_sys/param.json). Only that value is rewritten,
+ * in place: the app owns the rest of the file and its formatting. Skipped (null) while the app is
+ * not in the tree.
+ */
+function patchPlayContentVersion(relPath) {
+  const full = path.join(repoRoot, relPath);
+  if (!fs.existsSync(full)) return null;
+  const desired = ps5ContentVersion(targetVersion);
+  if (!desired) fail(`${targetVersion} has no PS5 contentVersion form (NN.NNN.NNN)`);
+  const raw = fs.readFileSync(full, "utf8");
+  const re = /("contentVersion"\s*:\s*")([^"]*)(")/;
+  const m = raw.match(re);
+  const current = m ? m[2] : "<no-match>";
+  const ok = current === desired;
+  if (!ok && !checkMode && m) {
+    fs.writeFileSync(full, raw.replace(re, `$1${desired}$3`));
+  }
+  return { path: relPath, current, desired, ok };
+}
+
 // ─── Run all patchers ─────────────────────────────────────────────────────
 
 const results = [
@@ -199,6 +241,7 @@ const results = [
   ),
   patchCargoLock("engine/Cargo.lock"),
   patchCargoLock("client/src-tauri/Cargo.lock"),
+  patchPlayContentVersion("apps/play/sce_sys/param.json"),
 ].filter(Boolean);
 
 // ─── Report ───────────────────────────────────────────────────────────────

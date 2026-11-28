@@ -140,6 +140,10 @@ jobs:
           check-latest: true
       - name: Verify downstream files match VERSION
         run: node scripts/update-version.js --check
+      # PS5Upload Play's contentVersion is this version in the PS5's form (13.0.0 -> 13.000.000).
+      # The built zip is checked in the play-app job.
+      - name: PS5Upload Play carries this version
+        run: node scripts/check-play-version.mjs
       - name: Website translations (every language has every string and its screenshots)
         run: node scripts/site-i18n.mjs
 
