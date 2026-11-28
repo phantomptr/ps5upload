@@ -8,10 +8,14 @@
 //! carry anything a client sent.
 
 pub mod config;
+pub mod geo;
 pub mod hub;
 pub mod limits;
 pub mod metrics;
+pub mod names;
+pub mod rooms;
 pub mod stun;
+pub mod throttle;
 
 use std::io;
 use std::net::SocketAddr;
@@ -41,6 +45,8 @@ pub enum Field {
 pub struct Shared {
     pub config: Config,
     pub metrics: Metrics,
+    /// Play Rooms counters (`rooms.rs`).
+    pub rooms: rooms::RoomMetrics,
     pub(crate) state: Mutex<hub::State>,
     pub(crate) shutdown: watch::Sender<bool>,
     pub(crate) next_conn: AtomicU64,
@@ -61,8 +67,18 @@ impl Shared {
         (self.log)(&line);
     }
 
+    /// An IP → country table in place of `HUB_GEO_FILE` (tests and tools).
+    pub fn set_geo(&self, g: geo::Geo) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_geo(g);
+    }
+
     pub fn metrics_text(&self) -> String {
-        self.metrics.render(&hub::gauges(self))
+        let mut s = self.metrics.render(&hub::gauges(self));
+        s.push_str(&rooms::render(self));
+        s
     }
 }
 
@@ -145,6 +161,7 @@ impl Hub {
         let shared = Arc::new(Shared {
             state: Mutex::new(hub::State::new(&config)),
             metrics: Metrics::default(),
+            rooms: rooms::RoomMetrics::default(),
             shutdown,
             next_conn: AtomicU64::new(1),
             connections: AtomicUsize::new(0),
@@ -162,6 +179,7 @@ impl Hub {
             )));
         }
         tasks.push(tokio::spawn(hub::sweeper(shared.clone(), stun_table)));
+        tasks.push(tokio::spawn(rooms::sweeper(shared.clone())));
         let app = hub::router(shared.clone(), metrics_here);
         let app = match extra {
             Some(r) => app.merge(r),

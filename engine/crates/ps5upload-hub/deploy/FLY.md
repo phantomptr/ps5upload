@@ -147,3 +147,71 @@ Fly organization could reach the machine directly.
 - Never `fly scale count 2` or more: see the top of this page.
 - Restart: `fly machine restart <id>` (ids from `fly status`).
 - Stop paying: `fly apps destroy ps5upload-hub` (and remove the GoDaddy record).
+
+## Play Rooms (13.0.0)
+
+Rooms need no new machine, volume or IP: the same app, redeployed (ask the owner first; it is a
+redeploy of the existing app). Steps:
+
+1. Locally: `cd engine && cargo nextest run -p ps5upload-hub`, then the load test
+   (`cargo test -p ps5upload-hub --release --test load -- --ignored --nocapture`); it must pass
+   (memory, list latency, no host dropped).
+2. Optional, to switch things at run time from your computer: an admin token (a Fly secret; the
+   admin routes exist only with it, and only on the private metrics port):
+   ```sh
+   fly secrets set HUB_ADMIN_TOKEN="$(openssl rand -hex 24)" --stage
+   ```
+3. Optional: newest-version nudges in the list: `HUB_APP_LATEST = "13.0.0"` under `[env]` in
+   `fly.toml` (change it with each release, or set it at run time, below).
+4. `fly deploy` from this folder, then check that `curl -s https://hub.phantomptr.com/rooms`
+   answers `{"you":{},"proto":{"min":2,"latest":2},"app":{...},"rooms":[],"next":null}`.
+
+Run-time switches and the blocklist, no redeploy. They last until the machine restarts; to keep
+them, also put them in `fly.toml` `[env]` (`HUB_BLOCKLIST = "tag 4F2A; ip 203.0.113.0/24"`,
+`HUB_ROOMS`, `HUB_PREVIEW`, `HUB_KNOCKS`, `HUB_MIN_PROTO`).
+
+```sh
+fly proxy 9091 &                     # the private metrics port
+T=<the admin token>
+curl -s -H "authorization: Bearer $T" localhost:9091/admin/control          # what is in force
+curl -s -H "authorization: Bearer $T" --data-binary 'rooms off' localhost:9091/admin/control
+printf 'tag 4F2A\nip 203.0.113.0/24\nword badword\n' |
+  curl -s -H "authorization: Bearer $T" --data-binary @- localhost:9091/admin/control
+# a POST replaces the run-time set; an empty body clears it
+```
+
+Lines: `rooms on|off` (cards, list, friends lookup), `preview on|off`, `knocks on|off` (lobby
+rooms), `min_proto N`, `latest_proto N`, `app_latest 13.0.0`, `cutback auto|on|off`,
+`tag XXXX`, `ip <address or CIDR>`, `word <word>` (room names). On a VPS the same lines can go in
+a file named by `HUB_CONTROL_FILE`, re-read within 2 s of a change.
+
+Countries (optional): `HUB_GEO_FILE` names a CSV of `start,end,CC` ranges (the CC BY 4.0
+"IP to Country Lite" monthly file has this form). It would have to be in the image (a `COPY` in
+the Dockerfile) and credited in About. Without it, cards show the region each host's app sends
+(from its time zone) and estimates use that.
+
+Watch in `/metrics`: `hub_ads_listed`, `hub_rooms_list_total{result}`, `hub_previews_total`,
+`hub_knocks_total`, `hub_ads_refused_total{why}`, `hub_out_bytes_total{class}`,
+`hub_out_projected_bytes_month`, `hub_cutback`, `hub_resident_bytes`, `hub_throttled_total`,
+`hub_clients_blocked`, `hub_temp_blocks_total`. Cut-back mode starts by itself past 200 MiB
+resident or a projected 100 GB a month out, and logs one line (`hub: cutback on=1 why=...`).
+
+### Floods: what Fly gives and what it does not
+
+- Fly's edge takes network-level floods (SYN and UDP floods, volumetric attacks) for every app
+  and terminates TLS, so what reaches the hub is real HTTP from real addresses. Fly does not
+  rate-limit or filter requests per client for us (no WAF), and it bills the bytes the hub sends
+  back, refusals included.
+- The hub's own layers: connection caps per client, per IPv6 /48 and in all; a 10 s hello and a
+  60 s silence timeout; frame and message size caps; a message budget per socket; token buckets
+  per client per kind of request (people never reach them; robots get 429 with `Retry-After`);
+  a flood that goes on 30 s or more gets a temporary block (2 minutes, doubling to 30), answered
+  with an empty 429 and the connection closed; the list from a shared 5 s cache; proof of work
+  only on card creation; cut-back mode; the switches and the blocklist above.
+- Measured locally (load test): 5 robots at about 94,000 list requests a second for 40 s used
+  84 % of the hub's one thread; people's list requests stayed at a 3.4 ms p99, no host socket was
+  dropped, memory stayed at 30 MiB. What a flood costs is egress: even an empty 429 is about
+  150 bytes, so a long, large flood is a bill, not an outage. If
+  `hub_out_bytes_total{class="refused"}` climbs fast: block the sources (`ip ...` above); if it is
+  spread over many addresses, turn rooms off for a while (`rooms off`). The lasting answer would
+  be a filtering proxy in front (not set up; it would change `HUB_CLIENT_IP_HEADER`).
