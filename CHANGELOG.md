@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 13.0.0
 
 **Help us test**
 - 13.0.0 brings a lot that runs on the PS5: Play Rooms, PS5Upload Play, Minion's queue, save sync, freeing space while extracting and the USB adapter. They have been tried on only a few consoles, so your reports matter. If something goes wrong, open **Bug Report** in the sidebar, save the zip and post it on GitHub (the "Remote Play, Play Room or PS5Upload Play problem" form asks the useful questions) or on Discord. For a Play Room, make it on the computer or phone that hosts the room.
