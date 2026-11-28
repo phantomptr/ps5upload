@@ -224,3 +224,42 @@ describe("probeHelper (is the helper there, or is this the offline copy?)", () =
   });
 });
 
+describe("slow down (the helper's rate gate)", () => {
+  it("reads Retry-After as a short wait", () => {
+    expect(api.retryAfterMs("2")).toBe(2000);
+    expect(api.retryAfterMs(null)).toBe(1000);
+    expect(api.retryAfterMs("soon")).toBe(1000);
+    expect(api.retryAfterMs("0")).toBe(1000);
+    expect(api.retryAfterMs("120")).toBe(10000);
+  });
+
+  it("waits as asked and sends the call again, quietly", async () => {
+    vi.useFakeTimers();
+    try {
+      let n = 0;
+      const seen = installFetch(() =>
+        ++n < 3
+          ? new Response(JSON.stringify({ error: "slow_down" }), { status: 429, headers: { "Retry-After": "1" } })
+          : jsonResponse(200, { ok: 1 }),
+      );
+      const p = api.call<{ ok: number }>("/api/status");
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(await p).toEqual({ ok: 1 });
+      expect(seen.filter((s) => s.url === "/api/status")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after a few tries with the helper's answer", async () => {
+    vi.useFakeTimers();
+    try {
+      installFetch(() => new Response(JSON.stringify({ error: "slow_down" }), { status: 429, headers: { "Retry-After": "1" } }));
+      const p = api.call("/api/status").catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(api.SLOW_DOWN_TRIES * 1000 + 100);
+      expect(await p).toMatchObject({ status: 429, code: "slow_down" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

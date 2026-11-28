@@ -88,8 +88,29 @@ static int f_fwd_close(void *ctx, char *out, size_t cap) {
     return snprintf(out, cap, "{\"ok\":true}");
 }
 
+/* Play Rooms: the room an engine hosts here, and the one-time grants (play_host.c's, faked). */
+static const char *g_room = "{\"room\":null,\"rooms\":[]}";
+static int g_takes, g_allow = 1;
+static int f_room(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    return snprintf(out, cap, "%s", g_room);
+}
+static int f_grants(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    /* one grant, handed out once */
+    return snprintf(out, cap, g_takes++ ? "{\"grants\":[]}" : "{\"grants\":[{\"engine_id\":\"ab\",\"grant\":\"cd\"}]}");
+}
+static int f_allow(void *ctx) {
+    (void)ctx;
+    return g_allow;
+}
+
 static const app_api_ops_t OPS = { NULL,    "13.0.0", f_readiness, f_enable,   f_pin,       f_pin_status,
-                                   f_cancel, f_mesh,  f_fwd,       f_fwd_open, f_fwd_close };
+                                   f_cancel, f_mesh,  f_fwd,       f_fwd_open, f_fwd_close, f_room,
+                                   f_grants, f_allow, NULL };
+/* An older build's operations (no room, no grants): the routes still answer, empty. */
+static const app_api_ops_t OPS_OLD = { NULL,    "13.0.0", f_readiness, f_enable,   f_pin,       f_pin_status,
+                                       f_cancel, f_mesh,  f_fwd,       f_fwd_open, f_fwd_close, NULL, NULL, NULL, NULL };
 
 static void test_tailnet_ip(void) {
     CHECK(app_api_tailnet_ip("100.64.0.1") == 0x64400001u);
@@ -226,17 +247,17 @@ static void test_routes(void) {
     const char *b;
     g_raw = READY_RAW;
     b = get("/v1/version", &st);
-    CHECK(st == 200 && !strcmp(b, "{\"helper\":\"13.0.0\",\"api\":1}"));
+    CHECK(st == 200 && !strcmp(b, "{\"helper\":\"13.0.0\",\"api\":2}"));
     b = get("/v1/rp", &st);
     CHECK(st == 200 && has(b, "\"ready\":true"));
     b = get("/v1/status", &st);
-    CHECK(st == 200 && has(b, "{\"helper\":{\"version\":\"13.0.0\"},\"rp\":{\"ready\":true"));
-    CHECK(has(b, "},\"mesh\":{\"engine\":null,\"online\":[]},\"forward\":{\"state\":\"off\"}}"));
+    CHECK(st == 200 && has(b, "{\"helper\":{\"version\":\"13.0.0\",\"api\":2},\"rp\":{\"ready\":true"));
+    CHECK(has(b, "},\"mesh\":{\"engine\":null,\"online\":[]},\"forward\":{\"state\":\"off\"},\"room\":null}"));
     /* A part that cannot be read is null; the rest still answers. */
     g_raw = NULL;
     g_fail_mesh = 1;
     b = get("/v1/status", &st);
-    CHECK(st == 200 && !strcmp(b, "{\"helper\":{\"version\":\"13.0.0\"},\"rp\":null,\"mesh\":null,\"forward\":{\"state\":\"off\"}}"));
+    CHECK(st == 200 && !strcmp(b, "{\"helper\":{\"version\":\"13.0.0\",\"api\":2},\"rp\":null,\"mesh\":null,\"forward\":{\"state\":\"off\"},\"room\":null}"));
     b = get("/v1/rp", &st);
     CHECK(st == 503 && has(b, "rp_unreadable"));
     b = get("/v1/mesh", &st);
@@ -300,7 +321,54 @@ static void test_forward(void) {
     CHECK(st == 405);
 }
 
+/* Play Rooms on the app API: the room (read only, also in /v1/status), and the one-time grants
+ * (GET or POST, handed out once, slowed past their read budget). */
+static void test_rooms_and_grants(void) {
+    int st;
+    const char *b;
+    char req[256];
+    size_t n;
+    b = get("/v1/room", &st);
+    CHECK(st == 200 && !strcmp(b, "{\"room\":null,\"rooms\":[]}"));
+    g_room = "{\"room\":{\"name\":\"Sam's {room}\",\"players\":[{\"name\":\"}\\\"\"}],\"age_s\":1},\"rooms\":[{\"name\":\"x\"}]}";
+    b = get("/v1/room", &st);
+    CHECK(st == 200 && has(b, "\"rooms\":[{\"name\":\"x\"}]"));
+    b = get("/v1/status", &st);
+    CHECK(st == 200 && has(b, ",\"room\":{\"name\":\"Sam's {room}\",\"players\":[{\"name\":\"}\\\"\"}],\"age_s\":1}}"));
+    CHECK(!has(b, "\"rooms\""));
+    b = post("/v1/room", "{}", &st);
+    CHECK(st == 405);
+    g_room = "{\"room\":null,\"rooms\":[]}";
+    /* grants: once */
+    b = get("/v1/play/grants", &st);
+    CHECK(st == 200 && has(b, "\"grant\":\"cd\""));
+    b = post("/v1/play/grants", "", &st);
+    CHECK(st == 200 && !strcmp(b, "{\"grants\":[]}"));
+    /* past the read budget: slowed, never handed out */
+    g_allow = 0;
+    g_takes = 0;
+    b = get("/v1/play/grants", &st);
+    CHECK(st == 429 && has(b, "slow_down") && g_takes == 0);
+    g_allow = 1;
+    /* never to a browser page (an Origin) */
+    snprintf(req, sizeof req, "GET /v1/play/grants HTTP/1.1\r\nHost: 127.0.0.1:9181\r\nOrigin: http://127.0.0.1:9180\r\n\r\n");
+    b = ask(req, &st);
+    CHECK(st == 403 && g_takes == 0);
+    /* an older build's operations: empty answers */
+    snprintf(req, sizeof req, "GET /v1/play/grants HTTP/1.1\r\nHost: 127.0.0.1:9181\r\n\r\n");
+    n = app_api_handle(req, strlen(req), PORT, &OPS_OLD, g_resp, sizeof g_resp);
+    g_resp[n] = 0;
+    CHECK(has(g_resp, "200 OK") && has(g_resp, "{\"grants\":[]}"));
+    snprintf(req, sizeof req, "GET /v1/status HTTP/1.1\r\nHost: 127.0.0.1:9181\r\n\r\n");
+    n = app_api_handle(req, strlen(req), PORT, &OPS_OLD, g_resp, sizeof g_resp);
+    g_resp[n] = 0;
+    CHECK(has(g_resp, ",\"room\":null}"));
+    b = get("/v1/intent", &st);
+    CHECK(st == 200 && !strcmp(b, "{\"intent\":null}"));
+}
+
 int main(void) {
+    test_rooms_and_grants();
     test_host();
     test_framing();
     test_checks();

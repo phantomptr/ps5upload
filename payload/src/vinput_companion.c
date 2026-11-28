@@ -285,6 +285,28 @@ static int handle_bind(vcomp_t *c, int fd, const vwire_frame_t *f) {
     return reply(fd, f, rc, x, sizeof x);
 }
 
+/* OWNERS: u8 n, n x u32 device. Answers rc, then per device i32 sce, u32 owner (read only). */
+static int handle_owners(vcomp_t *c, int fd, const vwire_frame_t *f) {
+    uint8_t x[VWIRE_OWNERS_MAX * 8];
+    unsigned n;
+    if (f->len < 1) return reply(fd, f, VWIRE_RC_BAD_REQUEST, NULL, 0);
+    n = f->payload[0];
+    if (n < 1 || n > VWIRE_OWNERS_MAX || f->len != 1 + 4 * n) return reply(fd, f, VWIRE_RC_BAD_REQUEST, NULL, 0);
+    if (!c->cfg->mbus || !c->mbus_ok) return reply(fd, f, VWIRE_RC_UNSUPPORTED, NULL, 0);
+    memset(x, 0, sizeof x);
+    for (unsigned i = 0; i < n; i++) {
+        uint32_t device = vwire_get32(f->payload + 1 + 4 * i), owner = 0;
+        int sce = VWIRE_RC_BAD_REQUEST;
+        if (device && device <= 0x7FFFFFFFu) {
+            sce = c->cfg->mbus->owner(device, &owner);
+            if (sce != 0) owner = 0;
+        }
+        vwire_put32(x + 8 * i, (uint32_t)sce);
+        vwire_put32(x + 8 * i + 4, owner);
+    }
+    return reply(fd, f, VWIRE_RC_OK, x, 8 * n);
+}
+
 /* About once a second: a watched pad whose owner the console changed (someone answered "Who's
  * using this controller?" after all: a bind a moment late leaves the question up) is seated back,
  * VWIRE_KEEP_FIXES times at most. One the bus no longer knows (removed) is forgotten. */
@@ -331,6 +353,8 @@ static int handle(vcomp_t *c, int fd, const vwire_frame_t *f) {
         return reply(fd, f, VWIRE_RC_OK, x, 1);
     case VWIRE_BIND:
         return handle_bind(c, fd, f);
+    case VWIRE_OWNERS:
+        return handle_owners(c, fd, f);
     case VWIRE_FORGET: {
         int i;
         if (f->len < 4) return reply(fd, f, VWIRE_RC_BAD_REQUEST, NULL, 0);

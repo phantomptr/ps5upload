@@ -1493,9 +1493,10 @@ static int find_play_item(const char *s, size_t n, const char **v, size_t *vl) {
 /* One engine as the app reads it; `item` is its play_host presence item (NULL: none, and then
  * what its hello said, if anything). */
 static void put_engine(buf_t *b, const dev_t_ *d, const char *item, size_t il) {
-    char ipt[16], join[PLAY_PATH_MAX], app[PLAY_PATH_MAX];
+    char ipt[16], join[PLAY_PATH_MAX], app[PLAY_PATH_MAX], hex[65];
     unsigned port;
     ip_text(d->ip, ipt);
+    to_hex(d->key, hex);
     if (item) {
         port = item_port(item, il);
         item_path(item, il, "join_ws", join, sizeof join);
@@ -1506,7 +1507,11 @@ static void put_engine(buf_t *b, const dev_t_ *d, const char *item, size_t il) {
         snprintf(join, sizeof join, "%s", d->play_join);
         snprintf(app, sizeof app, "%s", d->play_app);
     }
-    puts_(b, "{\"name\":");
+    /* The engine's id (its AVA1 key, as the engine's own mesh id): the app keeps computers by it,
+     * never by address (an address changes; two Tailscale engines share the forward's). */
+    puts_(b, "{\"id\":");
+    putstr(b, hex);
+    puts_(b, ",\"name\":");
     putstr(b, shown_name(d));
     puts_(b, ",\"kind\":");
     putstr(b, d->kind);
@@ -1588,6 +1593,37 @@ int mesh_engines_json(char *out, size_t cap) {
     pthread_mutex_unlock(&g_mu);
     free(on);
     return b.err ? fail(out, cap, "reply_too_large") : (int)b.len;
+}
+
+int mesh_engine_info(const uint8_t key[32], mesh_engine_t *out) {
+    mesh_online_t *on;
+    const dev_t_ *d;
+    int non, found = 0;
+    if (!key || !out) return 0;
+    memset(out, 0, sizeof *out);
+    if (!(on = calloc(MESH_MAX_DEVICES, sizeof *on))) return 0;
+    non = M.h.online ? M.h.online(on, MESH_MAX_DEVICES) : 0;
+    pthread_mutex_lock(&g_mu);
+    d = find_dev(key);
+    if (d && !d->blocked) {
+        const char *v = NULL;
+        size_t vl = 0;
+        found = 1;
+        snprintf(out->name, sizeof out->name, "%s", shown_name(d));
+        snprintf(out->kind, sizeof out->kind, "%s", d->kind);
+        out->ip = d->ip;
+        out->online = is_online(d->key, on, non);
+        if (find_play_item(d->activity, strlen(d->activity), &v, &vl)) {
+            out->play_port = item_port(v, vl);
+            item_path(v, vl, "app_ws", out->app_ws, sizeof out->app_ws);
+        } else {
+            out->play_port = d->play_port;
+            snprintf(out->app_ws, sizeof out->app_ws, "%s", d->play_app);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    free(on);
+    return found;
 }
 
 int mesh_call(int which, const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap) {

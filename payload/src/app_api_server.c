@@ -33,7 +33,9 @@
 #include "ava1_thread.h"
 #include "config.h"
 #include "mesh.h"
+#include "play_host.h"
 #include "proc_identity.h"
+#include "rate_gate.h"
 #include "remoteplay.h"
 #include "tailnet_node.h"
 #include "webui_server.h"
@@ -43,6 +45,11 @@
 #define APP_API_SLICE_MS 200
 #define APP_API_WATCH_MS 5000u
 #define APP_API_BIND_RETRY_MS 2000u
+/* Requests from this console's apps (all 127.0.0.1): far more than PS5Upload Play ever asks (a
+ * status read a second, a few more while pairing), so only a runaway or hostile local process is
+ * slowed (rate_gate.h). */
+#define APP_API_RATE_BURST 120u
+#define APP_API_RATE_PER_S 20u
 
 static pthread_t g_thr;
 static int g_started;
@@ -167,10 +174,43 @@ static int op_forward_close(void *ctx, char *out, size_t cap) {
     return snprintf(out, cap, "{\"ok\":true}");
 }
 
+static int op_room(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    play_host_set_lookup(mesh_engine_info);
+    return play_room_json(mono_ms(), out, cap);
+}
+
+static int op_grants_take(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    play_host_set_lookup(mesh_engine_info);
+    return play_grants_take_json(mono_ms(), out, cap);
+}
+
+/* /v1/play/grants reads: APP_API_GRANT_READS a minute (one thread serves the API: no lock). */
+static uint64_t g_grant_window_ms;
+static unsigned g_grant_reads;
+static int op_grants_allow(void *ctx) {
+    uint64_t now = mono_ms();
+    (void)ctx;
+    if (now - g_grant_window_ms >= 60000u) {
+        g_grant_window_ms = now;
+        g_grant_reads = 0;
+    }
+    return ++g_grant_reads <= APP_API_GRANT_READS;
+}
+
+static int op_intent_take(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    return play_intent_take_json(mono_ms(), out, cap);
+}
+
 static const app_api_ops_t OPS = {
     NULL,           PS5UPLOAD2_VERSION, op_rp_readiness,   op_rp_enable,    op_rp_pin_request, op_rp_pin_status,
-    op_rp_pin_cancel, op_mesh,          op_forward_status, op_forward_open, op_forward_close,
+    op_rp_pin_cancel, op_mesh,          op_forward_status, op_forward_open, op_forward_close,  op_room,
+    op_grants_take, op_grants_allow, op_intent_take,
 };
+
+static rate_gate_t g_gate;
 
 /* ---- the listener ---- */
 
@@ -212,14 +252,24 @@ static void send_all(int fd, const char *p, size_t n, uint64_t deadline) {
     }
 }
 
-static void answer_raw(int fd, int status, const char *token) {
-    char b[256];
-    int k = snprintf(b, sizeof b,
-                     "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %u\r\nConnection: close\r\n"
-                     "Cache-Control: no-store\r\n\r\n{\"error\":\"%s\"}",
-                     status, status == 413 ? "Payload Too Large" : status == 503 ? "Service Unavailable" : "Bad Request",
-                     (unsigned)(strlen(token) + 12), token);
+static void answer_raw_wait(int fd, int status, const char *token, unsigned retry_s) {
+    char b[320], extra[48] = "";
+    int k;
+    if (retry_s) snprintf(extra, sizeof extra, "Retry-After: %u\r\n", retry_s);
+    k = snprintf(b, sizeof b,
+                 "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %u\r\nConnection: close\r\n"
+                 "Cache-Control: no-store\r\n%s\r\n{\"error\":\"%s\"}",
+                 status,
+                 status == 413   ? "Payload Too Large"
+                 : status == 503 ? "Service Unavailable"
+                 : status == 429 ? "Too Many Requests"
+                                 : "Bad Request",
+                 (unsigned)(strlen(token) + 12), extra, token);
     if (k > 0 && (size_t)k < sizeof b) send_all(fd, b, (size_t)k, mono_ms() + APP_API_SEND_MS);
+}
+
+static void answer_raw(int fd, int status, const char *token) {
+    answer_raw_wait(fd, status, token, 0);
 }
 
 /* One connection, start to end, within its deadlines. */
@@ -264,6 +314,14 @@ static void serve(int fd) {
         }
     }
     if (!ready) return;
+    /* A runaway local client is told to slow down; the app never gets near this (rate_gate.h). */
+    {
+        unsigned wait = rate_gate_take(&g_gate, 0x7F000001u, mono_ms());
+        if (wait) {
+            answer_raw_wait(fd, 429, "slow_down", wait);
+            return;
+        }
+    }
     /* Counted with the AVA1 workers' RPCs: the exit waits for this call and refuses new ones. */
     if (ava1_server_local_rpc_enter() != 0) {
         answer_raw(fd, 503, "stopping");
@@ -374,6 +432,7 @@ int app_api_start(void) {
         return -1;
     }
     __atomic_store_n(&g_stop, 0, __ATOMIC_RELEASE);
+    rate_gate_init(&g_gate, APP_API_RATE_BURST, APP_API_RATE_PER_S);
     if (pthread_attr_init(&attr) != 0) return -1;
     /* Remote Play's entry points run here, sized like the management handlers they are. */
     (void)pthread_attr_setstacksize(&attr, AVA1_MGMT_STACK);

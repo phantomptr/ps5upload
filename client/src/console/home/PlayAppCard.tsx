@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Play, RefreshCw } from "lucide-react";
+import { Download, Play, RefreshCw, UserPlus } from "lucide-react";
 import { ApiError, call, isOffline } from "../api";
 import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -75,6 +75,23 @@ export function playAppErrorText(err: unknown): string | null {
   return t("cw_play_failed", { code: err instanceof Error ? err.message : String(err) });
 }
 
+/** The "a friend has a PS5?" tip: shown until dismissed on this device (integration design: once). */
+export const PLAY_TIP_KEY = "ps5upload.minion.playTipSeen";
+function tipSeen(): boolean {
+  try {
+    return localStorage.getItem(PLAY_TIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function markTipSeen(): void {
+  try {
+    localStorage.setItem(PLAY_TIP_KEY, "1");
+  } catch {
+    /* private mode: shown again next time */
+  }
+}
+
 function isPlayState(v: unknown): v is PlayAppState {
   return !!v && typeof v === "object" && "install" in v && "installed" in v;
 }
@@ -137,9 +154,10 @@ export function PlayAppCard() {
     [pending, load],
   );
 
-  const open = useCallback(() => {
+  // Open, or open at its join screen ("Join a friend": the app reads the intent from the helper).
+  const open = useCallback((intent?: "join") => {
     setMessage(null);
-    call("/api/apps/launch", { title_id: PLAY_APP_TITLE_ID }).then(
+    call("/api/play-app/open", intent ? { intent } : {}).then(
       () => {},
       (e: unknown) => {
         const text = playAppErrorText(e);
@@ -147,6 +165,7 @@ export function PlayAppCard() {
       },
     );
   }, []);
+  const [tip, setTip] = useState(() => !tipSeen());
 
   if (!state) return null;
   return (
@@ -158,7 +177,13 @@ export function PlayAppCard() {
       onInstall={() => (playAppView(state).asks ? setAsking(true) : install(false))}
       onConfirmStore={() => install(true)}
       onCancelStore={() => setAsking(false)}
-      onOpen={open}
+      onOpen={() => open()}
+      onJoin={() => open("join")}
+      tip={tip}
+      onDismissTip={() => {
+        markTipSeen();
+        setTip(false);
+      }}
     />
   );
 }
@@ -174,10 +199,27 @@ export interface PlayAppCardViewProps {
   onConfirmStore: () => void;
   onCancelStore: () => void;
   onOpen: () => void;
+  /** Open at the join screen. */
+  onJoin?: () => void;
+  /** Show the one-time tip (a friend's PS5 can join). */
+  tip?: boolean;
+  onDismissTip?: () => void;
 }
 
 /** The card without state (tests render it directly). */
-export function PlayAppCardView({ state, message, asking, pending, onInstall, onConfirmStore, onCancelStore, onOpen }: PlayAppCardViewProps) {
+export function PlayAppCardView({
+  state,
+  message,
+  asking,
+  pending,
+  onInstall,
+  onConfirmStore,
+  onCancelStore,
+  onOpen,
+  onJoin,
+  tip,
+  onDismissTip,
+}: PlayAppCardViewProps) {
   if (!state.installed && !state.staged) return null;
   const view = playAppView(state);
   const pct = state.install.total > 0 ? Math.floor((state.install.done / state.install.total) * 100) : 0;
@@ -200,6 +242,16 @@ export function PlayAppCardView({ state, message, asking, pending, onInstall, on
         <div className="cw-dim">{line}</div>
         {state.store_busy && view.action ? <div className="cw-dim">{t("cw_play_store_busy")}</div> : null}
         {state.running && view.action && !view.busy ? <div className="cw-dim">{t("cw_play_closes_first")}</div> : null}
+        {/* What it is, while it is not here yet: one press installs, opening it pairs by itself. */}
+        {!state.installed && !view.busy ? <div className="cw-dim" data-play-guide>{t("cw_play_guide")}</div> : null}
+        {tip && view.canOpen && !view.busy ? (
+          <div className="cw-dim cw-play-tip" data-play-tip>
+            {t("cw_play_tip")}{" "}
+            <button type="button" className="cw-focusable cw-button cw-play-tip-ok" data-action="play-tip-ok" onClick={onDismissTip}>
+              <span>{t("cw_play_tip_ok")}</span>
+            </button>
+          </div>
+        ) : null}
         {message ? (
           <div className={`cw-msg is-${message.tone}`} role={message.tone === "error" ? "alert" : "status"}>
             {message.text}
@@ -222,6 +274,12 @@ export function PlayAppCardView({ state, message, asking, pending, onInstall, on
         <button type="button" className="cw-focusable cw-button" data-action="play-app-open" onClick={onOpen}>
           <Play aria-hidden />
           <span>{t("cw_play_open")}</span>
+        </button>
+      ) : null}
+      {view.canOpen && !view.busy && onJoin ? (
+        <button type="button" className="cw-focusable cw-button" data-action="play-app-join" onClick={onJoin}>
+          <UserPlus aria-hidden />
+          <span>{t("cw_play_join_friend")}</span>
         </button>
       ) : null}
       {asking ? (

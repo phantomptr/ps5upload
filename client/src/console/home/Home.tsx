@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArchiveRestore, Eraser, Gamepad2, HardDrive, Sparkles, Usb, X } from "lucide-react";
+import { ArchiveRestore, Eraser, Gamepad2, HardDrive, Heart, Sparkles, Usb, X } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { ApiError, call, callBlob, isOffline } from "../api";
 import { cleanupLastFound, onCleanupFound } from "../cleanup/Cleanup";
@@ -13,6 +13,7 @@ import { pollWhileVisible } from "../ui/visiblePoll";
 import { TaskRow } from "./TaskRow";
 import { QueueSection } from "../queue/QueueList";
 import { PlayAppCard } from "./PlayAppCard";
+import { RoomCard } from "../room/RoomCard";
 import { HomeDeviceAsks } from "../settings/Devices";
 import { useJobs, visibleJobs, type Job } from "./useJobs";
 
@@ -103,7 +104,8 @@ export async function runAsk(ask: Ask, deps: { cancel: (id: string) => Promise<v
       await deps.cancel(ask.job.job);
       return;
     case "close":
-      await call("/api/app/close", { app_id: ask.appId });
+      // room_ok: the dialog named the players of a Play Room here, if there was one.
+      await call("/api/app/close", { app_id: ask.appId, room_ok: true });
       return;
   }
 }
@@ -139,6 +141,10 @@ function askCopy(ask: Ask): {
 export interface HomeViewProps {
   /** The console's queue section (#982), rendered under Tasks. */
   queue?: ReactNode;
+  /** The "Your room" card (room/RoomCard), above PS5Upload Play's. */
+  room?: ReactNode;
+  /** The footer's heart: Thanks & Support. */
+  onOpenThanks?: (() => void) | null;
   status: ConsoleStatus | null;
   /** null until the first answer. */
   volumes: Volume[] | null;
@@ -340,7 +346,10 @@ export function HomeView(p: HomeViewProps) {
         )}
       </section>
 
-      {/* PS5Upload Play: Install / Update / Open (hidden while there is nothing to show). */}
+      {/* A Play Room hosted on this console: who plays, from where (read only). */}
+      {p.room ?? null}
+
+      {/* PS5Upload Play: Install / Update / Open / Join a friend (hidden while there is nothing to show). */}
       <PlayAppCard />
 
       <section className="cw-home-section">
@@ -402,6 +411,13 @@ export function HomeView(p: HomeViewProps) {
         ) : null}
       </section>
 
+      {p.onOpenThanks ? (
+        <button type="button" className="cw-focusable cw-button cw-thanks-link" data-action="open-thanks" onClick={p.onOpenThanks}>
+          <Heart aria-hidden />
+          <span>{t("cw_thanks_title")}</span>
+        </button>
+      ) : null}
+
       {p.ask && copy ? (
         <ConfirmDialog
           title={copy.title}
@@ -411,6 +427,7 @@ export function HomeView(p: HomeViewProps) {
           danger={copy.danger}
           busy={p.busy}
           error={p.askError}
+          roomNotice={p.ask.kind === "close"}
           onConfirm={p.onConfirm}
           onCancel={p.onDismiss}
         />
@@ -592,6 +609,8 @@ export function Home({ ctx }: { ctx: SectionContext }) {
   return (
     <HomeView
       queue={<QueueSection />}
+      room={<RoomCard onOpenRules={hasSection("settings") ? () => openSection("settings", { view: "rules" }) : null} />}
+      onOpenThanks={hasSection("settings") ? () => openSection("settings", { view: "thanks" }) : null}
       status={status}
       volumes={volumes}
       volumesError={volumesError}
