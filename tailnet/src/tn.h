@@ -415,6 +415,10 @@ typedef struct {
 typedef struct tn_dp tn_dp;
 /* Send an IPv4 packet to the peer owning its destination; dp_mu held (data-plane thread). */
 int tn_dp_output(tn_ctx *c, const uint8_t *pkt, size_t n);
+/* The inbound filter (decrypted packet addressed to us, before it is handed on): 1 = let in. A
+ * client node (no serve rules) lets everything in; a serving node only its served ports' new flows
+ * the tailnet allows, their replies, and the replies on its own maps (tests call it directly). */
+int tn_dp_inbound_ok(tn_ctx *c, const tn_ip_info *ip);
 int tn_dp_create(tn_ctx *c);
 void tn_dp_destroy(tn_ctx *c);
 int tn_dp_start(tn_ctx *c);
@@ -459,6 +463,8 @@ void tn_fwd_unmap(tn_ctx *c, uint8_t proto, uint16_t lport);
 int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip);
 /* A serving node: a TCP segment for a connection lwIP already has (a reply on a tn_map dial). */
 int tn_fwd_tcp_known(tn_ctx *c, const tn_ip_info *ip);
+/* A UDP datagram replying on one of our UDP maps (its peer address and port, to its tailnet port). */
+int tn_fwd_udp_mapped(tn_ctx *c, const tn_ip_info *ip);
 void tn_fwd_stats(tn_ctx *c, uint32_t *udp_flows, uint32_t *tcp_conns);
 
 /* Which peers may open flows to served ports (tn_set_peer_allow). */

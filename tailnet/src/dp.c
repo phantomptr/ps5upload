@@ -837,6 +837,13 @@ static int new_flow_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 	return 0;
 }
 
+static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip);
+
+int tn_dp_inbound_ok(tn_ctx *c, const tn_ip_info *ip)
+{
+	return inbound_ok(c, c->dp, ip);
+}
+
 static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 {
 	if (!c->n_serve)
@@ -847,10 +854,14 @@ static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 	for (uint32_t i = 0; i < c->n_serve && !listed; i++)
 		listed = c->serve[i].proto == ip->proto && c->serve[i].port == ip->dport;
 	if (!listed)
-		/* The replies on a connection this node dialed itself through tn_map (a serving node
-		 * that also maps: the PS5 helper's one forward for PS5Upload Play). Only a connection
-		 * lwIP already has matches; nothing new gets in this way. */
-		return ip->proto == TN_IPPROTO_TCP && tn_fwd_tcp_known(c, ip);
+		/* The replies on a connection or flow this node dialed itself through tn_map (a serving
+		 * node that also maps: the PS5 helper's one forward for PS5Upload Play; the engine,
+		 * which serves its guest port and maps a console's Remote Play and discovery UDP ports).
+		 * TCP: only a connection lwIP already has matches. UDP: only a datagram from the peer
+		 * address and port a map sends to, to that map's own tailnet port. Nothing new gets in
+		 * this way. */
+		return (ip->proto == TN_IPPROTO_TCP && tn_fwd_tcp_known(c, ip)) ||
+		       (ip->proto == TN_IPPROTO_UDP && tn_fwd_udp_mapped(c, ip));
 	/* A new flow also needs the app's own peer list (tn_set_peer_allow). */
 	if (ip->proto == TN_IPPROTO_TCP) /* only a SYN opens a connection */
 		return (ip->tcp_flags & 0x12) != 0x02 || new_flow_ok(c, d, ip);

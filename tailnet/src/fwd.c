@@ -485,8 +485,33 @@ static void syn_drop(syn_wait *s)
 	s->fd = -1;
 }
 
+/* A PROXY protocol v1 line for a rule that asks for one (TN_SERVE_PROXY_V1): who the peer is,
+ * written to the fresh local connection before lwIP has even answered the SYN, so it is the
+ * first thing the local server reads. 1 = written whole (or not wanted), 0 = the dial fails. A
+ * line this short on a just-connected loopback socket goes in one write; anything less is
+ * treated as a broken connection, never retried, so a partial line is never followed by data. */
+static int proxy_line(tn_fwd *w, const syn_wait *s)
+{
+	const tn_serve *r = rule_for(w->c, TN_IPPROTO_TCP, s->port);
+	if (!r || !(r->flags & TN_SERVE_PROXY_V1))
+		return 1;
+	char line[108]; /* the spec's longest v1 line is 107 bytes with its CRLF */
+	uint32_t a = s->rip, b = w->addr;
+	int n = snprintf(line, sizeof line, "PROXY TCP4 %u.%u.%u.%u %u.%u.%u.%u %u %u\r\n", a >> 24, (a >> 16) & 255,
+			 (a >> 8) & 255, a & 255, b >> 24, (b >> 16) & 255, (b >> 8) & 255, b & 255, (unsigned)s->rport,
+			 (unsigned)s->port);
+	if (n <= 0 || (size_t)n >= sizeof line)
+		return 0;
+	ssize_t k = tn_sock_send(s->fd, line, (size_t)n);
+	if (k < 0 && !again())
+		local_failed(w);
+	return k == n;
+}
+
 static void syn_dialed(tn_fwd *w, syn_wait *s, int ok)
 {
+	if (ok && !proxy_line(w, s))
+		ok = 0;
 	if (!ok) {
 		send_rst(w, s);
 		syn_drop(s);
@@ -926,6 +951,20 @@ void tn_fwd_unmap(tn_ctx *c, uint8_t proto, uint16_t lport)
 			map_close(&w->map[i]);
 }
 
+/* A UDP datagram from the peer address and port one of our UDP maps sends to, to that map's own
+ * tailnet port: a reply on a flow this node opened through tn_map. */
+int tn_fwd_udp_mapped(tn_ctx *c, const tn_ip_info *ip)
+{
+	tn_fwd *w = c->fwd;
+	for (int i = 0; w && ip->proto == TN_IPPROTO_UDP && i < MAPS; i++) {
+		dial_map *m = &w->map[i];
+		if (m->used && m->proto == TN_IPPROTO_UDP && m->tport == ip->dport && m->rip == ip->src &&
+		    m->rport == ip->sport)
+			return 1;
+	}
+	return 0;
+}
+
 /* Is this an inbound packet a client node expects (a reply on one of its mapped
  * connections or flows)? Used when the node serves nothing. */
 int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip)
@@ -935,13 +974,7 @@ int tn_fwd_expects(tn_ctx *c, const tn_ip_info *ip)
 		return 0;
 	if (ip->proto == TN_IPPROTO_TCP)
 		return 1; /* lwIP: our connections, or a RST for anything else */
-	for (int i = 0; ip->proto == TN_IPPROTO_UDP && i < MAPS; i++) {
-		dial_map *m = &w->map[i];
-		if (m->used && m->proto == TN_IPPROTO_UDP && m->tport == ip->dport && m->rip == ip->src &&
-		    m->rport == ip->sport)
-			return 1;
-	}
-	return 0;
+	return tn_fwd_udp_mapped(c, ip);
 }
 
 /* A serving node's mapped (dialed-out) TCP connection: is this segment for a connection lwIP

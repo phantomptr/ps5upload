@@ -181,10 +181,18 @@ typedef void (*tn_packet_cb)(void *user, const uint8_t *pkt, size_t len);
  * connection to 127.0.0.1:local_port. ICMP echo is answered if the filter allows the
  * source. Everything else is dropped, and packet_cb sees nothing. */
 #define TN_SERVE_MAX 8
+/* tn_serve.flags: a TCP rule's local connection starts with a PROXY protocol v1 line,
+ * "PROXY TCP4 <peer tailnet ip> <our tailnet ip> <peer port> <tailnet port>\r\n", written
+ * before any byte from the peer. Without it every peer arrives from 127.0.0.1; with it the
+ * local server learns who is asking (the engine's guest listener, tailnet_guest.rs), and must
+ * then refuse a connection whose first line is not one. A line that cannot be written whole
+ * fails the dial: the peer gets a RST. Ignored for UDP. */
+#define TN_SERVE_PROXY_V1 1
 typedef struct {
 	uint8_t proto;          /* 6 = TCP, 17 = UDP */
 	uint16_t port;          /* tailnet port */
 	uint16_t local_port;    /* 127.0.0.1 port; 0 = the same */
+	uint8_t flags;          /* TN_SERVE_*; 0 = a plain splice */
 } tn_serve;
 
 /* Optional hook run first on each internal thread ("control", "data"), e.g. to name it. */
