@@ -176,6 +176,22 @@ int main(int argc, char **argv)
     App::Fake f;
     f.on = true;
     shot("home", App::Screen::home, f);
+    // Easy join (docs/EASY_JOIN.md): a game open nearby, and the phone code.
+    {
+        App::Fake e = f;
+        e.found = 1;
+        e.answers[0].ip_be = 0x1456a8c0;
+        std::snprintf(e.answers[0].info.name, sizeof e.answers[0].info.name, "Living room PC");
+        e.answers[0].info.port = 19113;
+        e.answers[0].info.together = 1;
+        e.room.state = WaitingRoom::View::ready;
+        std::snprintf(e.room.qr, sizeof e.room.qr, "%s",
+                      "https://ps5upload.phantomptr.com/join/#ps5=QmC7v41CxdU7YX73vWnXjh&t=F3wc41E7TkEaYdwc&hub=hub.phantomptr.com");
+        shot("home-easy", App::Screen::home, e);
+        e.room = WaitingRoom::View{};
+        e.room.expired = true;
+        shot("home-easy-off", App::Screen::home, e);
+    }
     f.found = 1;
     f.answers[0].ip_be = 0x1456a8c0; // 192.168.86.20
     std::snprintf(f.answers[0].info.name, sizeof f.answers[0].info.name, "Living room PC");

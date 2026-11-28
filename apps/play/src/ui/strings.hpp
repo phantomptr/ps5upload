@@ -16,6 +16,21 @@ namespace play::ui
     X(home_settings, "Settings")                                                                                \
     X(home_settings_sub, "Music, sounds and remembered computers")                                              \
     X(home_exit, "Close PS5Upload Play")                                                                        \
+    X(home_nearby, "Join %s's game")                                                                            \
+    X(home_nearby_sub, "Playing now on this network. Your friend lets you in.")                                 \
+    X(home_again, "Play again with %s")                                                                         \
+    X(home_again_sub, "Your friend gets asked to let you in")                                                   \
+    X(home_invite, "%s invites you to play")                                                                    \
+    X(home_invite_sub, "Join now. Your friend lets you in.")                                                    \
+    X(phone_title, "Invite on your phone?")                                                                     \
+    X(phone_text, "Scan this with your phone, then tap Play on my PS5.")                                        \
+    X(phone_wait, "Getting the phone code…")                                                                    \
+    X(phone_offline, "The phone code needs the internet, and this PS5 can't reach it right now.")               \
+    X(phone_again, "The phone code is off. Press △ to show it again.")                                          \
+    X(hint_phone, "Phone code")                                                                                 \
+    X(inv_got, "%s sent you an invite.")                                                                        \
+    X(inv_unreachable, "This PS5 can't reach %s's game. It needs to be on this network or on Tailscale.")       \
+    X(why_friend, "Your friend's PS5Upload doesn't remember this PS5 any more. Join once with a code, then Play again works.") \
     X(hint_choose, "Choose")                                                                                    \
     X(hint_back, "Back")                                                                                        \
     X(hint_settings, "Settings")                                                                                \
@@ -167,7 +182,7 @@ namespace play::ui
     X(set_about, "About")                                                                                       \
     X(about_version, "Version %s")                                                                              \
     X(about_music, "Music: an original piece made for PS5Upload Play.")                                         \
-    X(about_credits, "Uses the JetBrains Mono and Noto Sans fonts (SIL OFL 1.1), Opus (BSD) and the QR Code generator library by Project Nayuki (MIT).") \
+    X(about_credits, "Uses the JetBrains Mono and Noto Sans fonts (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) and the QR Code generator library by Project Nayuki (MIT).") \
     X(about_license, "PS5Upload Play is free software under the GNU GPL v3.")
 
 enum class S : int

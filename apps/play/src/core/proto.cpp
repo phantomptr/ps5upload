@@ -100,6 +100,12 @@ std::size_t pad_frame(std::uint8_t *out, std::size_t cap, std::uint32_t seq, con
 std::size_t hello(char *out, std::size_t cap, const char *code, const char *resume, const char *name,
                   const ClientCaps &caps) noexcept
 {
+    return hello_ex(out, cap, code, resume, name, caps, HelloExtras{});
+}
+
+std::size_t hello_ex(char *out, std::size_t cap, const char *code, const char *resume, const char *name,
+                     const ClientCaps &caps, const HelloExtras &x) noexcept
+{
     json::Writer w(out, cap);
     w.raw("{\"hello\":{");
     bool first = true;
@@ -111,11 +117,19 @@ std::size_t hello(char *out, std::size_t cap, const char *code, const char *resu
         first = false;
         w.str(k).raw(":").str(v);
     };
+    field("invite", x.invite);
     field("code", code);
     field("resume", resume);
+    // A pass goes only on a new ask: coming back is the resume token's.
+    if (!resume || !*resume)
+        field("again", x.again);
     field("name", name);
     if (!first)
         w.raw(",");
+    if (x.remember)
+        w.raw("\"remember\":true,");
+    if (x.inbox_room && *x.inbox_room && x.inbox_hub && *x.inbox_hub)
+        w.raw("\"inbox\":{\"room\":").str(x.inbox_room).raw(",\"hub\":").str(x.inbox_hub).raw("},");
     w.raw("\"client\":{\"kind\":\"ps5\",\"app\":\"play\",\"v\":").str(caps.version);
     w.raw(",\"caps\":{\"hevc\":").boolean(caps.hevc);
     w.raw(",\"main10\":").boolean(caps.main10);
@@ -147,6 +161,7 @@ bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
             return false;
         copy(ev.why, sizeof ev.why, d, d.get(0, "why"));
         copy(ev.token, sizeof ev.token, d, d.get(0, "token"));
+        copy(ev.friend_pass, sizeof ev.friend_pass, d, d.get(0, "friend"));
         ev.player = static_cast<int>(d.integer(d.get(0, "player")));
         ev.hevc = d.boolean(d.get(0, "hevc"));
         const int cw = d.get(0, "codec_warning");
@@ -266,6 +281,8 @@ bool parse_found(const char *text, std::size_t len, Found &f) noexcept
     copy(f.name, sizeof f.name, d, d.get(0, "name"));
     copy(f.version, sizeof f.version, d, d.get(0, "version"));
     copy(f.id, sizeof f.id, d, d.get(0, "id"));
+    const double t = d.num(d.get(0, "together"), 0);
+    f.together = t > 0 && t < 100 ? static_cast<int>(t) : 0;
     return true;
 }
 

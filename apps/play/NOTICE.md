@@ -20,6 +20,9 @@ PS5Upload Play is free software under the GNU General Public License v3 (see `LI
   Copyright the Xiph.Org Foundation, Skype Limited, Octasic, Jean-Marc Valin, Timothy B.
   Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding and Erik de Castro Lopo; BSD 3-clause
   license (https://opus-codec.org/license/).
+- **BearSSL** (the repository's `third_party/bearssl/`, TLS for the hub's `wss://`): Copyright (c)
+  2016 Thomas Pornin, MIT License (`third_party/bearssl/LICENSE.txt`). The trust anchors are the
+  ISRG roots the PS5Upload helper's tailnet uses (`tailnet/src/isrg_roots.h`).
 - **JetBrains Mono** (`third_party/jetbrains-mono/`, the UI font baked into `assets/font.bin`):
   SIL Open Font License 1.1 (`third_party/jetbrains-mono/OFL.txt`).
 - **Noto Sans** SC, TC, JP, KR, Arabic, Devanagari, Bengali and Thai (fetched at build time at

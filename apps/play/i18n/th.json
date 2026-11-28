@@ -159,6 +159,21 @@
   "set_about": "เกี่ยวกับ",
   "about_version": "เวอร์ชัน %s",
   "about_music": "เพลง: ผลงานต้นฉบับที่ทำขึ้นสำหรับ PS5Upload Play",
-  "about_credits": "ใช้ฟอนต์ JetBrains Mono และ Noto Sans (SIL OFL 1.1), Opus (BSD) และไลบรารี QR Code generator โดย Project Nayuki (MIT)",
-  "about_license": "PS5Upload Play เป็นซอฟต์แวร์เสรีภายใต้ GNU GPL v3"
+  "about_credits": "ใช้ฟอนต์ JetBrains Mono และ Noto Sans (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) และไลบรารี QR Code generator โดย Project Nayuki (MIT)",
+  "about_license": "PS5Upload Play เป็นซอฟต์แวร์เสรีภายใต้ GNU GPL v3",
+  "home_nearby": "เข้าร่วมเกมของ %s",
+  "home_nearby_sub": "กำลังเล่นอยู่ในเครือข่ายนี้ เพื่อนของคุณจะให้คุณเข้า",
+  "home_again": "เล่นอีกครั้งกับ %s",
+  "home_again_sub": "เพื่อนของคุณจะได้รับคำขอให้คุณเข้า",
+  "home_invite": "%s ชวนคุณมาเล่น",
+  "home_invite_sub": "เข้าร่วมเลย เพื่อนของคุณจะให้คุณเข้า",
+  "phone_title": "คำเชิญอยู่ในโทรศัพท์?",
+  "phone_text": "สแกนสิ่งนี้ด้วยโทรศัพท์ แล้วแตะ \"เล่นบน PS5 ของฉัน\"",
+  "phone_wait": "กำลังรับโค้ดสำหรับโทรศัพท์…",
+  "phone_offline": "โค้ดสำหรับโทรศัพท์ต้องใช้อินเทอร์เน็ต และ PS5 เครื่องนี้เชื่อมต่อไม่ได้ในตอนนี้",
+  "phone_again": "โค้ดสำหรับโทรศัพท์ปิดอยู่ กด △ เพื่อแสดงอีกครั้ง",
+  "hint_phone": "โค้ดโทรศัพท์",
+  "inv_got": "%s ส่งคำเชิญมาให้คุณ",
+  "inv_unreachable": "PS5 เครื่องนี้เข้าถึงเกมของ %s ไม่ได้ ต้องอยู่ในเครือข่ายนี้หรือบน Tailscale",
+  "why_friend": "PS5Upload ของเพื่อนคุณจำ PS5 เครื่องนี้ไม่ได้แล้ว เข้าร่วมด้วยโค้ดหนึ่งครั้ง แล้ว \"เล่นอีกครั้ง\" จะใช้ได้"
 }

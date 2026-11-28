@@ -1,6 +1,8 @@
 // PS5Upload Play - host unit tests for the portable core (make -C apps/play test).
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "../src/core/chord.hpp"
+#include "../src/core/friends.hpp"
+#include "../src/core/invite.hpp"
 #include "../src/core/jitter.hpp"
 #include "../src/core/json.hpp"
 #include "../src/core/proto.hpp"
@@ -439,10 +441,169 @@ void test_i18n()
           !std::strcmp(i18n::code(i18n::from_system_id(1)), "en") &&
           !std::strcmp(i18n::code(i18n::from_system_id(99)), "en"));
 }
+// ---- easy join (docs/EASY_JOIN.md) ----------------------------------------------------------
+void test_invite_links()
+{
+    invite::Invite inv;
+    CHECK(invite::add_link("http://192.168.1.20:19113/join#i=abcdefgh123&n=Desk%20PC&fp=AA", inv));
+    CHECK(!std::strcmp(inv.key, "abcdefgh123") && !std::strcmp(inv.name, "Desk PC") && !inv.internet);
+    CHECK(inv.n_routes == 1 && !std::strcmp(inv.routes[0].addr, "192.168.1.20") && inv.routes[0].port == 19113 &&
+          !inv.routes[0].tailnet && !std::strcmp(inv.routes[0].path, "/api/join/ws"));
+    // Under a prefix, and the default port.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("http://10.0.0.5/ps5u/join/#i=abcdefgh123", inv));
+    CHECK(inv.routes[0].port == 80 && !std::strcmp(inv.routes[0].path, "/ps5u/api/join/ws"));
+    // The one link for everywhere: its key, and the home network's and Tailscale's pages.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA:BB"
+                           "&hub=hub.phantomptr.com&lan=http%3A%2F%2F192.168.1.20%3A19113%2Fjoin"
+                           "&ts=http%3A%2F%2F100.101.2.3%3A19113%2Fjoin",
+                           inv));
+    CHECK(inv.internet && !std::strcmp(inv.key, "KEY12345678") && inv.n_routes == 2);
+    CHECK(!std::strcmp(inv.routes[0].addr, "192.168.1.20") && !inv.routes[0].tailnet);
+    CHECK(!std::strcmp(inv.routes[1].addr, "100.101.2.3") && inv.routes[1].tailnet);
+    // Internet only: no direct route (the play-routes work adds the internet one).
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA&hub=h", inv));
+    CHECK(inv.internet && inv.n_routes == 0);
+    // Public, https and loopback pages are not direct routes; bad keys and other pages are refused.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("http://8.8.8.8:19113/join#i=abcdefgh123", inv) && inv.n_routes == 0);
+    CHECK(invite::add_link("https://192.168.1.20/join#i=abcdefgh123", inv) && inv.n_routes == 0);
+    CHECK(invite::add_link("http://127.0.0.1:19113/join#i=abcdefgh123", inv) && inv.n_routes == 0);
+    inv = invite::Invite{};
+    CHECK(!invite::add_link("http://192.168.1.20:19113/join#i=short", inv));
+    CHECK(!invite::add_link("http://192.168.1.20:19113/join#i=abc/defgh123", inv));
+    CHECK(!invite::add_link("http://192.168.1.20:19113/other#i=abcdefgh123", inv));
+    CHECK(!invite::add_link("ftp://192.168.1.20/join#i=abcdefgh123", inv));
+    CHECK(!invite::add_link("javascript:alert(1)", inv));
+    CHECK(!invite::add_link("http://192.168.1.20:99999/join#i=abcdefgh123", inv));
+    // A second link with another key is not mixed in.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("http://192.168.1.20:19113/join#i=abcdefgh123", inv));
+    CHECK(!invite::add_link("http://192.168.1.21:19113/join#i=zzzzzzzz999", inv) && inv.n_routes == 1);
+    bool ts = false;
+    CHECK(invite::private_v4("172.16.0.1", &ts) && !ts && invite::private_v4("100.64.0.1", &ts) && ts);
+    CHECK(!invite::private_v4("172.32.0.1", nullptr) && !invite::private_v4("100.128.0.1", nullptr) &&
+          !invite::private_v4("192.168.1", nullptr) && !invite::private_v4("192.168.1.256", nullptr) &&
+          !invite::private_v4("hub.example", nullptr));
+}
+
+void test_handoff()
+{
+    invite::Invite inv;
+    const char *ok = R"({"invite":{"link":"http://192.168.1.20:19113/join#i=abcdefgh123","links":["http://10.1.2.3:19113/join#i=abcdefgh123","http://10.9.9.9:19113/join#i=otherkey999"],"name":"Desk\u0001PC","t":"nonce123"}})";
+    CHECK(invite::parse_handoff(ok, std::strlen(ok), inv));
+    CHECK(inv.n_routes == 2 && !std::strcmp(inv.routes[1].addr, "10.1.2.3")); // the other key's left out
+    CHECK(!std::strcmp(inv.name, "DeskPC") && !std::strcmp(inv.nonce, "nonce123"));
+    const char *bad[] = {
+        R"({"invite":{"link":"http://example.com/x"}})",
+        R"({"invite":"http://192.168.1.20:19113/join#i=abcdefgh123"})",
+        R"({"other":1})",
+        "not json",
+    };
+    for (const char *b : bad)
+        CHECK(!invite::parse_handoff(b, std::strlen(b), inv));
+    // A nonce that isn't a word is dropped (the push then asks first).
+    const char *odd = R"({"invite":{"link":"http://192.168.1.20:19113/join#i=abcdefgh123","t":"a b"}})";
+    CHECK(invite::parse_handoff(odd, std::strlen(odd), inv) && !inv.nonce[0]);
+    // Too large.
+    char big[3000];
+    std::memset(big, ' ', sizeof big);
+    std::memcpy(big, ok, std::strlen(ok));
+    CHECK(!invite::parse_handoff(big, sizeof big, inv));
+}
+
+void test_waiting_room_ids()
+{
+    // The hub's own (hub.rs room_for_secret): a bound room id.
+    char room[23];
+    invite::room_for_secret("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG", room);
+    CHECK(!std::strcmp(room, "QmC7v41CxdU7YX73vWnXjh"));
+    char b[16];
+    const std::uint8_t x[] = {0xfb, 0xff};
+    CHECK(invite::b64url(x, 2, b, sizeof b) == 3 && !std::strcmp(b, "-_8"));
+    char qr[200];
+    CHECK(invite::qr_link(qr, sizeof qr, "https://p/join/", room, "nn", "hub.example") > 0);
+    CHECK(!std::strcmp(qr, "https://p/join/#ps5=QmC7v41CxdU7YX73vWnXjh&t=nn&hub=hub.example"));
+    char host[64];
+    CHECK(invite::hub_host("wss://hub.phantomptr.com/ws", host, sizeof host) && !std::strcmp(host, "hub.phantomptr.com"));
+    CHECK(invite::hub_host("ws://127.0.0.1:8787/ws", host, sizeof host) && !std::strcmp(host, "127.0.0.1:8787"));
+    CHECK(!invite::hub_host("https://x/ws", host, sizeof host));
+}
+
+void test_friends_and_hello()
+{
+    Friends f;
+    CHECK(f.remember("192.168.1.20", 19113, false, "", "Desk", "pass1"));
+    CHECK(f.remember("100.101.2.3", 19113, true, "/p/api/join/ws", "Laptop", "pass2"));
+    CHECK(!f.remember("1.2.3.4", 1, false, "", "x", "bad|pass"));
+    CHECK(!f.remember("1.2.3.4", 1, false, "", "x", ""));
+    char text[2048];
+    const std::size_t n = f.write(text, sizeof text);
+    Friends g;
+    g.parse(text, n);
+    const Friend *r[Friends::kMax];
+    CHECK(g.recent(r, Friends::kMax) == 2 && !std::strcmp(r[0]->name, "Laptop") && r[0]->tailnet &&
+          !std::strcmp(r[0]->path, "/p/api/join/ws") && !std::strcmp(r[1]->pass, "pass1"));
+    // Refreshing keeps one entry; the oldest makes room when full.
+    CHECK(g.remember("192.168.1.20", 19113, false, "", "Desk", "pass3"));
+    CHECK(g.recent(r, Friends::kMax) == 2 && !std::strcmp(r[0]->pass, "pass3"));
+    for (int i = 0; i < 10; ++i)
+    {
+        char a[16];
+        std::snprintf(a, sizeof a, "10.0.0.%d", i);
+        g.remember(a, 19113, false, "", "", "p");
+    }
+    CHECK(g.recent(r, Friends::kMax) == Friends::kMax && !g.find("192.168.1.20", 19113));
+    g.forget_all();
+    CHECK(g.recent(r, Friends::kMax) == 0);
+    // A broken file reads as nothing.
+    const char *junk = "friend=|||\nfriend=a|1\nfriend=1.2.3.4|5|0|1||pp|n\n";
+    g.parse(junk, std::strlen(junk));
+    CHECK(g.recent(r, Friends::kMax) == 1 && !std::strcmp(r[0]->pass, "pp"));
+
+    // The hello: the invite's key, the pass (not on a resume), remember and the waiting room.
+    char h[768];
+    proto::ClientCaps caps{"13.0.0", true, false, true, true};
+    proto::HelloExtras x;
+    x.invite = "abcdefgh123";
+    x.again = "pass1";
+    x.remember = true;
+    x.inbox_room = "QmC7v41CxdU7YX73vWnXjh";
+    x.inbox_hub = "hub.phantomptr.com";
+    CHECK(proto::hello_ex(h, sizeof h, "", nullptr, "Sam", caps, x) > 0);
+    json::Token t[64];
+    json::Doc d(t, 64);
+    CHECK(d.parse(h, std::strlen(h)));
+    const int o = d.get(0, "hello");
+    CHECK(d.str_is(d.get(o, "invite"), "abcdefgh123") && d.str_is(d.get(o, "again"), "pass1") &&
+          d.boolean(d.get(o, "remember")) && d.str_is(d.get(d.get(o, "inbox"), "room"), "QmC7v41CxdU7YX73vWnXjh") &&
+          d.get(o, "code") < 0 && d.get(d.get(o, "client"), "caps") >= 0);
+    CHECK(proto::hello_ex(h, sizeof h, "", "tok1", "Sam", caps, x) > 0 && !std::strstr(h, "again"));
+    // Nothing extra: the same hello as before.
+    char a[768], b2[768];
+    proto::hello(a, sizeof a, "ABCDEF", nullptr, "Sam", caps);
+    proto::hello_ex(b2, sizeof b2, "ABCDEF", nullptr, "Sam", caps, proto::HelloExtras{});
+    CHECK(!std::strcmp(a, b2) && !std::strstr(a, "remember"));
+    // joined's pass and discovery's together.
+    proto::GuestEvent e;
+    const char *j = R"({"stage":"joined","player":2,"token":"t","hevc":true,"friend":"PASSPASS"})";
+    CHECK(proto::parse_guest(j, std::strlen(j), e) && !std::strcmp(e.friend_pass, "PASSPASS"));
+    proto::Found fd;
+    const char *ans = R"({"name":"Desk","port":19113,"version":"13.0.0","id":"x","together":2})";
+    CHECK(proto::parse_found(ans, std::strlen(ans), fd) && fd.together == 2);
+    const char *old = R"({"name":"Desk","port":19113,"version":"12.6.0","id":"x"})";
+    CHECK(proto::parse_found(old, std::strlen(old), fd) && fd.together == 0);
+}
 } // namespace
 
 int main()
 {
+    test_invite_links();
+    test_handoff();
+    test_waiting_room_ids();
+    test_friends_and_hello();
     test_sha1_base64();
     test_handshake();
     test_ws_frames();

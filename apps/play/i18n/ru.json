@@ -159,6 +159,21 @@
   "set_about": "О программе",
   "about_version": "Версия %s",
   "about_music": "Музыка: оригинальная композиция, написанная для PS5Upload Play.",
-  "about_credits": "Использует шрифты JetBrains Mono и Noto Sans (SIL OFL 1.1), Opus (BSD) и библиотеку QR Code generator от Project Nayuki (MIT).",
-  "about_license": "PS5Upload Play — свободная программа под лицензией GNU GPL v3."
+  "about_credits": "Использует шрифты JetBrains Mono и Noto Sans (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) и библиотеку QR Code generator от Project Nayuki (MIT).",
+  "about_license": "PS5Upload Play — свободная программа под лицензией GNU GPL v3.",
+  "home_nearby": "Войти в игру %s",
+  "home_nearby_sub": "Идёт сейчас в этой сети. Друг впустит вас.",
+  "home_again": "Сыграть снова с %s",
+  "home_again_sub": "Друга попросят впустить вас",
+  "home_invite": "%s приглашает вас поиграть",
+  "home_invite_sub": "Войти сейчас. Друг впустит вас.",
+  "phone_title": "Приглашение на телефоне?",
+  "phone_text": "Отсканируйте это телефоном и нажмите «Играть на моей PS5».",
+  "phone_wait": "Получаю код для телефона…",
+  "phone_offline": "Коду для телефона нужен интернет, а эта PS5 сейчас до него не достаёт.",
+  "phone_again": "Код для телефона выключен. Нажмите △, чтобы показать его снова.",
+  "hint_phone": "Код для телефона",
+  "inv_got": "%s прислал(а) вам приглашение.",
+  "inv_unreachable": "Эта PS5 не достаёт до игры %s. Она должна быть в этой сети или в Tailscale.",
+  "why_friend": "PS5Upload друга больше не помнит эту PS5. Войдите один раз по коду, и «Сыграть снова» снова заработает."
 }

@@ -15,8 +15,8 @@ Press counts start with PS5Upload Play open on its home screen ("✕" = one pres
 | 1 | **Same home network, nearby list** | the host's game is already on the app's home screen: ✕ (1 press, 0 typed) | host's engine answers the UDP probe (`play_discovery`, on by default); Play Together open | the host approves; no code. Before this change: Join › pick computer › "ask without a code" (3 presses + reading). |
 | 2 | **Tailscale, helper mesh** | same as 1 once the helper lists the engine (1 press) | helper running on the guest PS5 (its forward), host on system Tailscale | the helper's mesh says nothing about Play Together being open, so these engines show in "Join a friend's game" (2 presses), not as a ready-made row. |
 | 3 | **Play again (remembered friend)** | "Play again with Alex": ✕ (1 press) | the guest joined that host before from this app (it keeps the host's friend pass); the host's engine reachable (LAN, or Tailscale through the helper) | works even when Play Together is closed: the engine opens it for the console being played when the host says yes. The host still approves every time. |
-| 4 | **Phone-assisted, TV-login pattern ("Play on my PS5")** | the app's home screen shows a QR code. Scan it with the phone (0 presses on the PS5), tap "Play on my PS5" on the phone (1 tap). The app starts joining by itself. | the app reaches the hub over TLS (`wss://hub.phantomptr.com/ws`, BearSSL in the app); the invite must be playable from this PS5 (see "What the app can play") | the phone page keeps the last invite link opened on it (30 min), so the order doesn't matter: open the friend's link, then scan, or scan, then open the link. |
-| 5 | **Host pushes to a remembered friend's PS5** | the friend's TV shows "Alex invites you to play": ✕ (1 press) | the friend's app open (its waiting room is on the hub only while it runs); the host's PS5Upload has that friend's PS5 from an earlier game | "Send invite to <friend>'s PS5" in PS5Upload › Play › Play Together. The friend's app asks before joining: a push is not the person in front of the TV. |
+| 4 | **Phone-assisted, TV-login pattern ("Play on my PS5")** | the app's home screen shows a QR code. Scan it with the phone (0 presses on the PS5; △ once if the code's 5 minutes ran out), tap "Play on my PS5" on the phone (1 tap). The app starts joining by itself. | the app reaches the hub over TLS (`wss://hub.phantomptr.com/ws`, BearSSL in the app); the invite must be playable from this PS5 (see "What the app can play") | the phone page keeps the last invite link opened on it (30 min), so the order doesn't matter: open the friend's link, then scan, or scan, then open the link. |
+| 5 | **Host pushes to a remembered friend's PS5** | the friend's TV shows "Alex invites you to play": ✕ (1 press) | the friend's app open on its home screen (its waiting room is on the hub 5 minutes at a stretch; △ opens it again); the host's PS5Upload has that friend's PS5 from an earlier game | "Send invite to <friend>'s PS5" in PS5Upload › Play › Play Together. The friend's app asks before joining: a push is not the person in front of the TV. |
 | 6 | **Invite link or QR on the host's TV, scanned by a phone** | phone joins in its browser (already existed) | — | the host app's Host screen already shows the invite code and QR; the guest page now also offers "Play on my PS5" (way 4). |
 | 7 | **Short code** | Join a friend's game › computer (✕) › "Enter a code" (✕) › 6 characters on the code keyboard (≈ 4 moves + ✕ each, ≈ 30 presses) | the host's engine reachable | the fallback. The keyboard only has the code's 31 characters in a big 8 × 4 grid and jumps to Join after the 6th. |
 | 8 | **Typed engine address** | address keypad (12–21 presses) | — | last resort; kept. |
@@ -72,12 +72,19 @@ The engine finds the console it was for: Play Together open → a normal ask; cl
 is being played → it opens Play Together, asks, and closes it again if the host says no; not being
 played → "Your friend isn't playing right now".
 
-**Phone.** The app's home screen shows a QR code (right side) "Got an invite on your phone? Scan
-this, then tap Play on my PS5". The QR is `https://ps5upload.phantomptr.com/join/#ps5=<room>&t=<nonce>&hub=<hub>`.
-The phone page: with an invite opened in the last 30 minutes on that phone it shows "Play
-<host>'s game on your PS5" (one tap); otherwise "Open your friend's invite link on this phone",
-and the invite page later offers "Play on my PS5" while the scan is fresh (10 minutes). The page
-joins the app's room on the hub and signals the link; the app answers and starts joining.
+**Phone.** The app's home screen shows a QR code (right side) "Invite on your phone? Scan this
+with your phone, then tap Play on my PS5". The QR is
+`https://ps5upload.phantomptr.com/join/#ps5=<room>&t=<nonce>&hub=<hub>`. The room is open for 5
+minutes at a stretch while the home screen is up (owner rule: small hub load); after that the
+QR gives way to "The phone code is off. Press △ to show it again". The phone page: with an invite
+opened in the last 30 minutes on that phone it shows "Play <host>'s game on your PS5" (one tap);
+otherwise "Open your friend's invite link on this phone", plus a paste box. An invite page offers
+a small "Play on my PS5" under Join: on the website it sends at once when a PS5 was scanned in the
+last 10 minutes (else the hint to scan); an invite opened on the home network (the host's own
+page, which can't reach the website's storage or the hub) hands over to the website
+(`/join/#play=<link>`), which then shows the same one-tap button. The page joins the app's room on
+the hub and signals the link; the app checks it can reach the host (probes the direct routes,
+Tailscale through the helper), answers, and starts joining.
 
 **Host push.** Each time a guest app joins with `remember`, it also gives its waiting room
 (`inbox: {room, hub}`). PS5Upload › Play › Play Together lists "Friends' PS5s"; "Send invite"
@@ -173,7 +180,21 @@ joins at once. Without it (a host's push) the app asks first. Data is capped at 
 
 ## Hub
 
-No hub change is needed: the waiting room and the hand-off use protocol v1 rooms and signals as
-they are. A 6-character code for the phone (typing instead of scanning) would need a hub change
-(a short alias for a room); it is not built: the QR is the way in, and the phone page can take a
-pasted link.
+No hub change is needed and none was made: the waiting room and the hand-off use protocol v1
+rooms and signals as they are (nothing to deploy). Owner rule: the hub only introduces; it keeps
+nothing for easy join. Remembered hosts, friend passes, lists and status live in the app
+(`friends.txt`, `room.txt`) and the engine (`play_together_friends.json`), never on the hub. A
+6-character code for the phone (typing instead of scanning) would need a hub change (a short alias
+for a room); it is not built: the QR is the way in, and the phone page takes a pasted link.
+
+### Hub load per join (measured with play-cli against the live hub and the stand-in)
+
+| Who | Connected | Messages | Bytes (WebSocket, before TLS) |
+|---|---|---|---|
+| The app's waiting room | while the home screen is up, at most 5 min a stretch | `host`, `hosted`, then nothing but the hub's ping every 20 s when quiet, an answer per hand-off, `leave` | 328 in / 322 out for the upgrade, `host`, `hosted` and `leave`; + about 60 per hand-off |
+| A phone's hand-off | about 1 s | `join`, `joined`, one `signal` out, one `signal` back, `leave` | under 1.5 KB |
+| A host's "Send invite" | about 1 s (10 s at most) | the same five | under 2 KB |
+
+The app's room is one socket of the hub's 2,000 and one room of its 5,000, only while someone
+looks at the home screen; nothing polls. The stand-in end-to-end run (three hand-offs and one
+refusal) moved 10 messages in and 5 out, 738 and 519 bytes.

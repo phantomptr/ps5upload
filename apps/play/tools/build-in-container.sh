@@ -111,13 +111,32 @@ MK
     llvm-ar rcs "$opus_lib" "${objs[@]}"
 fi
 
+# --- BearSSL (MIT, the repository's submodule): TLS for the hub's wss:// (docs/EASY_JOIN.md) ---
+# Entropy comes from the app (sceRandom) and the time from the console's clock, so none of the
+# library's own system hooks are built in.
+bearssl="$root/../../third_party/bearssl"
+[[ -f $bearssl/inc/bearssl.h ]] || { echo "BearSSL missing: git submodule update --init third_party/bearssl" >&2; exit 2; }
+br_lib="$build/bearssl/libbearssl.a"
+if [[ ! -f $br_lib ]]; then
+    mkdir -p "$build/bearssl/obj"
+    objs=()
+    for s in "$bearssl"/src/*/*.c; do
+        o="$build/bearssl/obj/$(basename "$(dirname "$s")")_$(basename "${s%.c}").o"
+        "${cc[@]}" -std=c11 -O2 -w -ffunction-sections -fdata-sections -DBR_USE_URANDOM=0 -DBR_USE_GETENTROPY=0 \
+            -DBR_USE_UNIX_TIME=0 -DBR_RDRAND=0 -I"$bearssl/inc" -I"$bearssl/src" -c "$s" -o "$o"
+        objs+=("$o")
+    done
+    llvm-ar rcs "$br_lib" "${objs[@]}"
+fi
+
 # --- the app ---
 common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti
         -fno-threadsafe-statics -fno-use-cxa-atexit -fno-math-errno -mavx2 -mfma
-        -DPLAY_PS5 "-DPLAY_VERSION=\"$version\"" -I"$opus_src/include")
+        -DPLAY_PS5 "-DPLAY_VERSION=\"$version\"" -I"$opus_src/include" -I"$bearssl/inc")
 objs=()
 for s in "$root"/src/core/*.cpp "$root"/src/net/*.cpp "$root"/src/ui/*.cpp "$root"/src/ps5/*.cpp \
-         "$root"/src/app/app.cpp "$root"/src/app/guest.cpp "$root"/src/app/companion.cpp "$root"/src/app/helper.cpp "$root"/src/app/log.cpp; do
+         "$root"/src/app/app.cpp "$root"/src/app/guest.cpp "$root"/src/app/companion.cpp "$root"/src/app/helper.cpp "$root"/src/app/log.cpp \
+         "$root"/src/app/easy.cpp "$root"/src/app/waiting_room.cpp; do
     o="$build/obj/$(basename "$(dirname "$s")")_$(basename "${s%.cpp}").o"
     "${cc[@]}" -std=c++20 "${common[@]}" -c "$s" -o "$o"
     objs+=("$o")
@@ -125,6 +144,9 @@ done
 "${cc[@]}" -std=c11 -O2 -Wall -ffunction-sections -fdata-sections -DNDEBUG \
     -c "$root/third_party/qrcodegen/qrcodegen.c" -o "$build/obj/qrcodegen.o"
 objs+=("$build/obj/qrcodegen.o")
+"${cc[@]}" -std=c11 -O2 -Wall -ffunction-sections -fdata-sections -I"$bearssl/inc" -I"$root/../../tailnet/src" \
+    -c "$root/src/net/tls_roots.c" -o "$build/obj/tls_roots.o"
+objs+=("$build/obj/tls_roots.o")
 for s in app_crt app_cpp_runtime; do
     "${cc[@]}" -std=c++20 -O2 -Wall -Wextra -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti \
         -c "$native/$s.cpp" -o "$build/obj/$s.o"
@@ -145,7 +167,7 @@ bash "$root/tools/make-stub.sh" "$build/stubs/libSceVideodec2.so" libSceVideodec
 
 "$sdk/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr --gc-sections \
     --version-script "$native/app-symbols.map" -e _start -o "$build/llvm-pie.elf" \
-    "$build/obj/app_crt.o" "$build/obj/app_cpp_runtime.o" "${objs[@]}" "$opus_lib" \
+    "$build/obj/app_crt.o" "$build/obj/app_cpp_runtime.o" "${objs[@]}" "$opus_lib" "$br_lib" \
     "$build/libps5_kernel_api.a" "$sdk/target/lib/libc.a" \
     --as-needed "$sdk/target/lib/libkernel.so" "$sdk"/target/lib/*.so "$build/stubs/libSceVideodec2.so"
 

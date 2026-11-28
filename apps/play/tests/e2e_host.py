@@ -137,5 +137,119 @@ check("pin 1 waiting 12345678 300" in out and "pin_get 1 waiting" in out and "pi
 check("forward 1 9182" in out and "forward_lan 0 not_tailnet_address" in out, "Tailscale forward and its refusal")
 check("absent 0" in out, "no helper: calls fail quietly")
 
+# 9. Easy join (docs/EASY_JOIN.md): a pass for Play again, and asking again with it.
+p, port, rep = engine("friend", "--seconds", "3")
+out = run("join", "127.0.0.1", str(port), "--remember", "--invite", "abcdefgh123", "--seconds", "2")
+r = finish(p, rep)
+h = r["hellos"][0] if r["hellos"] else {}
+check(h.get("remember") is True and h.get("invite") == "abcdefgh123" and "code" not in h,
+      "hello asks to be remembered, with the invite's key")
+check("friend pass1" in out, "the pass in joined reaches the app")
+p, port, rep = engine("again", "--seconds", "3")
+out = run("join", "127.0.0.1", str(port), "--again", "pass1", "--seconds", "2")
+r = finish(p, rep)
+check(r["hellos"] and r["hellos"][0].get("again") == "pass1" and "phase joined" in out, "Play again asks with the pass")
+p, port, rep = engine("again2", "--seconds", "3")
+out = run("join", "127.0.0.1", str(port), "--again", "stale", "--seconds", "2")
+finish(p, rep)
+check("phase refused friend" in out, "a pass the engine forgot is refused")
+
+
+# 10. The waiting room on a (stand-in) hub: a phone hands over an invite.
+def ws_client(port, path):
+    import base64 as b64
+    import socket as s
+    import struct
+    c = s.create_connection(("127.0.0.1", port), timeout=5)
+    key = b64.b64encode(os.urandom(16)).decode()
+    c.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        buf += c.recv(4096)
+    rest = buf.split(b"\r\n\r\n", 1)[1]
+
+    class C:
+        def __init__(self):
+            self.buf = rest
+
+        def send(self, obj):
+            d = json.dumps(obj).encode()
+            m = os.urandom(4)
+            h = struct.pack("BB", 0x81, 0x80 | len(d)) if len(d) < 126 else struct.pack(">BBH", 0x81, 0xFE, len(d))
+            c.sendall(h + m + bytes(x ^ m[i % 4] for i, x in enumerate(d)))
+
+        def recv(self):
+            while True:
+                while len(self.buf) < 2:
+                    self.buf += c.recv(4096)
+                ln = self.buf[1] & 0x7F
+                hl = 2
+                if ln == 126:
+                    while len(self.buf) < 4:
+                        self.buf += c.recv(4096)
+                    ln = struct.unpack(">H", self.buf[2:4])[0]
+                    hl = 4
+                while len(self.buf) < hl + ln:
+                    self.buf += c.recv(4096)
+                d, self.buf = self.buf[hl:hl + ln], self.buf[hl + ln:]
+                return json.loads(d)
+
+        def close(self):
+            c.close()
+    return C()
+
+
+def phone(port, room, data):
+    g = ws_client(port, "/ws")
+    g.send({"v": 1, "t": "join", "room": room})
+    first = g.recv()
+    if first.get("t") != "joined":
+        g.close()
+        return first
+    g.send({"v": 1, "t": "signal", "to": "host", "data": data})
+    ans = g.recv()
+    g.send({"t": "leave"})
+    g.close()
+    return ans
+
+
+p, port, rep = engine("room", "--lifetime", "20")
+secret = os.path.join(work, "room.txt")
+if os.path.exists(secret):
+    os.remove(secret)
+room_cli = subprocess.Popen([cli, "room", f"ws://127.0.0.1:{port}/ws", secret, "--seconds", "8"],
+                            stdout=subprocess.PIPE, text=True)
+qr = None
+for line in room_cli.stdout:
+    if line.startswith("state ready"):
+        qr = line.split("qr=", 1)[1].strip()
+        break
+check(qr is not None and qr.startswith("https://ps5upload.phantomptr.com/join/#ps5="), "the room opens and has a QR link")
+frag = dict(kv.split("=", 1) for kv in qr.split("#", 1)[1].split("&")) if qr else {}
+check(len(frag.get("ps5", "")) == 22 and frag.get("ps5", "").endswith("h") and frag.get("hub") == f"127.0.0.1:{port}",
+      "QR: a bound room, its hub")
+check(os.path.exists(secret) and len(open(secret).read().strip()) == 43 and (os.stat(secret).st_mode & 0o777) == 0o600,
+      "the room's secret is kept, private")
+link = f"http://127.0.0.1:{port}/join#i=abcdefgh123&n=Desk"
+a1 = phone(port, frag.get("ps5"), {"invite": {"link": link, "t": frag.get("t")}})
+a2 = phone(port, frag.get("ps5"), {"invite": {"link": "http://127.0.0.1:1/nope", "t": frag.get("t")}})
+a3 = phone(port, frag.get("ps5"), {"invite": {"link": link, "name": "Host PC"}})
+a4 = phone(port, "A" * 21 + "h", {"invite": {"link": link}})
+rest = room_cli.communicate(timeout=20)[0]
+r = finish(p, rep)
+check(a1.get("data") == {"invite_ok": True}, "the app takes a phone's invite")
+check(a2.get("data") == {"invite_ok": False, "why": "link"}, "a link that isn't one is refused")
+check(a4.get("why") == "no_room", "a room that isn't open")
+check(f"invite key=abcdefgh123 name=Desk routes=1 route=127.0.0.1:{port} path=/api/join/ws from_tv=1" in rest,
+      "the invite, its route probed, from the TV's phone")
+check("name=Host PC" in rest and "from_tv=0" in rest and a3.get("data") == {"invite_ok": True},
+      "a host's push (no nonce) is marked to ask first")
+check(r["hub_hosts"] and r["hub_hosts"][0]["secret_len"] == 43, "hosted with a 43-character secret")
+check(any(m.get("t") == "leave" for m in r["hub_host_msgs"]), "the room is left when its time is up")
+sent = [m for m in r["hub_host_msgs"] if m.get("t") == "signal"]
+check(len(sent) == 4 - 1 and all(set(m["data"]) <= {"invite_ok", "why"} for m in sent),
+      "the app only ever answers (small messages)")
+
 print("e2e:", "all passed" if not failures else f"{failures} failed")
 sys.exit(1 if failures else 0)

@@ -25,6 +25,15 @@ its mesh (Tailscale ones through the helper's forward), this console's Remote Pl
 turning Remote Play on (✕ twice) and a Remote Play pairing PIN.
 Settings and the log are in `/data/ps5upload-play/`.
 
+**Easy join** ([docs/EASY_JOIN.md](docs/EASY_JOIN.md)): the home screen lists games open on this
+network ("Join Alex's game", one press) and hosts played with before ("Play again", one press, the
+host still lets them in; kept in `friends.txt`), and shows a QR code for the phone: scan it, tap
+"Play on my PS5" on the invite, and the app joins. For that the app hosts a small waiting room on
+the signalling hub (`wss://hub.phantomptr.com/ws`, TLS by BearSSL, the room's secret in
+`room.txt`) while the home screen is up, 5 minutes at a stretch. A host's PS5Upload can send an
+invite there too ("Friends' PS5s"). `play-cli room URL SECRET_FILE` runs the waiting room on a
+computer.
+
 ## Build
 
 ```sh

@@ -159,6 +159,21 @@
   "set_about": "Giới thiệu",
   "about_version": "Phiên bản %s",
   "about_music": "Nhạc: một bản nhạc gốc làm riêng cho PS5Upload Play.",
-  "about_credits": "Dùng phông chữ JetBrains Mono và Noto Sans (SIL OFL 1.1), Opus (BSD) và thư viện QR Code generator của Project Nayuki (MIT).",
-  "about_license": "PS5Upload Play là phần mềm tự do theo giấy phép GNU GPL v3."
+  "about_credits": "Dùng phông chữ JetBrains Mono và Noto Sans (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) và thư viện QR Code generator của Project Nayuki (MIT).",
+  "about_license": "PS5Upload Play là phần mềm tự do theo giấy phép GNU GPL v3.",
+  "home_nearby": "Tham gia game của %s",
+  "home_nearby_sub": "Đang chơi trên mạng này. Bạn của bạn sẽ cho bạn vào.",
+  "home_again": "Chơi lại với %s",
+  "home_again_sub": "Bạn của bạn sẽ được hỏi để cho bạn vào",
+  "home_invite": "%s mời bạn chơi",
+  "home_invite_sub": "Tham gia ngay. Bạn của bạn sẽ cho bạn vào.",
+  "phone_title": "Lời mời ở trên điện thoại?",
+  "phone_text": "Quét mã này bằng điện thoại, rồi chạm \"Chơi trên PS5 của tôi\".",
+  "phone_wait": "Đang lấy mã cho điện thoại…",
+  "phone_offline": "Mã cho điện thoại cần internet, và PS5 này hiện không kết nối được.",
+  "phone_again": "Mã cho điện thoại đang tắt. Nhấn △ để hiện lại.",
+  "hint_phone": "Mã điện thoại",
+  "inv_got": "%s đã gửi cho bạn một lời mời.",
+  "inv_unreachable": "PS5 này không kết nối được game của %s. Cần cùng mạng này hoặc dùng Tailscale.",
+  "why_friend": "PS5Upload của bạn bạn không còn nhớ PS5 này. Tham gia một lần bằng mã, sau đó \"Chơi lại\" sẽ hoạt động."
 }

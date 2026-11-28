@@ -159,6 +159,21 @@
   "set_about": "Hakkında",
   "about_version": "Sürüm %s",
   "about_music": "Müzik: PS5Upload Play için yapılmış özgün bir parça.",
-  "about_credits": "JetBrains Mono ve Noto Sans yazı tiplerini (SIL OFL 1.1), Opus (BSD) ve Project Nayuki'nin QR Code generator kütüphanesini (MIT) kullanır.",
-  "about_license": "PS5Upload Play, GNU GPL v3 altında özgür bir yazılımdır."
+  "about_credits": "JetBrains Mono ve Noto Sans yazı tiplerini (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) ve Project Nayuki'nin QR Code generator kütüphanesini (MIT) kullanır.",
+  "about_license": "PS5Upload Play, GNU GPL v3 altında özgür bir yazılımdır.",
+  "home_nearby": "%s oyununa katıl",
+  "home_nearby_sub": "Şu an bu ağda oynanıyor. Arkadaşın seni içeri alır.",
+  "home_again": "%s ile yeniden oyna",
+  "home_again_sub": "Arkadaşına seni içeri alması sorulur",
+  "home_invite": "%s seni oynamaya davet ediyor",
+  "home_invite_sub": "Şimdi katıl. Arkadaşın seni içeri alır.",
+  "phone_title": "Davet telefonunda mı?",
+  "phone_text": "Bunu telefonunla tara, sonra \"PS5'imde oyna\"ya dokun.",
+  "phone_wait": "Telefon kodu alınıyor…",
+  "phone_offline": "Telefon kodu için internet gerekiyor ve bu PS5 şu an internete ulaşamıyor.",
+  "phone_again": "Telefon kodu kapalı. Yeniden göstermek için △'ya bas.",
+  "hint_phone": "Telefon kodu",
+  "inv_got": "%s sana bir davet gönderdi.",
+  "inv_unreachable": "Bu PS5, %s oyununa ulaşamıyor. Bu ağda ya da Tailscale'de olmalı.",
+  "why_friend": "Arkadaşının PS5Upload'u bu PS5'i artık hatırlamıyor. Bir kez kodla katıl, sonra \"Yeniden oyna\" çalışır."
 }

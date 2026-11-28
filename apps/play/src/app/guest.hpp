@@ -63,6 +63,20 @@ struct GuestView
     std::uint64_t phase_since_us = 0;
     std::uint64_t pictures = 0, sounds = 0, pads_sent = 0;
     int delivery_ms = -1; // engine -> app time of the last picture, when the engine times them
+    char friend_pass[48] = {}; // the host's engine remembers this PS5 ("Play again"), from joined
+};
+
+// How a join goes beyond the code (docs/EASY_JOIN.md): an invite link's key, a friend pass, asking
+// to be remembered, this app's waiting room, and the guest socket's path when the host's engine is
+// served under a prefix.
+struct JoinExtras
+{
+    char invite[132] = {};
+    char again[48] = {};
+    bool remember = true;
+    char inbox_room[24] = {};
+    char inbox_hub[64] = {};
+    char path[80] = {}; // "" = /api/join/ws
 };
 
 class Guest
@@ -72,6 +86,11 @@ class Guest
     // Starts joining (code: 6 characters, or "" for a nearby join). False while one runs.
     bool start(const char *addr, std::uint16_t port, const char *code, const char *name,
                const char *version) noexcept;
+    // For the next start(): see JoinExtras (kept until set again).
+    void set_extras(const JoinExtras &x) noexcept
+    {
+        extras_ = x;
+    }
     // Leaves (tells the host) and stops; returns at once.
     void leave() noexcept;
     // Waits for the thread to end (after leave(), or once it ended by itself).
@@ -114,6 +133,7 @@ class Guest
     char name_[48] = {};
     char version_[24] = {};
     char token_[80] = {};
+    JoinExtras extras_;
     std::atomic<bool> joined_{false}, raw_pad_{false};
     std::atomic<std::uint32_t> pad_seq_{1};
     proto::KeyframeAsk key_ask_;

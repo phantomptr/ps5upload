@@ -159,6 +159,21 @@
   "set_about": "Informazioni",
   "about_version": "Versione %s",
   "about_music": "Musica: un brano originale creato per PS5Upload Play.",
-  "about_credits": "Usa i font JetBrains Mono e Noto Sans (SIL OFL 1.1), Opus (BSD) e la libreria QR Code generator di Project Nayuki (MIT).",
-  "about_license": "PS5Upload Play è software libero sotto licenza GNU GPL v3."
+  "about_credits": "Usa i font JetBrains Mono e Noto Sans (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) e la libreria QR Code generator di Project Nayuki (MIT).",
+  "about_license": "PS5Upload Play è software libero sotto licenza GNU GPL v3.",
+  "home_nearby": "Unisciti alla partita di %s",
+  "home_nearby_sub": "In corso su questa rete. Il tuo amico ti fa entrare.",
+  "home_again": "Gioca di nuovo con %s",
+  "home_again_sub": "Al tuo amico viene chiesto di farti entrare",
+  "home_invite": "%s ti invita a giocare",
+  "home_invite_sub": "Entra ora. Il tuo amico ti fa entrare.",
+  "phone_title": "Invito sul telefono?",
+  "phone_text": "Inquadra questo con il telefono, poi tocca «Gioca sulla mia PS5».",
+  "phone_wait": "Preparo il codice per il telefono…",
+  "phone_offline": "Il codice per il telefono ha bisogno di internet, e questa PS5 ora non lo raggiunge.",
+  "phone_again": "Il codice per il telefono è spento. Premi △ per mostrarlo di nuovo.",
+  "hint_phone": "Codice telefono",
+  "inv_got": "%s ti ha mandato un invito.",
+  "inv_unreachable": "Questa PS5 non raggiunge la partita di %s. Deve essere su questa rete o su Tailscale.",
+  "why_friend": "Il PS5Upload del tuo amico non ricorda più questa PS5. Entra una volta con un codice, poi «Gioca di nuovo» funziona."
 }

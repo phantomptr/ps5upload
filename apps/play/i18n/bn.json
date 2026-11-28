@@ -159,6 +159,21 @@
   "set_about": "সম্পর্কে",
   "about_version": "সংস্করণ %s",
   "about_music": "মিউজিক: PS5Upload Play-এর জন্য বানানো একটি মৌলিক সুর।",
-  "about_credits": "JetBrains Mono ও Noto Sans ফন্ট (SIL OFL 1.1), Opus (BSD) এবং Project Nayuki-র QR Code generator লাইব্রেরি (MIT) ব্যবহার করে।",
-  "about_license": "PS5Upload Play হলো GNU GPL v3-এর অধীনে ফ্রি সফটওয়্যার।"
+  "about_credits": "JetBrains Mono ও Noto Sans ফন্ট (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) এবং Project Nayuki-র QR Code generator লাইব্রেরি (MIT) ব্যবহার করে।",
+  "about_license": "PS5Upload Play হলো GNU GPL v3-এর অধীনে ফ্রি সফটওয়্যার।",
+  "home_nearby": "%s-এর গেমে যোগ দিন",
+  "home_nearby_sub": "এখন এই নেটওয়ার্কে খেলা চলছে। আপনার বন্ধু আপনাকে ঢুকতে দেবে।",
+  "home_again": "%s-এর সাথে আবার খেলুন",
+  "home_again_sub": "আপনার বন্ধুকে আপনাকে ঢুকতে দিতে বলা হবে",
+  "home_invite": "%s আপনাকে খেলতে ডাকছে",
+  "home_invite_sub": "এখনই যোগ দিন। আপনার বন্ধু আপনাকে ঢুকতে দেবে।",
+  "phone_title": "আমন্ত্রণ ফোনে আছে?",
+  "phone_text": "এটি ফোন দিয়ে স্ক্যান করুন, তারপর \"আমার PS5-এ খেলুন\"-এ ট্যাপ করুন।",
+  "phone_wait": "ফোনের কোড আনা হচ্ছে…",
+  "phone_offline": "ফোনের কোডের জন্য ইন্টারনেট লাগে, আর এই PS5 এখন সেখানে পৌঁছাতে পারছে না।",
+  "phone_again": "ফোনের কোড বন্ধ আছে। আবার দেখাতে △ চাপুন।",
+  "hint_phone": "ফোনের কোড",
+  "inv_got": "%s আপনাকে একটি আমন্ত্রণ পাঠিয়েছে।",
+  "inv_unreachable": "এই PS5 %s-এর গেমে পৌঁছাতে পারছে না। সেটিকে এই নেটওয়ার্কে বা Tailscale-এ থাকতে হবে।",
+  "why_friend": "আপনার বন্ধুর PS5Upload এই PS5-কে আর মনে রাখে না। একবার কোড দিয়ে যোগ দিন, তারপর \"আবার খেলুন\" কাজ করবে।"
 }

@@ -159,6 +159,21 @@
   "set_about": "Névjegy",
   "about_version": "Verzió: %s",
   "about_music": "Zene: a PS5Upload Playhez készült eredeti darab.",
-  "about_credits": "Felhasználja a JetBrains Mono és a Noto Sans betűtípust (SIL OFL 1.1), az Opus (BSD) és a Project Nayuki QR Code generator könyvtárát (MIT).",
-  "about_license": "A PS5Upload Play szabad szoftver, GNU GPL v3 licenc alatt."
+  "about_credits": "Felhasználja a JetBrains Mono és a Noto Sans betűtípust (SIL OFL 1.1), az Opus (BSD), BearSSL (MIT) és a Project Nayuki QR Code generator könyvtárát (MIT).",
+  "about_license": "A PS5Upload Play szabad szoftver, GNU GPL v3 licenc alatt.",
+  "home_nearby": "Csatlakozás: %s játéka",
+  "home_nearby_sub": "Most megy ezen a hálózaton. A barátod beenged.",
+  "home_again": "Újra játék vele: %s",
+  "home_again_sub": "A barátod kérést kap, hogy engedjen be",
+  "home_invite": "%s meghív játszani",
+  "home_invite_sub": "Csatlakozz most. A barátod beenged.",
+  "phone_title": "Meghívó a telefonodon?",
+  "phone_text": "Olvasd be a telefonoddal, majd koppints a „Játék a saját PS5-ömön” gombra.",
+  "phone_wait": "Telefonos kód kérése…",
+  "phone_offline": "A telefonos kódhoz internet kell, és ez a PS5 most nem éri el.",
+  "phone_again": "A telefonos kód ki van kapcsolva. Nyomd meg a △ gombot, hogy újra látszódjon.",
+  "hint_phone": "Telefonos kód",
+  "inv_got": "%s meghívót küldött neked.",
+  "inv_unreachable": "Ez a PS5 nem éri el %s játékát. Ezen a hálózaton vagy Tailscale-en kell lennie.",
+  "why_friend": "A barátod PS5Uploadja már nem emlékszik erre a PS5-re. Csatlakozz egyszer kóddal, utána az „Újra játék” működik."
 }

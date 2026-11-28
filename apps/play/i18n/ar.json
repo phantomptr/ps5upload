@@ -159,6 +159,21 @@
   "set_about": "حول",
   "about_version": "الإصدار %s",
   "about_music": "الموسيقى: مقطوعة أصلية صُنعت لـ PS5Upload Play.",
-  "about_credits": "يستخدم خطّي JetBrains Mono وNoto Sans (SIL OFL 1.1) وOpus (BSD) ومكتبة QR Code generator من Project Nayuki (MIT).",
-  "about_license": "PS5Upload Play برنامج حر بموجب رخصة GNU GPL v3."
+  "about_credits": "يستخدم خطّي JetBrains Mono وNoto Sans (SIL OFL 1.1) وOpus (BSD) وBearSSL (MIT) ومكتبة QR Code generator من Project Nayuki (MIT).",
+  "about_license": "PS5Upload Play برنامج حر بموجب رخصة GNU GPL v3.",
+  "home_nearby": "انضم إلى لعبة %s",
+  "home_nearby_sub": "يُلعب الآن على هذه الشبكة. صديقك يسمح لك بالدخول.",
+  "home_again": "العب مجددًا مع %s",
+  "home_again_sub": "سيُطلب من صديقك السماح لك بالدخول",
+  "home_invite": "%s يدعوك للعب",
+  "home_invite_sub": "انضم الآن. صديقك يسمح لك بالدخول.",
+  "phone_title": "هل الدعوة على هاتفك؟",
+  "phone_text": "امسح هذا بهاتفك، ثم اضغط \"العب على جهاز PS5 الخاص بي\".",
+  "phone_wait": "جارٍ تجهيز رمز الهاتف…",
+  "phone_offline": "رمز الهاتف يحتاج إلى الإنترنت، وجهاز PS5 هذا لا يصل إليه الآن.",
+  "phone_again": "رمز الهاتف متوقف. اضغط △ لإظهاره مجددًا.",
+  "hint_phone": "رمز الهاتف",
+  "inv_got": "أرسل لك %s دعوة.",
+  "inv_unreachable": "جهاز PS5 هذا لا يصل إلى لعبة %s. يجب أن تكون على هذه الشبكة أو على Tailscale.",
+  "why_friend": "لم يعد PS5Upload لدى صديقك يتذكر جهاز PS5 هذا. انضم مرة واحدة برمز، ثم سيعمل \"العب مجددًا\"."
 }
