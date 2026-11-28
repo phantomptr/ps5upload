@@ -10036,6 +10036,10 @@ backup_restore_partial: "{count} fichiers restaurés ; {missed} n'ont pas pu êt
 "about_disclaimer_rooms": "Salles de jeu, chat et chat vocal : PS5Upload vous fournit seulement l'outil. Personne derrière lui ne gère, ne surveille, n'enregistre, ne stocke ni ne modère les salles, le chat, la voix, les noms ou les noms de salles, et il n'est pas responsable de ce que les utilisateurs disent, partagent ou font. Vous êtes responsable de votre propre conduite et du respect de la loi et des règles des plateformes et des jeux que vous utilisez. Les parents et tuteurs sont responsables de la surveillance des enfants. Vous pouvez couper le son de n'importe qui, le masquer, le retirer ou le bloquer.",
 "queue_rest_skipped_friends": "Envois terminés. Des amis jouent, la PS5 reste donc allumée.",
 "room_many_wrong": "Beaucoup de mauvais mots de passe. Le changer ?",
+"room_show_person": "Afficher",
+"room_hide_person": "Masquer",
+"room_told_host": "Hôte prévenu",
+"room_tell_host": "Signaler à l'hôte",
 };
 
 export default fr;

@@ -9985,6 +9985,10 @@ backup_restore_partial: "已還原 {count} 個檔案；{missed} 個無法還原"
 "about_disclaimer_rooms": "暢玩房間、聊天和語音：PS5Upload 只提供工具。其背後的任何人都不經營、不監看、不錄製、不儲存，也不管理房間、聊天、語音、名稱或房間名稱，也不對使用者說的話、分享的內容或做的事負責。你需要對自己的行為負責，並遵守法律以及你所使用的平台和遊戲的規則。家長和監護人有責任監督兒童。你可以將任何人靜音、隱藏、移出或封鎖。",
 "queue_rest_skipped_friends": "上傳完成。好友正在玩，所以 PS5 保持開啟。",
 "room_many_wrong": "錯誤密碼過多。要變更嗎？",
+"room_show_person": "顯示",
+"room_hide_person": "隱藏",
+"room_told_host": "已告訴房主",
+"room_tell_host": "告訴房主",
 };
 
 export default zh_TW;

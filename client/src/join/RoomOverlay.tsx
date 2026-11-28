@@ -38,6 +38,9 @@ export function RoomOverlay({
   const snap = useRoomLink(link);
   const room = snap.room;
   const [open, setOpen] = useState(false);
+  // People hidden on this device (by name): their voice muted, their chat lines not shown here.
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
+  const [told, setTold] = useState<ReadonlySet<number>>(() => new Set());
   const voice = useMemo(() => new RoomVoice({ sendBinary: (b) => link.sendBinary(b), mic: (m) => link.mic(m) }), [link]);
   const micState = useSyncExternalStore(voice.subscribe, voice.getState, voice.getState);
   // Held / how / volumes: redraw on every change.
@@ -175,7 +178,7 @@ export function RoomOverlay({
       )}
       {!open && recent.length > 0 && (
         <ul className={`pointer-events-none absolute start-2 z-20 max-w-[70%] space-y-0.5 text-xs text-white ${touch ? "bottom-40" : "bottom-14"}`} data-testid="room-chat-recent">
-          {recent.map((l) => (
+          {recent.filter((l) => !hidden.has(l.from)).map((l) => (
             <li key={l.n} className="w-fit rounded bg-black/55 px-2 py-0.5 [overflow-wrap:anywhere]">
               <b>{l.mine ? tr("room_chat_you", undefined, "You") : l.from}:</b>{" "}
               {l.quick != null ? quickText(tr, l.quick) : publicRoom ? hideRude(l.text ?? "") : l.text}
@@ -226,6 +229,36 @@ export function RoomOverlay({
                       </button>
                     </>
                   )}
+                  {!p.you && (
+                    <button
+                      type="button"
+                      className="text-xs underline"
+                      onClick={() => {
+                        const on = !hidden.has(p.name);
+                        const next = new Set(hidden);
+                        if (on) next.add(p.name);
+                        else next.delete(p.name);
+                        setHidden(next);
+                        if (p.sid != null) voice.setPerson(p.sid, { muted: on });
+                      }}
+                      data-testid="room-hide-person"
+                    >
+                      {hidden.has(p.name) ? tr("room_show_person", undefined, "Show") : tr("room_hide_person", undefined, "Hide")}
+                    </button>
+                  )}
+                  {!p.you && p.sid != null && p.sid !== 0 && (
+                    <button
+                      type="button"
+                      className="text-xs underline disabled:no-underline disabled:opacity-50"
+                      disabled={told.has(p.sid)}
+                      onClick={() => {
+                        if (p.sid != null && link.flag(p.sid)) setTold(new Set([...told, p.sid]));
+                      }}
+                      data-testid="room-tell-host"
+                    >
+                      {told.has(p.sid) ? tr("room_told_host", undefined, "Host told") : tr("room_tell_host", undefined, "Tell the host")}
+                    </button>
+                  )}
                 </li>
               );
             })}
@@ -262,6 +295,7 @@ export function RoomOverlay({
               rude={publicRoom}
               ensureNotice={() => notice("chat")}
               onSend={(m) => void link.chat(m)}
+              hidden={hidden}
             />
           )}
           <button type="button" className="text-xs text-white/60 underline" onClick={onRules} data-testid="room-rules">

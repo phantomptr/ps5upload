@@ -10312,6 +10312,10 @@ backup_restore_partial: "{count} fájl visszaállítva; {missed} nem állíthat�
 "about_disclaimer_rooms": "Játékszobák, csevegés és hang: a PS5Upload csak az eszközt adja. A mögötte állók közül senki nem üzemelteti, figyeli, rögzíti, tárolja vagy moderálja a szobákat, a csevegést, a hangot, a neveket vagy a szobaneveket, és nem felelős azért, amit a felhasználók mondanak, megosztanak vagy tesznek. Te felelsz a saját viselkedésedért, valamint azért, hogy betartsd a törvényeket és a használt platformok és játékok szabályait. A gyerekek felügyeletéért a szülők és gondviselők felelnek. Bárkit lenémíthatsz, elrejthetsz, eltávolíthatsz vagy letilthatsz.",
 "queue_rest_skipped_friends": "A feltöltések elkészültek. Barátok játszanak, ezért a PS5 bekapcsolva marad.",
 "room_many_wrong": "Sok hibás jelszó. Megváltoztatod?",
+"room_show_person": "Megjelenítés",
+"room_hide_person": "Elrejtés",
+"room_told_host": "Házigazda értesítve",
+"room_tell_host": "Szólj a házigazdának",
 };
 
 export default hu;

@@ -10257,6 +10257,10 @@ backup_restore_partial: "Przywrócone pliki: {count}; nie udało się przywróci
 "about_disclaimer_rooms": "Pokoje gry, czat i głos: PS5Upload daje ci tylko narzędzie. Nikt, kto za nim stoi, nie prowadzi, nie obserwuje, nie nagrywa, nie przechowuje ani nie moderuje pokojów, czatu, rozmów głosowych, nazw graczy ani nazw pokojów i nie odpowiada za to, co użytkownicy mówią, udostępniają lub robią. Odpowiadasz za własne zachowanie oraz za przestrzeganie prawa i zasad platform i gier, z których korzystasz. Rodzice i opiekunowie odpowiadają za nadzór nad dziećmi. Możesz każdego wyciszyć, ukryć, usunąć lub zablokować.",
 "queue_rest_skipped_friends": "Wysyłanie zakończone. Znajomi grają, więc PS5 zostaje włączona.",
 "room_many_wrong": "Wiele błędnych haseł. Zmienić je?",
+"room_show_person": "Pokaż",
+"room_hide_person": "Ukryj",
+"room_told_host": "Gospodarz powiadomiony",
+"room_tell_host": "Zgłoś gospodarzowi",
 };
 
 export default pl;

@@ -10037,6 +10037,10 @@ backup_restore_partial: "{count}개 파일을 복원했습니다. {missed}개는
 "about_disclaimer_rooms": "플레이 룸, 채팅, 음성: PS5Upload는 도구만 제공합니다. 이를 만든 누구도 룸, 채팅, 음성, 이름, 룸 이름을 운영하거나 지켜보거나 녹음·녹화하거나 저장하거나 관리하지 않으며, 사용자가 말하거나 공유하거나 하는 일에 책임을 지지 않습니다. 자신의 행동, 그리고 법률과 사용하는 플랫폼 및 게임의 규칙을 지키는 것은 본인의 책임입니다. 부모와 보호자는 아이를 지도할 책임이 있습니다. 누구든 음소거, 숨기기, 내보내기, 차단할 수 있습니다.",
 "queue_rest_skipped_friends": "업로드가 끝났어요. 친구들이 플레이 중이라 PS5는 켜진 채로 있어요.",
 "room_many_wrong": "잘못된 비밀번호가 많습니다. 바꿀까요?",
+"room_show_person": "보이기",
+"room_hide_person": "숨기기",
+"room_told_host": "호스트에게 알림",
+"room_tell_host": "호스트에게 알리기",
 };
 
 export default ko;

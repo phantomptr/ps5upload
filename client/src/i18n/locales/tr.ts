@@ -10027,6 +10027,10 @@ backup_restore_partial: "{count} dosya geri yüklendi; {missed} dosya geri yükl
 "about_disclaimer_rooms": "Oyun Odaları, sohbet ve ses: PS5Upload sana yalnızca aracı sağlar. Arkasındaki hiç kimse odaları, sohbeti, sesli konuşmayı, adları veya oda adlarını yönetmez, izlemez, kaydetmez, saklamaz ya da denetlemez; kullanıcıların söylediklerinden, paylaştıklarından veya yaptıklarından da sorumlu değildir. Kendi davranışından ve yasalara, kullandığın platformların ve oyunların kurallarına uymaktan sen sorumlusun. Çocukların gözetiminden ebeveynler ve vasiler sorumludur. Herkesi susturabilir, gizleyebilir, çıkarabilir veya engelleyebilirsin.",
 "queue_rest_skipped_friends": "Yüklemeler bitti. Arkadaşlar oynadığı için PS5 açık kalıyor.",
 "room_many_wrong": "Çok sayıda yanlış şifre. Değiştirilsin mi?",
+"room_show_person": "Göster",
+"room_hide_person": "Gizle",
+"room_told_host": "Ev sahibine bildirildi",
+"room_tell_host": "Ev sahibine bildir",
 };
 
 export default tr;

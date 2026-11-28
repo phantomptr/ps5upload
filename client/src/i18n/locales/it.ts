@@ -9974,6 +9974,10 @@ backup_restore_partial: "{count} file ripristinati; impossibile ripristinarne {m
 "about_disclaimer_rooms": "Stanze di gioco, chat e voce: PS5Upload ti dà solo lo strumento. Nessuno dietro di esso gestisce, osserva, registra, conserva o modera stanze, chat, voce, nomi o nomi delle stanze, e non è responsabile di ciò che gli utenti dicono, condividono o fanno. Sei responsabile della tua condotta e del rispetto della legge e delle regole delle piattaforme e dei giochi che usi. I genitori e i tutori sono responsabili della sorveglianza dei bambini. Puoi silenziare, nascondere, rimuovere o bloccare chiunque.",
 "queue_rest_skipped_friends": "Caricamenti completati. Gli amici stanno giocando, quindi la PS5 resta accesa.",
 "room_many_wrong": "Molte password sbagliate. Cambiarla?",
+"room_show_person": "Mostra",
+"room_hide_person": "Nascondi",
+"room_told_host": "Host avvisato",
+"room_tell_host": "Segnala all'host",
 };
 
 export default it;

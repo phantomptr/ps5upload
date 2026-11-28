@@ -10029,6 +10029,10 @@ backup_restore_partial: "{count} berkas dipulihkan; {missed} tidak dapat dipulih
 "about_disclaimer_rooms": "Ruang Main, obrolan, dan suara: PS5Upload hanya memberi Anda alatnya. Tidak ada pihak di baliknya yang menjalankan, mengawasi, merekam, menyimpan, atau memoderasi ruang, obrolan, suara, nama, atau nama ruang, dan PS5Upload tidak bertanggung jawab atas apa yang dikatakan, dibagikan, atau dilakukan pengguna. Anda bertanggung jawab atas perilaku Anda sendiri serta mematuhi hukum dan aturan platform dan game yang Anda gunakan. Orang tua dan wali bertanggung jawab mengawasi anak-anak. Anda bisa membisukan, menyembunyikan, mengeluarkan, atau memblokir siapa pun.",
 "queue_rest_skipped_friends": "Unggahan selesai. Teman sedang main, jadi PS5 tetap menyala.",
 "room_many_wrong": "Banyak kata sandi salah. Ganti?",
+"room_show_person": "Tampilkan",
+"room_hide_person": "Sembunyikan",
+"room_told_host": "Host sudah diberi tahu",
+"room_tell_host": "Beri tahu host",
 };
 
 export default id;

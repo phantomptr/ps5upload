@@ -9991,6 +9991,10 @@ backup_restore_partial: "已恢复 {count} 个文件；{missed} 个无法恢复"
 "about_disclaimer_rooms": "畅玩房间、聊天和语音：PS5Upload 只提供工具。其背后的任何人都不运营、不监看、不录制、不存储，也不管理房间、聊天、语音、名字或房间名称，也不对用户说的话、分享的内容或做的事负责。你需要对自己的行为负责，并遵守法律以及你所使用的平台和游戏的规则。家长和监护人有责任监护儿童。你可以将任何人静音、隐藏、移出或屏蔽。",
 "queue_rest_skipped_friends": "上传完成。好友正在玩，所以 PS5 保持开启。",
 "room_many_wrong": "错误密码过多。要更改吗？",
+"room_show_person": "显示",
+"room_hide_person": "隐藏",
+"room_told_host": "已告诉房主",
+"room_tell_host": "告诉房主",
 };
 
 export default zh_CN;

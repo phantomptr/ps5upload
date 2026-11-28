@@ -10034,6 +10034,10 @@ backup_restore_partial: "{count} Dateien wiederhergestellt; {missed} konnten nic
 "about_disclaimer_rooms": "Spieleräume, Chat und Sprachchat: PS5Upload stellt nur das Werkzeug bereit. Niemand dahinter betreibt, beobachtet, zeichnet auf, speichert oder moderiert Räume, Chat, Sprachchat, Namen oder Raumnamen, und es ist nicht verantwortlich für das, was Nutzer sagen, teilen oder tun. Du bist für dein eigenes Verhalten verantwortlich und dafür, die Gesetze und die Regeln der Plattformen und Spiele einzuhalten, die du nutzt. Eltern und Erziehungsberechtigte sind für die Aufsicht über Kinder verantwortlich. Du kannst jeden stummschalten, ausblenden, entfernen oder blockieren.",
 "queue_rest_skipped_friends": "Uploads fertig. Freunde spielen gerade, deshalb bleibt die PS5 an.",
 "room_many_wrong": "Viele falsche Passwörter. Ändern?",
+"room_show_person": "Einblenden",
+"room_hide_person": "Ausblenden",
+"room_told_host": "Host informiert",
+"room_tell_host": "Dem Host melden",
 };
 
 export default de;

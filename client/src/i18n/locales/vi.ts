@@ -10022,6 +10022,10 @@ backup_restore_partial: "Đã khôi phục {count} tệp; không thể khôi ph�
 "about_disclaimer_rooms": "Phòng chơi, trò chuyện và giọng nói: PS5Upload chỉ cung cấp công cụ. Không ai đứng sau ứng dụng vận hành, theo dõi, ghi lại, lưu trữ hay kiểm duyệt phòng, trò chuyện, giọng nói, tên người chơi hay tên phòng, và ứng dụng không chịu trách nhiệm về những gì người dùng nói, chia sẻ hay làm. Bạn chịu trách nhiệm về hành vi của mình và việc tuân thủ pháp luật cũng như quy định của các nền tảng và trò chơi bạn dùng. Cha mẹ và người giám hộ chịu trách nhiệm giám sát trẻ em. Bạn có thể tắt tiếng, ẩn, mời ra hoặc chặn bất kỳ ai.",
 "queue_rest_skipped_friends": "Đã tải lên xong. Bạn bè đang chơi nên PS5 vẫn bật.",
 "room_many_wrong": "Nhiều mật khẩu sai. Đổi mật khẩu?",
+"room_show_person": "Hiện",
+"room_hide_person": "Ẩn",
+"room_told_host": "Đã báo chủ phòng",
+"room_tell_host": "Báo cho chủ phòng",
 };
 
 export default vi;

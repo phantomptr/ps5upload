@@ -10625,6 +10625,10 @@ tv_stay: "Stay",
 "about_disclaimer_rooms": "Play Rooms, chat and voice: PS5Upload only gives you the tool. Nobody behind it runs, watches, records, stores or moderates rooms, chat, voice, names or room names, and it isn't responsible for what users say, share or do. You're responsible for your own conduct and for following the law and the rules of the platforms and games you use. Parents and guardians are responsible for supervising children. You can mute, hide, remove or block anyone.",
 "queue_rest_skipped_friends": "Uploads done. Friends are playing, so the PS5 stays on.",
 "room_many_wrong": "Many wrong passwords. Change it?",
+"room_show_person": "Show",
+"room_hide_person": "Hide",
+"room_told_host": "Host told",
+"room_tell_host": "Tell the host",
 };
 
 export default en;
