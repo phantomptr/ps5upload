@@ -4449,8 +4449,40 @@ fn household_ps5(client: &ClientInfo, ip: IpAddr) -> bool {
 }
 
 /// Asks waiting from one address at most (pending asks don't count against the room size; one
-/// per device or pass).
+/// per device or pass). Several PS5s and phones of one home share an address: asks that name
+/// their device each count as that device's one ask, up to [`PENDING_PER_ADDRESS_DEVICES`] from
+/// the address (one place of [`crate::join_room::MAX_PENDING`] stays for another home); asks
+/// without a device id (older pages) up to [`PENDING_PER_ADDRESS`].
 const PENDING_PER_ADDRESS: usize = 2;
+const PENDING_PER_ADDRESS_DEVICES: usize = crate::join_room::MAX_PENDING - 1;
+
+/// Whether one more ask (`meta`, from `ip`) may wait beside `pending`: one per device (another
+/// controller of a PS5 already in may ask from that same device), and a few per address, more
+/// when each names its device (brothers and sisters on one home connection).
+fn may_wait(pending: &[Ask], meta: &Meta, ip: IpAddr) -> bool {
+    let tag = meta.who.tag_sha256.as_ref();
+    let same_device = meta.group.is_none()
+        && tag.is_some()
+        && pending
+            .iter()
+            .any(|a| a.meta.who.tag_sha256.as_ref() == tag);
+    if same_device {
+        return false;
+    }
+    if ip.is_loopback() {
+        return true;
+    }
+    let from_address = pending
+        .iter()
+        .filter(|a| a.meta.who.addr.map(limit_key) == Some(limit_key(ip)))
+        .count();
+    let cap = if tag.is_some() {
+        PENDING_PER_ADDRESS_DEVICES
+    } else {
+        PENDING_PER_ADDRESS
+    };
+    from_address < cap
+}
 
 /// What an ask came to before the guest is seated.
 enum Asked {
@@ -4648,18 +4680,7 @@ async fn ask<S: GuestSocket>(
             // The host let every player from that PS5 in (`allow: "group"`).
             crate::join_room::Gate::Ask if group_ok => Ok(false),
             crate::join_room::Gate::Ask => {
-                // One ask per device (or pass) at a time, and a few per address.
-                let same_device = meta.group.is_none()
-                    && meta.who.tag_sha256.is_some()
-                    && p.pending
-                        .iter()
-                        .any(|a| a.meta.who.tag_sha256 == meta.who.tag_sha256);
-                let from_address = p
-                    .pending
-                    .iter()
-                    .filter(|a| a.meta.who.addr.map(limit_key) == Some(limit_key(ip)))
-                    .count();
-                if same_device || (!ip.is_loopback() && from_address >= PENDING_PER_ADDRESS) {
+                if !may_wait(&p.pending, &meta, ip) {
                     return Err(serde_json::json!({"stage": "refused", "why": "already_asking"}));
                 }
                 p.pending.push(Ask {
@@ -9550,6 +9571,59 @@ mod tests {
         assert_eq!(send, Some(ps(0, 40)), "then the release");
         io.commit(ps(0, 40), t + HOLD);
         assert_eq!(io.plan(t + HOLD).0, None);
+    }
+
+    /// Asks waiting from one home connection (13.0.0 audit: a third PS5 or phone there was told
+    /// "already asking"): one per device, three from an address when each names its device, two
+    /// without device ids; another controller of a PS5 already in may ask from that same device.
+    #[test]
+    fn several_devices_of_one_home_may_ask_at_once() {
+        let home: IpAddr = "203.0.113.7".parse().unwrap();
+        let meta = |dev: Option<&str>, group: Option<u64>| Meta {
+            who: crate::join_room::Who {
+                tag_sha256: dev.map(str::to_string),
+                addr: Some(home),
+                cid: None,
+            },
+            group,
+            ..Meta::default()
+        };
+        let ask = |m: Meta| Ask {
+            id: next_id(),
+            name: "Kid".into(),
+            client: ClientInfo::default(),
+            answer: oneshot::channel().0,
+            meta: m,
+        };
+        let mut pending = Vec::new();
+        for dev in ["ps5-a", "ps5-b", "phone-c"] {
+            let m = meta(Some(dev), None);
+            assert!(may_wait(&pending, &m, home), "{dev} may ask");
+            pending.push(ask(m));
+        }
+        assert!(
+            !may_wait(&pending, &meta(Some("ps5-a"), None), home),
+            "one ask per device"
+        );
+        assert!(
+            !may_wait(&pending, &meta(Some("tablet-d"), None), home),
+            "a fourth from one address waits: a place stays for another home"
+        );
+        assert!(
+            may_wait(&pending[..2], &meta(Some("ps5-a"), Some(7)), home),
+            "another controller of a PS5 in asks from that device"
+        );
+        let elsewhere: IpAddr = "198.51.100.9".parse().unwrap();
+        let mut other = meta(Some("ps5-e"), None);
+        other.who.addr = Some(elsewhere);
+        assert!(may_wait(&pending, &other, elsewhere));
+        // Older pages (no device id): two from one address.
+        let mut old = Vec::new();
+        assert!(may_wait(&old, &meta(None, None), home));
+        old.push(ask(meta(None, None)));
+        assert!(may_wait(&old, &meta(None, None), home));
+        old.push(ask(meta(None, None)));
+        assert!(!may_wait(&old, &meta(None, None), home));
     }
 
     #[test]
