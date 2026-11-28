@@ -28,9 +28,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use axum::body::Bytes;
-use ps5upload_core::vpad::{
-    self, Ack, Bind, Companion, ConsoleUser, Opened, Output, PadState, StateItem,
-};
+use ps5upload_core::vpad::{self, Ack, Bind, Companion, ConsoleUser, Opened, Output, StateItem};
 
 use crate::join::link::Port;
 use crate::rp_replay::{Frame, KIND_AUDIO, KIND_AUDIO_HEADER, KIND_VIDEO, KIND_VIDEO_HEADER};
@@ -607,24 +605,22 @@ pub(crate) fn start_from_env() {
     let spawned = std::thread::Builder::new()
         .name("dev-replay-host".into())
         .spawn(move || loop {
-            match DevSession::start(&console, rec.hevc, rec.hdr, stream_seat) {
-                Some(s) => {
-                    let id = s.session();
-                    crate::log_at!(
-                        Info,
-                        "together",
-                        "replay host {console}: session {id} playing"
-                    );
-                    // The stream's controller rumbles as a game's would (a guest on it hears).
-                    play(&rec, s, rumble.filter(|_| stream_seat), &console);
-                    crate::log_at!(
-                        Info,
-                        "together",
-                        "replay host {console}: session {id} ended; again in {} s",
-                        RESTART_AFTER.as_secs()
-                    );
-                }
-                None => {} // another session runs: wait for it to end
+            // None: another session runs; wait for it to end.
+            if let Some(s) = DevSession::start(&console, rec.hevc, rec.hdr, stream_seat) {
+                let id = s.session();
+                crate::log_at!(
+                    Info,
+                    "together",
+                    "replay host {console}: session {id} playing"
+                );
+                // The stream's controller rumbles as a game's would (a guest on it hears).
+                play(&rec, s, rumble.filter(|_| stream_seat), &console);
+                crate::log_at!(
+                    Info,
+                    "together",
+                    "replay host {console}: session {id} ended; again in {} s",
+                    RESTART_AFTER.as_secs()
+                );
             }
             std::thread::sleep(RESTART_AFTER);
         });
@@ -636,6 +632,7 @@ pub(crate) fn start_from_env() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ps5upload_core::vpad::PadState;
 
     /// An HEVC IDR picture's NAL (type 19).
     const KEY1: &[u8] = &[0, 0, 0, 1, 0x26, 0x01, 0xa1];

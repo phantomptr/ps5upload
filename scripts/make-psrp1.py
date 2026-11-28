@@ -63,7 +63,7 @@ def access_units(b):
         if t in keys:
             cur["key"] = True
         if t in params:
-            cur["params"].append(bytes(b[s:end]).lstrip(b"\x00"))
+            cur["params"].append(bytes(b[at:end]))
     aus.append(cur)
     out = [(bytes(b[a["start"]:a["end"]]), a["key"], a["params"]) for a in aus]
     if sum(1 for a in out if a[1]) == 0:
