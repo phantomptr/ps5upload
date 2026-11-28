@@ -49,6 +49,27 @@ export interface JoinGuest {
    *  20% to spare, how long it has stayed under the rate, the loss and RTCP round trip; null off
    *  the track (the data channel, the plain socket, an older engine). */
   link: GuestLink | null;
+  /** Plays on a PS5 (PS5Upload Play), from the app's hello (`client_kind: "ps5"`). */
+  onPs5: boolean;
+  /** Their app said it can't show this stream's picture: "hevc" (no HEVC) or "main10" (no HDR);
+   *  null when it can, or it didn't say. */
+  codecWarning: CodecWarning;
+}
+
+/** A picture a guest's app said it can't show (engine join.rs `codec_warning`). */
+export type CodecWarning = "hevc" | "main10" | null;
+
+/** A friend asking to join. */
+export interface JoinAsk {
+  id: number;
+  name: string;
+  onPs5?: boolean;
+  codecWarning?: CodecWarning;
+}
+
+/** The engine's `codec_warning`; anything else is null. */
+export function readCodecWarning(v: unknown): CodecWarning {
+  return v === "hevc" || v === "main10" ? v : null;
 }
 
 export interface GuestLink {
@@ -193,7 +214,7 @@ export interface JoinHostState {
     share: ShareLink | null;
   } | null;
   guests: JoinGuest[];
-  asks: Array<{ id: number; name: string }>;
+  asks: JoinAsk[];
   settings: { blockSystemButtons: boolean; maxPlayers: number; streamSeat: boolean } & NetSettings;
   /** Internet guests' connections, those not in the game yet (connecting, failed) too. */
   netPeers: NetPeer[];
@@ -401,12 +422,19 @@ export function readJoinState(v: unknown): JoinHostState {
       quality: readQuality(g.quality),
       carries: readCarries(g.link),
       link: readLink(g.link),
+      onPs5: g.client_kind === "ps5",
+      codecWarning: readCodecWarning(g.codec_warning),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
   const asks = (Array.isArray(o.pending) ? o.pending : Array.isArray(o.asks) ? o.asks : [])
-    .filter((a): a is { id: number; name: string } => !!a && typeof a.id === "number")
-    .map((a) => ({ id: a.id, name: typeof a.name === "string" ? a.name : "" }));
+    .filter((a): a is Record<string, unknown> & { id: number } => !!a && typeof a.id === "number")
+    .map((a) => ({
+      id: a.id,
+      name: typeof a.name === "string" ? a.name : "",
+      onPs5: a.client_kind === "ps5",
+      codecWarning: readCodecWarning(a.codec_warning),
+    }));
   const s = (o.settings ?? {}) as Record<string, unknown>;
   return {
     open: o.open === true,

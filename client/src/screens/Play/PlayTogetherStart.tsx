@@ -6,6 +6,7 @@ import { Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { InternetHint } from "./NetworkChoice";
 import { joinApi } from "./playTogetherState";
+import { PlayAppInstall } from "./PlayAppInstall";
 import { PlayAppPairing } from "./PlayAppPairing";
 
 /**
@@ -31,6 +32,8 @@ export function PlayTogetherStart({ host, ...rest }: Omit<PlayTogetherStartViewP
   return (
     <div className="space-y-3">
       <PlayTogetherStartView {...rest} invites={host ? invites : undefined} />
+      {/* PS5Upload Play on this PS5: install, update, open or remove it from here. */}
+      <PlayAppInstall host={host} />
       {/* PS5Upload Play on the PS5: pair it here with the code it shows on the TV. */}
       <PlayAppPairing />
     </div>
