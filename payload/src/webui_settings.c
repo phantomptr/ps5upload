@@ -18,6 +18,8 @@ void webui_settings_defaults(webui_settings_t *out) {
     out->tile = 1;
     out->enabled = 1;
     out->start_cheats = 0;
+    out->tz_set = 0;
+    out->tz_min = 0;
 }
 
 int webui_settings_tile_wanted(const webui_settings_t *s) { return s->enabled && s->tile; }
@@ -70,6 +72,14 @@ int webui_settings_load(const char *path, webui_settings_t *out) {
     rc = webui_json_bool(buf + a, b - a, "start_cheats", &v);
     if (rc < 0) return 1;
     if (rc == 1) s.start_cheats = v;
+    {
+        long long tz = 0;
+        /* a bad value is Automatic, never a garbled file (see the header) */
+        if (webui_json_i64(buf + a, b - a, "tz_min", &tz) == 1 && webui_tz_setting_ok((long)tz)) {
+            s.tz_set = 1;
+            s.tz_min = (int)tz;
+        }
+    }
     *out = s;
     return 0;
 }
@@ -81,10 +91,15 @@ int webui_settings_save(const char *path, const webui_settings_t *s) {
 
     k = snprintf(tmp, sizeof tmp, "%s.tmp", path); /* same directory as `path`: the rename never crosses a mount */
     if (k < 0 || (size_t)k >= sizeof tmp) return -1;
-    k = snprintf(text, sizeof text, "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"start_cheats\":%s}",
+    k = snprintf(text, sizeof text, "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"start_cheats\":%s",
                  s->lan ? "true" : "false", s->tile ? "true" : "false", s->enabled ? "true" : "false",
                  s->start_cheats ? "true" : "false");
+    if (k < 0 || (size_t)k >= sizeof text) return -1;
     len = (size_t)k;
+    if (s->tz_set && webui_tz_setting_ok(s->tz_min)) k = snprintf(text + len, sizeof text - len, ",\"tz_min\":%d}", s->tz_min);
+    else k = snprintf(text + len, sizeof text - len, "}");
+    if (k < 0 || (size_t)k >= sizeof text - len) return -1;
+    len += (size_t)k;
     fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) return -1;
     while (done < len) {

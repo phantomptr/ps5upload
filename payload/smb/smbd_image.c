@@ -46,6 +46,11 @@ typedef struct {
     uint32_t csize, ccount;
     uint8_t fat[512];
     uint64_t fat_at; /* the FAT sector held in fat[], UINT64_MAX = none */
+    /* Where the last read of a fragmented file left its cluster chain: the next read of the same
+     * file (a folder read window by window) goes on from there instead of from its first cluster,
+     * which made a long chain cost reads by the square of its length. cur_first 0 = none. */
+    uint32_t cur_first, cur_c;
+    uint64_t cur_idx;
     /* UFS2 */
     uint32_t bsize, fsize, ipg, fpg, iblkno, ncg;
     /* PFS */
@@ -118,6 +123,10 @@ static int exfat_read(img_t *m, const ifile_t *f, uint64_t off, uint8_t *buf, si
     uint64_t idx = 0, want;
     uint32_t c = f->first;
     int rc;
+    if (!f->contig && m->cur_first == f->first && m->cur_idx <= off / m->csize) {
+        idx = m->cur_idx;
+        c = m->cur_c;
+    }
     while (len) {
         size_t n;
         uint64_t within;
@@ -133,6 +142,9 @@ static int exfat_read(img_t *m, const ifile_t *f, uint64_t off, uint8_t *buf, si
             }
             for (; idx < want; idx++)
                 if ((rc = exfat_next(m, c, &c)) != 0) return rc;
+            m->cur_first = f->first;
+            m->cur_idx = idx;
+            m->cur_c = c;
         }
         if (c < 2 || c - 2 >= m->ccount) return IE_DAMAGED;
         n = len;
@@ -391,7 +403,9 @@ static int ufs2_lookup(cr_t *c, const char *name, ifile_t *out) {
         if (reclen < 8 || pos + reclen > end || (ino && (unsigned)nlen + 8 > reclen)) return IE_DAMAGED;
         if (ino && nlen == strlen(name)) {
             if ((rc = cr_get(c, pos + 8, nm, nlen)) != 0) return rc;
-            if (name_eq(nm, nlen, name)) return ufs2_inode(c->m, ino, out) == 0 ? 1 : IE_DAMAGED;
+            /* A failed read stays a failed read ("img_read", tried again by the next scan): read as
+             * damage it was kept by the library's cache as the image's lasting answer. */
+            if (name_eq(nm, nlen, name)) return (rc = ufs2_inode(c->m, ino, out)) != 0 ? rc : 1;
         }
         pos += reclen;
     }

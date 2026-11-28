@@ -54,6 +54,12 @@ fn within(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&format!("{b}/"))
 }
 
+/// [`within`] in any letter case: a USB or M.2 drive is exFAT, where `/mnt/usb0/Games` and
+/// `/mnt/usb0/games` are one folder. Used where it only makes a refusal more likely.
+fn within_any_case(a: &str, b: &str) -> bool {
+    within(&a.to_ascii_lowercase(), &b.to_ascii_lowercase())
+}
+
 /// The drive a path is on and the components below it: `/data`, `/mnt/extN`, `/mnt/usbN`.
 fn split_drive(p: &str) -> Option<(&str, Vec<&str>)> {
     let comps: Vec<&str> = p.split('/').skip(1).collect();
@@ -137,6 +143,14 @@ pub(crate) fn resolve(
         if others.iter().any(|o| within(o, &mount)) {
             return Err("shared_image");
         }
+        // The same image mounted a second time, elsewhere.
+        if volumes.iter().any(|v| {
+            clean(&v.path) != mount
+                && !v.source_image.trim().is_empty()
+                && clean(&v.source_image).eq_ignore_ascii_case(&image)
+        }) {
+            return Err("shared_image");
+        }
         return Ok(UninstallSource {
             kind: "image",
             path: image,
@@ -146,7 +160,17 @@ pub(crate) fn resolve(
     if !deletable(&src) {
         return Err("unsafe_path");
     }
-    if others.iter().any(|o| within(o, &src) || within(&src, o)) {
+    if others
+        .iter()
+        .any(|o| within_any_case(o, &src) || within_any_case(&src, o))
+    {
+        return Err("shared_folder");
+    }
+    // A disk image inside the folder that is mounted (another game plays from it, registered
+    // under /mnt/ps5upload where the check above never sees the image file itself).
+    if volumes.iter().any(|v| {
+        !v.source_image.trim().is_empty() && within_any_case(&clean(&v.source_image), &src)
+    }) {
         return Err("shared_folder");
     }
     Ok(UninstallSource {
@@ -234,6 +258,82 @@ pub(crate) fn current(addr: &str, title_id: &str) -> Result<UninstallSource, &'s
     Ok(src)
 }
 
+/// Walks the game folder `path` for at most `wall`: everything below it, or why it must not be
+/// deleted: `holds_other_game` (a folder below it has a `sce_sys`), `unreadable` (the walk
+/// failed, or a folder in it could not be read, which could hold anything).
+fn walk_folder(addr: &str, path: &str, wall: Duration) -> Result<disk_usage::Walked, &'static str> {
+    let list = |p: &str| {
+        disk_usage::list_all(|offset| {
+            list_dir_with_timeout(
+                addr,
+                p,
+                ListDirOptions { offset, limit: 256 },
+                Some(LIST_TIMEOUT),
+            )
+            .map(|l| (l.entries, l.truncated))
+        })
+    };
+    let mounts: Vec<String> = ps5upload_core::volumes::list_volumes(addr)
+        .map(|l| l.volumes.into_iter().map(|v| clean(&v.path)).collect())
+        .unwrap_or_default();
+    let skip = disk_usage::skip_rule(path, mounts);
+    let limits = disk_usage::Limits {
+        max_wall: wall,
+        ..Default::default()
+    };
+    let w = disk_usage::walk(
+        path,
+        &list,
+        &skip,
+        &limits,
+        &disk_usage::Progress::default(),
+        &|| false,
+    )
+    .map_err(|_| "unreadable")?;
+    if holds_other_game(&w.tree) {
+        return Err("holds_other_game");
+    }
+    if has_unreadable(&w.tree) {
+        return Err("unreadable");
+    }
+    Ok(w)
+}
+
+/// A folder at or below `d` could not be read.
+fn has_unreadable(d: &disk_usage::DuDir) -> bool {
+    d.note == Some("unreadable") || d.children.iter().any(has_unreadable)
+}
+
+/// How long the check right before a delete may walk the folder: as long as "What takes
+/// space?" may, since a folder it has not seen all of is not deleted.
+const DELETE_WALL: Duration = disk_usage::MAX_WALL;
+
+/// [`current`] for the delete itself (`POST /api/ps5/app/unregister` with `delete_source`): a
+/// folder is walked again, whole, and refused when it holds another game, when a folder in it
+/// can't be read, or when the walk could not finish (`not_fully_read`). The answer of
+/// `GET /api/ps5/app/uninstall-source` may be old, or come from a walk that stopped early.
+///
+/// `want` is the path the caller means to delete; another one is `source_changed`. The refusal
+/// is the 409's text: `source_changed: …` or `source_not_deletable: <reason>`.
+pub(crate) fn checked_for_delete(
+    addr: &str,
+    title_id: &str,
+    want: &str,
+) -> Result<UninstallSource, String> {
+    let not_deletable = |r: &str| format!("source_not_deletable: {r}");
+    let src = current(addr, title_id).map_err(not_deletable)?;
+    if src.path != want {
+        return Err(format!("source_changed: the title plays from {}", src.path));
+    }
+    if src.kind == "folder" {
+        let w = walk_folder(addr, &src.path, DELETE_WALL).map_err(not_deletable)?;
+        if w.partial.is_some() {
+            return Err(not_deletable("not_fully_read"));
+        }
+    }
+    Ok(src)
+}
+
 /// [`current`], plus the size: an image's file size, or a walk of the folder (which also
 /// refuses a folder holding another game).
 pub(crate) fn plan(addr: &str, title_id: &str) -> UninstallPlan {
@@ -251,41 +351,14 @@ pub(crate) fn plan(addr: &str, title_id: &str) -> UninstallPlan {
             .ok()
             .map(|s| s.size);
     } else {
-        let list = |p: &str| {
-            disk_usage::list_all(|offset| {
-                list_dir_with_timeout(
-                    addr,
-                    p,
-                    ListDirOptions { offset, limit: 256 },
-                    Some(LIST_TIMEOUT),
-                )
-                .map(|l| (l.entries, l.truncated))
-            })
-        };
-        let mounts: Vec<String> = ps5upload_core::volumes::list_volumes(addr)
-            .map(|l| l.volumes.into_iter().map(|v| clean(&v.path)).collect())
-            .unwrap_or_default();
-        let skip = disk_usage::skip_rule(&src.path, mounts);
-        let limits = disk_usage::Limits {
-            max_wall: WALK_WALL,
-            ..Default::default()
-        };
-        match disk_usage::walk(
-            &src.path,
-            &list,
-            &skip,
-            &limits,
-            &disk_usage::Progress::default(),
-            &|| false,
-        ) {
+        // A walk that stops early still offers ("at least" this size): the delete walks the
+        // whole folder again before it touches anything (`checked_for_delete`).
+        match walk_folder(addr, &src.path, WALK_WALL) {
             Ok(w) => {
-                if holds_other_game(&w.tree) {
-                    return UninstallPlan::none(title_id, "holds_other_game");
-                }
                 out.bytes = Some(w.tree.bytes);
                 out.size_partial = w.partial.is_some();
             }
-            Err(_) => return UninstallPlan::none(title_id, "unreadable"),
+            Err(reason) => return UninstallPlan::none(title_id, reason),
         }
     }
     out.source = Some(src);
@@ -433,6 +506,53 @@ mod tests {
         assert_eq!(resolve("PPSA00005", &image, &vols), Err("shared_image"));
     }
 
+    /// exFAT ignores case: a game registered under another spelling of the folder is inside it.
+    #[test]
+    fn a_nested_game_in_another_letter_case_is_refused() {
+        let nested = [
+            app("PPSA00005", "/mnt/usb0/Games"),
+            app("PPSA00006", "/mnt/usb0/games/Other"),
+        ];
+        assert_eq!(resolve("PPSA00005", &nested, &[]), Err("shared_folder"));
+        // Only a real prefix counts.
+        let apart = [
+            app("PPSA00005", "/mnt/usb0/Games"),
+            app("PPSA00006", "/mnt/usb0/Games2/Other"),
+        ];
+        assert!(resolve("PPSA00005", &apart, &[]).is_ok());
+    }
+
+    /// A disk image inside the folder that another game plays from (its title is registered
+    /// under /mnt/ps5upload, never under the folder) or that is mounted at all: the folder stays.
+    #[test]
+    fn a_folder_holding_a_mounted_image_is_refused() {
+        let apps = [
+            app("PPSA00005", "/data/homebrew/GameA"),
+            app("PPSA00006", "/mnt/ps5upload/Pack/x"),
+        ];
+        let vols = [vol(
+            "/mnt/ps5upload/Pack",
+            "/data/homebrew/GameA/Pack.exfat",
+        )];
+        assert_eq!(resolve("PPSA00005", &apps, &vols), Err("shared_folder"));
+        let alone = [app("PPSA00005", "/data/homebrew/GameA")];
+        assert_eq!(resolve("PPSA00005", &alone, &vols), Err("shared_folder"));
+        // An image elsewhere is no reason.
+        let elsewhere = [vol("/mnt/ps5upload/Pack", "/data/homebrew/Pack.exfat")];
+        assert!(resolve("PPSA00005", &alone, &elsewhere).is_ok());
+    }
+
+    /// The same image mounted a second time is still in use after this title's unmount.
+    #[test]
+    fn an_image_mounted_twice_is_refused() {
+        let apps = [app("PPSA00002", "/mnt/ps5upload/Game/PPSA00002-app")];
+        let vols = [
+            vol("/mnt/ps5upload/Game", "/mnt/ext1/games/Game.ffpkg"),
+            vol("/mnt/ps5upload/Game2", "/mnt/ext1/games/Game.ffpkg"),
+        ];
+        assert_eq!(resolve("PPSA00002", &apps, &vols), Err("shared_image"));
+    }
+
     #[test]
     fn a_folder_holding_another_game_is_seen() {
         let dir = |name: &str, children: Vec<disk_usage::DuDir>| disk_usage::DuDir {
@@ -501,6 +621,22 @@ mod tests {
                         }))
                     }
                 }
+            } else if method == m::FS_LIST {
+                // What `present` holds directly in the folder, all on one page.
+                let p = v["path"].as_str().unwrap_or_default().trim_end_matches('/');
+                let entries: Vec<serde_json::Value> = self
+                    .present
+                    .iter()
+                    .filter_map(|x| {
+                        let t = x.trim_end_matches('/');
+                        let (parent, name) = t.rsplit_once('/')?;
+                        (parent == p).then(|| {
+                            let kind = if x.ends_with('/') { "dir" } else { "file" };
+                            serde_json::json!({"name": name, "kind": kind, "size": 4096})
+                        })
+                    })
+                    .collect();
+                serde_json::json!({"path": p, "entries": entries, "truncated": false})
             } else if method == m::FS_UNMOUNT {
                 self.asked.lock().unwrap().push(format!(
                     "unmount {}",
@@ -567,6 +703,50 @@ mod tests {
         );
         let _t = ps5upload_core::mgmt::scoped_transport(no_game);
         assert_eq!(current(ADDR, "PPSA00001"), Err("not_a_game"));
+    }
+
+    /// The delete walks the folder itself: a game nested inside it is refused even when the
+    /// caller never asked uninstall-source, and a path other than the title's is
+    /// `source_changed`.
+    #[test]
+    fn the_delete_check_walks_the_folder_itself() {
+        let game = vec![
+            "/mnt/usb0/Game/",
+            "/mnt/usb0/Game/sce_sys/",
+            "/mnt/usb0/Game/sce_sys/param.json",
+            "/mnt/usb0/Game/eboot.bin",
+            "/mnt/usb0/Game/data/",
+        ];
+        let c = console("/mnt/usb0/Game", serde_json::json!({"volumes": []}), game);
+        let _t = ps5upload_core::mgmt::scoped_transport(c);
+        assert_eq!(
+            checked_for_delete(ADDR, "PPSA00001", "/mnt/usb0/Game")
+                .unwrap()
+                .path,
+            "/mnt/usb0/Game"
+        );
+        let changed = checked_for_delete(ADDR, "PPSA00001", "/mnt/usb0/Other").unwrap_err();
+        assert!(changed.starts_with("source_changed:"), "{changed}");
+
+        let pack = vec![
+            "/mnt/usb0/Game/",
+            "/mnt/usb0/Game/sce_sys/",
+            "/mnt/usb0/Game/sce_sys/param.json",
+            "/mnt/usb0/Game/extra/",
+            "/mnt/usb0/Game/extra/Other/",
+            "/mnt/usb0/Game/extra/Other/sce_sys/",
+        ];
+        let c = console("/mnt/usb0/Game", serde_json::json!({"volumes": []}), pack);
+        let _t = ps5upload_core::mgmt::scoped_transport(c.clone());
+        assert_eq!(
+            checked_for_delete(ADDR, "PPSA00001", "/mnt/usb0/Game").unwrap_err(),
+            "source_not_deletable: holds_other_game"
+        );
+        let p = plan(ADDR, "PPSA00001");
+        assert!(!p.offer);
+        assert_eq!(p.reason, Some("holds_other_game"));
+        // Nothing was deleted or unmounted.
+        assert!(c.asked.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -955,6 +955,15 @@ button {
   color: var(--color-text);
   box-shadow: inset 0 0 0 2px var(--color-accent);
 }
+/* Settings › Time zone (#978): − UTC−03:00 + */
+.cw-tz-value {
+  align-self: center;
+  min-width: 7.5em;
+  margin: 0 0 0.5rem;
+  margin-inline-end: 0.7rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---- Home: compact, so the game, two task rows and the drives fit 1540x700 without scrolling ---- */
 .cw-home .cw-h1 {

@@ -489,6 +489,8 @@ test.describe("a friend's phone", () => {
     await expect(bar).toHaveAttribute("data-shown", "1");
     await page.getByTestId("join-hide-controls").tap();
     await expect(bar).toHaveAttribute("data-shown", "0");
+    // The hold hint is a one-time thing: buttons shown within its 6 s don't keep it for good.
+    await expect(page.getByTestId("join-hold-hint")).toHaveCount(0, { timeout: 4_000 });
 
     // A long press on the picture (away from the controller) shows them; a short tap doesn't.
     const stage = page.getByTestId("join-stage-view");

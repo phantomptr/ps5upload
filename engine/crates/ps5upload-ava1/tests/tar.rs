@@ -213,6 +213,35 @@ async fn upload(
     .unwrap()
 }
 
+/// "Choose files" (#969): only the chosen entries (`=path`) of a compressed tar are sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tar_sends_only_the_chosen_entries() {
+    let d = temp_dir("chosen");
+    let all = files(12, 3_000);
+    let arc = d.join("a.tar.gz");
+    std::fs::write(&arc, tar_of(&all, Z::Gzip)).unwrap();
+    let (addr, ava) = host(&d).await;
+    let pool = Pool::new(ava).with_addr(addr);
+    let mut c = cfg();
+    c.excludes = vec!["=game/d1".to_string(), "=game/d0/f0".to_string()];
+    let arc2 = arc.clone();
+    within(
+        120,
+        tokio::task::spawn_blocking(move || {
+            upload::upload_tar_in(&pool, &c, [6; 16], "chosen", &arc2)
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let want: Vec<(String, Vec<u8>)> = all
+        .into_iter()
+        .filter(|(n, _)| n.starts_with("game/d1/") || n == "game/d0/f0")
+        .collect();
+    assert!(want.len() > 2);
+    same(&want, &read_tree(&d.join("share/chosen")));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn plain_and_compressed_tars_and_a_lone_zst_land_unpacked() {
     let d = temp_dir("upload");

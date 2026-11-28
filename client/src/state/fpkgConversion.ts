@@ -32,6 +32,7 @@ import {
 } from "../api/fpkg";
 import { jobCancel, jobPause, jobResume, jobStatus, type JobSnapshot } from "../api/ps5";
 import { useConnectionStore } from "./connection";
+import { parsePS5Firmware } from "../lib/ps5Firmware";
 import { useRosterStore } from "./roster";
 import { hostOf } from "../lib/addr";
 import { pushNotification } from "./notifications";
@@ -1254,9 +1255,12 @@ function folderTail(
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
-  start: async (req, { install, host, method = "stream", password, deleteAfter, fullVerify: ownVerify, freeArchive }) => {
+  start: async (startReq, { install, host, method = "stream", password, deleteAfter, fullVerify: ownVerify, freeArchive }) => {
     const then = install ? method : null;
     if (get().pipeline.phase === "running") return;
+    // The engine checks the package's size against what this console's firmware opens.
+    const consoleFirmware = parsePS5Firmware(useConnectionStore.getState().ps5Kernel) ?? undefined;
+    const req = consoleFirmware && !startReq.consoleFirmware ? { ...startReq, consoleFirmware } : startReq;
     const fullVerify = ownVerify ?? useConvertPrefs.getState().fullVerify;
     deleteAfterInstall = install && !!deleteAfter;
     if (needsPrep(req.source)) {

@@ -14,7 +14,9 @@ include ../sdk-crt.mk
 # a companion image; binds TCP :9115 and installs via sceAppInstUtilInstallByPackage.
 ELF := ps5upload-installer.elf
 
-CFLAGS := -Wall -Wextra -Werror -g -I. -I../include
+# The checked-in ELF keeps its debug info, with paths relative to the repository rather than the
+# builder's own checkout.
+CFLAGS := -Wall -Wextra -Werror -g -I. -I../include -fdebug-prefix-map=$(abspath $(CURDIR)/../..)=.
 
 # -lSceIpmi MUST precede -lSceAppInstUtil (sdk#26): libSceAppInstUtil's
 # DT_NEEDED graph resolves only with this ordering, or rtld silently refuses

@@ -70,9 +70,9 @@ pub struct Settings {
     /// A settings file from before it was a choice reads as 10.
     #[serde(default = "default_interval_minutes")]
     pub interval_minutes: u32,
-    /// A drive in the PS5 itself (`/mnt/ext<N>` M.2, `/mnt/usb<N>` USB) that also gets a copy of
-    /// each backup, so saves outlive a reset of the internal storage; "" for none
-    /// (`save_backup_console`).
+    /// A drive in the PS5 itself (`/data` internal, `/mnt/ext<N>` M.2, `/mnt/usb<N>` USB) that
+    /// also gets a copy of each backup; "" for none (`save_backup_console`). An M.2 or USB copy
+    /// outlives a reset of the internal storage; an internal one does not.
     #[serde(default)]
     pub console_drive: String,
     /// How backups are arranged in `dir` and on the PS5 drive (#886): by game, as always, or by
@@ -2523,8 +2523,8 @@ pub struct SettingsPatch {
     /// Consoles to take off `hosts`.
     #[serde(default)]
     pub remove_hosts: Vec<String>,
-    /// The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); "" for
-    /// none.
+    /// The PS5 drive that also gets a copy of each backup (`/data`, `/mnt/ext<N>`,
+    /// `/mnt/usb<N>`); "" for none.
     pub console_drive: Option<String>,
     /// `by_game` or `by_user` (#886).
     pub layout: Option<Layout>,
@@ -2597,7 +2597,7 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
         if !d.is_empty() && !crate::save_backup_console::drive_path_ok(&d) {
             return json_error(
                 StatusCode::BAD_REQUEST,
-                "console_drive must be a PS5 M.2 or USB drive (/mnt/ext0, /mnt/usb0, …) or empty",
+                "console_drive must be a PS5 drive (/data, /mnt/ext0, /mnt/usb0, …) or empty",
             );
         }
         next.console_drive = d;

@@ -656,10 +656,11 @@ export default function SendPanel() {
       </div>
 
       <p className="mt-4 text-xs text-[var(--color-muted)]">
-        Only send payloads from sources you trust — a malicious .elf, .bin, .js,
-        .lua, or .jar file can do anything on your PS5. ps5upload doesn't bundle
-        or verify third-party loaders; you're responsible for the files you
-        pick.
+        {tr(
+          "sendpayload_trust_note",
+          undefined,
+          "Only send payloads from sources you trust — a malicious .elf, .bin, .js, .lua, or .jar file can do anything on your PS5. ps5upload doesn't bundle or verify third-party loaders; you're responsible for the files you pick.",
+        )}
       </p>
 
       <PlaylistsPanel host={host} port={parsedPort ?? PS5_LOADER_PORT} />

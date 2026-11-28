@@ -183,6 +183,37 @@ async fn upload_zip_honors_excludes() {
     assert_eq!(got.keys().collect::<Vec<_>>(), vec!["keep.txt"]);
 }
 
+/// "Choose files" (#969): only the chosen entries (`=path`) are sent, a chosen folder with
+/// everything in it; the plan preview lists the same files.
+#[tokio::test(flavor = "multi_thread")]
+async fn upload_zip_sends_only_the_chosen_entries() {
+    let zip = build_zip(
+        &[
+            ("Game/base.pkg", b"base-bytes"),
+            ("Game/patch.pkg", b"patch-bytes"),
+            ("Game/readme.txt", b"readme"),
+            ("Extras/a/b.txt", b"extra-b"),
+            ("other.bin", b"other"),
+        ],
+        true,
+    );
+    let chosen = vec!["=Game/base.pkg".to_string(), "=Extras".to_string()];
+    let (total, files) = zip_plan_preview(&zip.0, &chosen).expect("preview");
+    let names: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(names, vec!["Extras/a/b.txt", "Game/base.pkg"]);
+    assert_eq!(total, 7 + 10);
+    let c = console().await;
+    let mut config = cfg();
+    config.excludes = chosen;
+    put_zip(&c, 9, "data/pick", &zip, config).await.unwrap();
+    let got = landed(&c.share.join("data/pick"));
+    assert_eq!(
+        got.keys().collect::<Vec<_>>(),
+        vec!["Extras/a/b.txt", "Game/base.pkg"]
+    );
+    assert_eq!(got["Game/base.pkg"], b"base-bytes");
+}
+
 /// Ports `transfer_zip_collapses_colliding_paths_last_wins`. Two central-directory names that
 /// sanitize to the SAME destination (`x/./y.txt` is `x/y.txt`) cannot both land. The old path
 /// collapsed them last-wins; AVA1's manifest refuses a duplicate path outright (one job is one

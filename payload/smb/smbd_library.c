@@ -238,7 +238,7 @@ static void put_item(scan_t *s, const char *kind, const char *path, const char *
     sj_kv_str(b, 1, "icon", icon);
     if (meta) {
         sj_kv_str(b, 1, "meta", meta);
-        sj_fmt(b, ",\"mtime\":%llu", (unsigned long long)mtime);
+        sj_fmt(b, ",\"mtime\":%llu,\"reader\":%u", (unsigned long long)mtime, (unsigned)IMG_READER_VERSION);
     }
     sj_raw(b, "}");
     s->nitems++;
@@ -305,8 +305,25 @@ static void free_cache(scan_t *s) {
     s->ncache = 0;
 }
 
-/* The images of this source's last result a rescan may take as they are: read ("read"), or
- * refused for good (any cause but a failed read or memory), with a size and an mtime. */
+/* 1 when a cached item names a cover. A read image without one is read again: its cover may
+ * have been left out for a reason that passes (a read that failed, the scan's cover budget used
+ * up, the old scan's file gone), and kept from the cache it would stay without one for good. */
+static int cached_icon(const char *o, size_t len) {
+    char icon[96];
+    return sj_str(o, len, "icon", icon, sizeof icon) == 1 && icon[0];
+}
+
+/* 1 when a cached refusal came from this image reader (IMG_READER_VERSION). A newer reader may
+ * read what an older one refused (a layout it now takes): such an image is read once more, and the
+ * answer is kept under the new version. A read image is kept whatever reader read it. */
+static int cached_by_this_reader(const char *o, size_t len) {
+    uint64_t v = 0;
+    return sj_u64(o, len, "reader", &v) == 1 && v == IMG_READER_VERSION;
+}
+
+/* The images of this source's last result a rescan may take as they are: read ("read") with
+ * its cover, or refused for good (any cause but a failed read or memory) by this reader, with a
+ * size and an mtime. */
 static void load_cache(scan_t *s) {
     char *path = malloc(SMBP_PATH_MAX + 64), *buf = NULL, *ipath = NULL, *tok = NULL;
     FILE *f = NULL;
@@ -337,7 +354,8 @@ static void load_cache(scan_t *s) {
         len = end - i;
         if (sj_str(o, len, "kind", tok, 64) == 1 && !strcmp(tok, "image") && sj_str(o, len, "path", ipath, SMBP_PATH_MAX) == 1 &&
             sj_u64(o, len, "size", &size) == 1 && sj_u64(o, len, "mtime", &mtime) == 1 && mtime &&
-            sj_str(o, len, "meta", tok, 64) == 1 && strcmp(tok, "img_read") != 0 && strcmp(tok, "img_no_memory") != 0) {
+            sj_str(o, len, "meta", tok, 64) == 1 && strcmp(tok, "img_read") != 0 && strcmp(tok, "img_no_memory") != 0 &&
+            (strcmp(tok, "read") == 0 ? cached_icon(o, len) : cached_by_this_reader(o, len))) {
             cent_t *c;
             if (s->ncache == cap) {
                 size_t nc = cap ? cap * 2 : 64;
@@ -380,18 +398,25 @@ static const cent_t *cache_find(const scan_t *s, const char *path, uint64_t size
 
 /* A cached item back into p, its cover copied under this scan's name (the old scan's covers go
  * once the new result is written); its "meta" into meta. */
-static void from_cache(scan_t *s, const cent_t *c, pkg_info_t *p, char *icon, size_t icon_cap, char *meta, size_t meta_cap) {
+/* 0, or -1 (p zeroed) when a text does not come back into its field: put_item writes each byte
+ * that is not UTF-8 as � (three bytes back), so a long Latin-1 title or such a category
+ * no longer fits, and from the cache it would come back empty. That image is read again. */
+static int from_cache(scan_t *s, const cent_t *c, pkg_info_t *p, char *icon, size_t icon_cap, char *meta, size_t meta_cap) {
     size_t n = strlen(c->obj), il = 0;
     char old[96];
-    int fake = 0;
-    (void)sj_str(c->obj, n, "title", p->title, sizeof p->title);
-    (void)sj_str(c->obj, n, "title_id", p->title_id, sizeof p->title_id);
-    (void)sj_str(c->obj, n, "content_id", p->content_id, sizeof p->content_id);
-    (void)sj_str(c->obj, n, "version", p->app_ver, sizeof p->app_ver);
-    (void)sj_str(c->obj, n, "category", p->category, sizeof p->category);
-    (void)sj_str(c->obj, n, "platform", p->platform, sizeof p->platform);
-    (void)sj_str(c->obj, n, "fw", p->fw, sizeof p->fw);
-    (void)sj_str(c->obj, n, "sdk", p->sdk, sizeof p->sdk);
+    int fake = 0, bad = 0;
+    bad |= sj_str(c->obj, n, "title", p->title, sizeof p->title) < 0;
+    bad |= sj_str(c->obj, n, "title_id", p->title_id, sizeof p->title_id) < 0;
+    bad |= sj_str(c->obj, n, "content_id", p->content_id, sizeof p->content_id) < 0;
+    bad |= sj_str(c->obj, n, "version", p->app_ver, sizeof p->app_ver) < 0;
+    bad |= sj_str(c->obj, n, "category", p->category, sizeof p->category) < 0;
+    bad |= sj_str(c->obj, n, "platform", p->platform, sizeof p->platform) < 0;
+    bad |= sj_str(c->obj, n, "fw", p->fw, sizeof p->fw) < 0;
+    bad |= sj_str(c->obj, n, "sdk", p->sdk, sizeof p->sdk) < 0;
+    if (bad) {
+        memset(p, 0, sizeof *p);
+        return -1;
+    }
     if (sj_bool(c->obj, n, "fake", &fake) == 1) p->fake = fake;
     if (sj_str(c->obj, n, "meta", meta, meta_cap) != 1) snprintf(meta, meta_cap, "img_unknown");
     icon[0] = '\0';
@@ -407,6 +432,7 @@ static void from_cache(scan_t *s, const cent_t *c, pkg_info_t *p, char *icon, si
         free(png);
         free(ip);
     }
+    return 0;
 }
 
 /* A disk image: named by its own sce_sys/param.json (smbd_image.h), from the last scan while its
@@ -417,8 +443,7 @@ static void add_image(scan_t *s, const char *path, const char *name, uint64_t si
     char icon[96] = "", meta[32] = "read";
     const cent_t *c = cache_find(s, path, size, mtime);
     if (!p) return;
-    if (c) {
-        from_cache(s, c, p, icon, sizeof icon, meta, sizeof meta);
+    if (c && from_cache(s, c, p, icon, sizeof icon, meta, sizeof meta) == 0) {
         s->img_cached++;
     } else {
         img_meta_t *m = calloc(1, sizeof *m);

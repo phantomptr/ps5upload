@@ -14,7 +14,11 @@
 //!   (`"format": "pkg"`, a debug package, written, never installed here) `"pkg_level"` (one of
 //!   [`PKG_LEVELS`], `fast` when absent), and for a game in LZ4 or zstd asset packs
 //!   `"unpack_packs"` (bool: the package holds the plain files again) with
-//!   `"leave_out_ampr_emu"` (bool: no `libSceAmpr.sprx` in it); see [`Unpack`].
+//!   `"leave_out_ampr_emu"` (bool: no `libSceAmpr.sprx` in it); see [`Unpack`]. For a game in
+//!   no packs that carries an AMPR emulator, `"leave_out_ampr_emu"` alone leaves its emulator's
+//!   files out (`ps5upload_convert_core::plain_emulator`). A `.pkg` also takes
+//!   `"console_firmware"` (`13.60`, the console's own, from the helper): one past what that
+//!   firmware opens is refused before any work (`convert_too_big_for_firmware`).
 //! - `runtime/`: the emulators the desktop app put on the console, never written here:
 //!   `ampr-emu-ng-<version>/libSceAmpr.sprx` (the helper names it in `"zstd_runtime"`) and, when
 //!   the user asked the app for it, `ampr_emu-<version>/libSceAmpr.sprx`, which an unpacked
@@ -43,7 +47,7 @@ use std::time::{Duration, Instant};
 
 use ps5upload_convert_core::folder_build::{self, FolderOut};
 use ps5upload_convert_core::image_build::{self, ImageFormat};
-use ps5upload_convert_core::{safe_write, unpack_packs, zstd_packs};
+use ps5upload_convert_core::{plain_emulator, safe_write, unpack_packs, zstd_packs};
 use ps5upload_fpkg::ffpfsc_block::Level;
 use ps5upload_fpkg::sample::VerifyMode;
 use ps5upload_fpkg::source::SourceTree;
@@ -100,11 +104,19 @@ struct Request {
     /// (the engine's `unpack_packs`). Absent or false: the game goes in as it is, packs and all.
     #[serde(default)]
     unpack_packs: bool,
-    /// With `unpack_packs`: leave the AMPR emulator out of the package (the engine's
-    /// `leave_out_ampr_emu`). Absent or false: the game's own emulator stays, and the build is
-    /// refused (`convert_unpack_needs_emulator`) when it is not one that suits plain files.
+    /// Leave the AMPR emulator out of the package (the engine's `leave_out_ampr_emu`). With
+    /// `unpack_packs`, for a game in packs; absent or false, the game's own emulator stays, and
+    /// the build is refused (`convert_unpack_needs_emulator`) when it is not one that suits
+    /// plain files. Without it, for a game that is not in packs and carries an emulator (the
+    /// inspection's `plain_ampr_emu`): refused (`convert_cant_leave_out_emulator`) where that
+    /// says why not.
     #[serde(default)]
     leave_out_ampr_emu: bool,
+    /// With `format` `pkg`: this console's firmware (`13.60`), which the helper reads from its
+    /// kernel. The package's size is checked against what that firmware opens, before any work
+    /// (`ps5upload_fpkg::package_limit`); absent or unreadable, the game's own or 13.x's.
+    #[serde(default)]
+    console_firmware: Option<String>,
     /// The job folder's `runtime/` ([`unpack_packs::CONSOLE_RUNTIME_FOLDER`]), where the app puts
     /// ampr_emu: set from the folder the request is read in, never from the request.
     #[serde(skip)]
@@ -128,6 +140,9 @@ enum Unpack {
     KeepOwn,
     /// Every `libSceAmpr.sprx` in `fakelib` and `fakelib2` is left out.
     LeaveOut,
+    /// Not an unpack: a game that is not in packs, its AMPR emulator's files left out
+    /// (`ps5upload_convert_core::plain_emulator`).
+    PlainLeaveOut,
 }
 
 impl Unpack {
@@ -142,6 +157,7 @@ impl Unpack {
             }
             Unpack::KeepOwn => unpack_packs::open_with_own_emulator(tree, mtime),
             Unpack::LeaveOut => unpack_packs::open_without_emulator(tree, mtime),
+            Unpack::PlainLeaveOut => plain_emulator::open_without_emulator(tree),
         }))
     }
 }
@@ -151,6 +167,8 @@ impl Unpack {
 fn unpack_refusal(source: &Path, detail: String) -> Refusal {
     let cause = if detail.starts_with(unpack_packs::NEEDS_OTHER_EMULATOR) {
         "convert_unpack_needs_emulator"
+    } else if detail.starts_with(plain_emulator::CANT_LEAVE_OUT) {
+        "convert_cant_leave_out_emulator"
     } else if detail.contains("nothing to unpack") {
         "convert_not_packed"
     } else {
@@ -293,6 +311,8 @@ struct Plan {
     unpack: Option<(Unpack, i64)>,
     /// The source's content id, as its inspection read it.
     content_id: Option<String>,
+    /// A `.pkg`: the console's firmware its size is checked against.
+    console_firmware: Option<ps5upload_fpkg::package_limit::Firmware>,
     /// The `.zip` or `.7z` the inspection opened, read by the build rather than opened again.
     opened: Option<Box<dyn SourceTree>>,
 }
@@ -342,10 +362,9 @@ fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
         }
         other => return Err(bad(format!("unknown format {other:?}"))),
     };
-    if request.leave_out_ampr_emu && !request.unpack_packs {
-        // As the engine refuses it: packs are read only through the emulator.
+    if request.leave_out_ampr_emu && pkg.is_none() {
         return Err(bad(
-            "leaving out the AMPR emulator goes with unpacking the asset packs".into(),
+            "leaving out the AMPR emulator is for a .pkg on the console".into(),
         ));
     }
     if request.unpack_packs && pkg.is_none() {
@@ -459,6 +478,16 @@ fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
             Unpack::KeepOwn
         };
         Some((how, zstd_packs::now_secs()))
+    } else if request.leave_out_ampr_emu {
+        if inspection.packed.is_some() {
+            // As the engine refuses it: packs are read only through the emulator.
+            return Err(bad(
+                "leaving out the AMPR emulator goes with unpacking the asset packs".into(),
+            ));
+        }
+        // Whether this game's emulator can go is the reader's to say (refused before anything
+        // is written, `convert_cant_leave_out_emulator`).
+        Some((Unpack::PlainLeaveOut, zstd_packs::now_secs()))
     } else {
         None
     };
@@ -472,6 +501,10 @@ fn plan(request: &Request, cancel: &Arc<AtomicBool>) -> Result<Plan, Refusal> {
         pkg,
         unpack,
         content_id: inspection.content_id,
+        console_firmware: request
+            .console_firmware
+            .as_deref()
+            .and_then(ps5upload_fpkg::package_limit::Firmware::parse),
         opened,
     })
 }
@@ -580,6 +613,46 @@ fn is_archive_file(path: &Path) -> bool {
         )
 }
 
+/// Makes every folder and file under `root` (and `root`) 0777, the mode the helper gives
+/// everything it writes (payload/src/main.c, third_party/ava1/c/ava1_internal.h): the PS5's
+/// loader refuses a game whose files lack execute for everyone ("can't start the game",
+/// CE-107750-0), and this program's own writes take whatever mode the ELF loader's umask leaves
+/// (0644 files with the usual 022). Links are left as they are (a chmod follows them). Best
+/// effort: how many entries could not be changed.
+#[cfg(unix)]
+fn open_up(root: &Path) -> u64 {
+    use std::os::unix::fs::PermissionsExt;
+    let mut missed = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            missed += 1;
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.permissions().mode() & 0o777 != 0o777
+            && std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).is_err()
+        {
+            missed += 1;
+        }
+        if meta.is_dir() {
+            match std::fs::read_dir(&path) {
+                Ok(entries) => stack.extend(entries.flatten().map(|e| e.path())),
+                Err(_) => missed += 1,
+            }
+        }
+    }
+    missed
+}
+
+/// No modes to set off unix (the converter only runs its tests there).
+#[cfg(not(unix))]
+fn open_up(_root: &Path) -> u64 {
+    0
+}
+
 /// Removes what a stopped or failed build of `dest` left: the names the helper also cleans up.
 /// A `.partial` folder only when it carries the build's marker.
 fn remove_leftovers(dest: &Path) {
@@ -607,6 +680,10 @@ fn failure(detail: String, cancelled: bool, plan: &Plan) -> Refusal {
         // The build's own check once the image or pack volume sizes are known
         // (`safe_write::too_big_for`): with zstd packs the size isn't known before.
         "convert_too_big_for_drive"
+    } else if lower.contains("can't open a fake package larger than") {
+        // The package size check (`ps5upload_fpkg::package_limit`): before any work, or once
+        // the compressed size is known.
+        "convert_too_big_for_firmware"
     } else if lower.contains("no space")
         || lower.contains("storage full")
         || lower.contains("disk full")
@@ -709,6 +786,25 @@ fn build(
     };
     let one_file = plan.image.is_some() || plan.pkg.is_some();
     if let Some(why) = probe.refusal(need, one_file, folder_build::SPARE) {
+        // A stored package this console can't open is refused for that, not for the room:
+        // freeing space would not help (the builder makes the same check once it starts).
+        if let (Some(_), Some(console), true) = (plan.pkg, plan.console_firmware, need > 0) {
+            let param = std::fs::read(plan.source.join("sce_sys/param.json")).unwrap_or_default();
+            let fit = ps5upload_fpkg::package_limit::check(
+                need,
+                false,
+                None,
+                Some(console),
+                None,
+                &ps5upload_fpkg::package_limit::param_sizes(&param),
+            );
+            if let Some(refusal) = fit.refusal {
+                return Err(Refusal {
+                    cause: "convert_too_big_for_firmware",
+                    detail: refusal,
+                });
+            }
+        }
         let cause = if probe.read_only {
             "convert_dest_read_only"
         } else if why.contains("at most") {
@@ -857,6 +953,17 @@ fn build(
     };
     match built {
         Ok((files, bytes, detail)) => {
+            // A game folder is played from where it was written: its modes must be the ones the
+            // console's loader accepts.
+            if plan.image.is_none() {
+                let missed = open_up(&plan.dest);
+                if missed > 0 {
+                    crate::log(format_args!(
+                        "{}: {missed} entries kept their mode (chmod failed)",
+                        plan.dest.display()
+                    ));
+                }
+            }
             crate::log(format_args!(
                 "built {} in {:.1} s: {detail}",
                 plan.dest.display(),
@@ -909,6 +1016,8 @@ fn build_pkg(
     request.content_id = plan.content_id.clone();
     request.kraken = true;
     request.level = level;
+    // Checked against this console: a package it can't open is refused before any work.
+    request.size_target.console = plan.console_firmware;
     // A packed game as plain files: decoded as the package is written, nothing spooled.
     request.reader = plan.unpack.as_ref().map(|(how, mtime)| how.reader(*mtime));
     crate::log(format_args!(
@@ -919,6 +1028,7 @@ fn build_pkg(
                 ", asset packs unpacked, the console's ampr_emu where the game's emulator has to go",
             Some((Unpack::KeepOwn, _)) => ", asset packs unpacked, the game's emulator kept",
             Some((Unpack::LeaveOut, _)) => ", asset packs unpacked, the AMPR emulator left out",
+            Some((Unpack::PlainLeaveOut, _)) => ", the AMPR emulator left out",
             None => "",
         }
     ));
@@ -1304,8 +1414,66 @@ mod tests {
             assert_eq!(i.title.as_deref(), Some("Test Game"), "{format}");
             assert_eq!(i.data_bytes, crate::inspect(&game).unwrap().data_bytes);
             assert_eq!(names(&dir), ["status.json"], "{format}");
+            #[cfg(unix)]
+            if format == "folder" {
+                assert_eq!(modes_not_0777(&dest), Vec::<String>::new());
+            }
         }
         assert_eq!(names(&out), ["g", "g.exfat", "g.ffpfs", "g.ffpkg"]);
+    }
+
+    /// Every entry under `root` (and `root`) whose mode is not 0777, links aside.
+    #[cfg(unix)]
+    fn modes_not_0777(root: &Path) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt;
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(p) = stack.pop() {
+            let meta = std::fs::symlink_metadata(&p).unwrap();
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.permissions().mode() & 0o777 != 0o777 {
+                out.push(format!(
+                    "{} {:o}",
+                    p.display(),
+                    meta.permissions().mode() & 0o777
+                ));
+            }
+            if meta.is_dir() {
+                stack.extend(std::fs::read_dir(&p).unwrap().map(|e| e.unwrap().path()));
+            }
+        }
+        out
+    }
+
+    /// A game folder written with the usual 0644 / 0755 modes comes out 0777 throughout, and a
+    /// link in it is left alone (its target keeps its mode).
+    #[cfg(unix)]
+    #[test]
+    fn open_up_makes_a_game_folder_0777_and_leaves_links() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new("jobopenup");
+        let game = tmp.0.join("g");
+        std::fs::create_dir_all(game.join("sce_sys")).unwrap();
+        std::fs::write(game.join("eboot.bin"), b"x").unwrap();
+        std::fs::write(game.join("sce_sys/param.json"), b"{}").unwrap();
+        let outside = tmp.0.join("outside.txt");
+        std::fs::write(&outside, b"o").unwrap();
+        std::os::unix::fs::symlink(&outside, game.join("link")).unwrap();
+        for (p, mode) in [
+            (game.join("eboot.bin"), 0o644),
+            (game.join("sce_sys/param.json"), 0o600),
+            (outside.clone(), 0o644),
+            (game.join("sce_sys"), 0o755),
+            (game.clone(), 0o755),
+        ] {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        assert_eq!(open_up(&game), 0);
+        assert_eq!(modes_not_0777(&game), Vec::<String>::new());
+        let kept = std::fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        assert_eq!(kept, 0o644);
     }
 
     /// A `.ffpfsc` holding each image, at each level: done, and it reads back as the game (the
@@ -1688,6 +1856,7 @@ mod tests {
             pkg: None,
             unpack: None,
             content_id: None,
+            console_firmware: None,
             opened: None,
         };
         let fat = safe_write::Probe {
@@ -1809,6 +1978,41 @@ mod tests {
         ask(dir, r);
         let code = run_with(dir, &mut |_| {}).unwrap();
         (code, status(dir))
+    }
+
+    /// A `.pkg` built on the console is checked against that console's firmware (the helper
+    /// passes it): 300 GiB stored (a sparse file, no disk used) is past what 9.60 opens, refused
+    /// before anything is written, with its own cause.
+    #[cfg(unix)]
+    #[test]
+    fn a_pkg_too_big_for_this_consoles_firmware_is_refused() {
+        let tmp = TempDir::new("jobpkgfw");
+        let dir = tmp.0.join("convert");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = packable_game(&tmp.0, false);
+        std::fs::File::create(src.join("data/huge.bin"))
+            .unwrap()
+            .set_len(300 << 30)
+            .unwrap();
+        let dest = tmp.0.join("big.pkg");
+        let (code, s) = pkg_job(
+            &dir,
+            &src,
+            &dest,
+            json!({"pkg_level": "stored", "console_firmware": "9.60"}),
+        );
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_too_big_for_firmware")),
+            "{s}"
+        );
+        assert!(
+            s["detail"].as_str().unwrap().contains(
+                "PS5 firmware 7.xx to 10.xx can't open a fake package larger than 256 GiB"
+            ),
+            "{s}"
+        );
+        assert!(!dest.exists() && !tmp.0.join("big.pkg.partial").exists());
     }
 
     /// The package at `dest`, opened as the game it holds.
@@ -2206,6 +2410,70 @@ mod tests {
         );
     }
 
+    /// A plain game (no packs) that carries ampr_emu: the inspection offers to leave it out, and
+    /// a `.pkg` with `leave_out_ampr_emu` alone holds the game without the emulator's files and
+    /// with every other fakelib. A `libSceAmpr.sprx` that is no emulator stays: refused before
+    /// anything is written.
+    #[test]
+    fn a_pkg_leaves_a_plain_games_emulator_out() {
+        let tmp = TempDir::new("jobplainemu");
+        let dir = tmp.0.join("convert");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = packable_game(&tmp.0, true);
+        std::fs::create_dir_all(src.join("fakelib")).unwrap();
+        std::fs::write(src.join("fakelib/libSceAmpr.sprx"), ampr_emu("0.4.2.1")).unwrap();
+        std::fs::write(src.join("fakelib/libSceAgc.sprx"), b"backport library").unwrap();
+        std::fs::write(src.join("ampr_commands.bin"), b"journal").unwrap();
+
+        let seen = crate::inspect(&src).unwrap();
+        let found = seen.plain_ampr_emu.clone().expect("an emulator");
+        assert!(found.offered(), "{found:?}");
+        assert!(found.imports_ampr);
+        assert_eq!(found.emulator, "ampr_emu 0.4.2.1");
+        assert_eq!(
+            json!(seen)["plain_ampr_emu"]["modules"][0],
+            "fakelib/libSceAmpr.sprx"
+        );
+
+        let bare = tmp.0.join("bare.pkg");
+        let (code, s) = pkg_job(&dir, &src, &bare, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(code, 0, "{s}");
+        let mut pkg = packaged(&bare);
+        for name in PLAIN {
+            assert_eq!(
+                pkg.read(name).unwrap(),
+                std::fs::read(src.join(name)).unwrap(),
+                "{name}"
+            );
+        }
+        let names = names_of(&*pkg);
+        assert!(!has_emulator(&names), "{names:?}");
+        assert!(!names.iter().any(|n| n == "ampr_commands.bin"), "{names:?}");
+        assert_eq!(
+            pkg.read("fakelib/libSceAgc.sprx").unwrap(),
+            b"backport library"
+        );
+        // A libSceAmpr game's package keeps a fresh index of exactly what it carries.
+        assert_index_lists_the_package(&mut *pkg);
+
+        // A system library under the emulator's name: not offered, and refused.
+        std::fs::write(
+            src.join("fakelib/libSceAmpr.sprx"),
+            b"\x7fELF system library",
+        )
+        .unwrap();
+        let seen = crate::inspect(&src).unwrap();
+        assert!(!seen.plain_ampr_emu.unwrap().offered());
+        let other = tmp.0.join("other.pkg");
+        let (code, s) = pkg_job(&dir, &src, &other, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_cant_leave_out_emulator")),
+            "{s}"
+        );
+        assert!(!other.exists() && !tmp.0.join("other.pkg.partial").exists());
+    }
+
     /// What an unpack is not asked of: a game that is not in packs, any output but a `.pkg`,
     /// and the emulator left out of a game still in its packs (only the emulator reads them).
     #[test]
@@ -2221,7 +2489,28 @@ mod tests {
             (1, &json!("convert_not_packed")),
             "{s}"
         );
+        // A plain game with no emulator has none to leave out.
         let (code, s) = pkg_job(&dir, &src, &dest, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_cant_leave_out_emulator")),
+            "{s}"
+        );
+        // A game still in its packs: only the emulator reads them.
+        let packed = tmp.0.join("packed");
+        zstd_packed(&dir, &src, &packed, b"NG EMULATOR");
+        let (code, s) = pkg_job(&dir, &packed, &dest, json!({"leave_out_ampr_emu": true}));
+        assert_eq!(
+            (code, &s["cause"]),
+            (1, &json!("convert_bad_request")),
+            "{s}"
+        );
+        let (code, s) = pkg_job(
+            &dir,
+            &src,
+            &tmp.0.join("r.exfat"),
+            json!({"format": "exfat", "leave_out_ampr_emu": true}),
+        );
         assert_eq!(
             (code, &s["cause"]),
             (1, &json!("convert_bad_request")),

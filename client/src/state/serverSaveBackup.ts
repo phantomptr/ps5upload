@@ -28,12 +28,55 @@ export function toggleChosen<T>(chosen: readonly T[], item: T, on: boolean, all:
   return all.every((x) => next.includes(x)) ? [] : next;
 }
 
+/**
+ * Ticks or unticks the user `id` of the console shown (`shown`: its users). The list is the
+ * engine's, for every console, so only `id` changes: other consoles' users stay as they were.
+ * As {@link toggleChosen}: the empty list is every user, and the shown console never ends up
+ * with nobody ticked. Back to "every user" only when the list names no other console's user
+ * (then nobody anywhere was left out). From "every user", unticking one has to list who stays:
+ * the shown console's others (the other consoles' users are not known here).
+ */
+export function toggleUser(chosen: readonly number[], id: number, on: boolean, shown: readonly number[]): number[] {
+  if (chosen.length === 0) return toggleChosen(chosen, id, on, shown);
+  const next = on ? [...new Set([...chosen, id])] : chosen.filter((x) => x !== id);
+  if (!next.some((x) => shown.includes(x))) return [...chosen];
+  const others = next.filter((x) => !shown.includes(x));
+  return others.length === 0 && shown.every((x) => next.includes(x)) ? [] : next;
+}
+
 export const MIN_HOURS = 1;
 export const MAX_HOURS = 168;
 
 export function clampHours(n: unknown): number {
   const v = typeof n === "number" && Number.isFinite(n) ? Math.round(n) : 6;
   return Math.max(MIN_HOURS, Math.min(MAX_HOURS, v));
+}
+
+/** The share's intervals offered, in minutes: 10 min, 30 min, 1 hour, 6 hours, 1 day. */
+export const SERVER_INTERVAL_CHOICES = [10, 30, 60, 360, 1440] as const;
+
+/** Whether the engine takes the share's interval in minutes (`every_minutes`); an older one
+ *  leaves it out and takes whole hours only. */
+export function serverMinutesSupported(
+  settings: Pick<ServerBackupSettings, "every_minutes"> | null,
+): boolean {
+  return typeof settings?.every_minutes === "number";
+}
+
+/** The interval the engine uses, in minutes: `every_minutes` when set, else `every_hours`. */
+export function serverIntervalMinutes(
+  settings: Pick<ServerBackupSettings, "every_hours" | "every_minutes">,
+): number {
+  const m = settings.every_minutes ?? 0;
+  return m > 0 ? m : clampHours(settings.every_hours) * 60;
+}
+
+/** The intervals to list: the offered ones, and `current` in its place when it is another
+ *  (3 hours set before, say). */
+export function serverIntervalChoices(current: number): number[] {
+  const list: number[] = [...SERVER_INTERVAL_CHOICES];
+  if (!list.includes(current)) list.push(current);
+  return list.sort((a, b) => a - b);
 }
 
 /** Whether the engine can also keep a copy of each network-share backup on a PS5 drive (#885):

@@ -396,9 +396,14 @@ export function JoinView({
     if (!autoHide || !touch || chrome.shown || !guided || hinted.current) return;
     hinted.current = true;
     setHoldHint(true);
+  }, [autoHide, touch, chrome.shown, guided]);
+  // Its own timer: the buttons shown within the 6 s (a long press, as the hint says) must not
+  // cancel it, or the hint came back every time they were hidden, for the rest of the game.
+  useEffect(() => {
+    if (!holdHint) return;
     const t = setTimeout(() => setHoldHint(false), 6000);
     return () => clearTimeout(t);
-  }, [autoHide, touch, chrome.shown, guided]);
+  }, [holdHint]);
 
   useEffect(() => {
     if (!live) return;
@@ -1092,6 +1097,13 @@ export function JoinView({
                 "join_guide_menus",
                 undefined,
                 "On the PS5's home screen only the host controls the menus; your controller plays inside games.",
+              )}
+            </p>
+            <p className="mt-1 text-white/60" data-testid="join-guide-stuck">
+              {tr(
+                "join_guide_stuck",
+                undefined,
+                "Nothing moves on that screen? Ask the host to send a bug report from PS5Upload: it shows whether their PS5 takes your controller.",
               )}
             </p>
             <button

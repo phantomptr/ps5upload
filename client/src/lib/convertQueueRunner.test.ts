@@ -165,6 +165,26 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     expect(plain).not.toHaveProperty("leaveOutAmprEmu");
   });
 
+  it("keeps a queued plain game's choice to leave out its AMPR emulator, with nothing unpacked", async () => {
+    useConvertQueue.getState().add({
+      source: "/games/PlainEmu-app",
+      compression: "balanced",
+      build: { kind: "pkg", leaveOutAmprEmu: true },
+      packs: "none",
+      plainAmprEmu: true,
+      then: "keep",
+      host: null,
+      addAmprEmu: true,
+      amprEmuBuild: "ampr_emu",
+    });
+    await useConvertQueue.getState().start();
+    await flush();
+    const req = calls[0].args[0] as Record<string, unknown>;
+    expect(req).toMatchObject({ source: "/games/PlainEmu-app", leaveOutAmprEmu: true });
+    expect(req).not.toHaveProperty("unpackPacks");
+    expect(req).not.toHaveProperty("amprEmu");
+  });
+
   // A game added without being checked under ① (several picked at once, a folder of games)
   // has had no choice made for its asset packs. ① unpacks them unless unticked, so the queue
   // looks at the game when its turn comes and does the same.

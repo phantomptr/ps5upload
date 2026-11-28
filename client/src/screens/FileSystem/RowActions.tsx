@@ -23,6 +23,7 @@ import {
   PackagePlus,
   Pencil,
   PieChart,
+  Ruler,
   Rocket,
   ScanSearch,
   Trash2,
@@ -180,6 +181,8 @@ export interface RowActionsContext {
   snapshot?: (e: RowEntry) => void;
   /** Open "What takes space?" on a folder (absent: not offered). */
   space?: (e: RowEntry) => void;
+  /** Measure a console folder's size in the background (#974; absent: not offered). */
+  measure?: (e: RowEntry) => void;
 }
 
 /** A file offered to the console's payload loader (:9021): .elf or .bin. */
@@ -366,6 +369,19 @@ export function buildRowActions(e: RowEntry, ctx: RowActionsContext): RowAction[
       icon: PieChart,
       label: tr("fs_space_action", undefined, "What takes space?"),
       run: () => ctx.space?.(e),
+      menuOnly: true,
+    });
+  if (isDir && ctx.measure && ctx.hasHost)
+    actions.push({
+      id: "measure",
+      icon: Ruler,
+      label: tr("fs_measure_size", undefined, "Measure size"),
+      title: tr(
+        "fs_measure_size_tooltip",
+        undefined,
+        "Count this folder's size on the PS5, in the background, and show it in the list",
+      ),
+      run: () => ctx.measure?.(e),
       menuOnly: true,
     });
   if (ctx.snapshot && ctx.hasHost)

@@ -202,3 +202,25 @@ int path_under_forms(const char *p, const char *lex, const char *canon) {
     if (!p || !p[0]) return 0;
     return under(p, lex) || under(p, canon);
 }
+
+int path_protected_all_forms(char *forms) {
+    const char *dirs[2] = { g_protected, PROTECTED_SMB };
+    int n = 0;
+    for (int d = 0; d < 2; d++) {
+        char *lex = forms + (size_t)n * PATH_MAX;
+        lex_normalize(dirs[d], lex, PATH_MAX);
+        n++;
+        canonical_of(dirs[d], forms + (size_t)n * PATH_MAX, PATH_MAX);
+        n++;
+        for (int i = 0; n < PATH_PROTECTED_FORMS && data_alias(lex, i, forms + (size_t)n * PATH_MAX, PATH_MAX); i++)
+            n++;
+    }
+    return n;
+}
+
+int path_under_any_form(const char *p, const char *forms, int n) {
+    if (!p || !p[0]) return 0;
+    for (int i = 0; i < n; i++)
+        if (under(p, forms + (size_t)i * PATH_MAX)) return 1;
+    return 0;
+}

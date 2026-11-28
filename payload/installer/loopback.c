@@ -36,7 +36,16 @@ struct inst_loopback {
     volatile int    running;
     pthread_t       listener;
     pthread_mutex_t mutex;
-    int             pkg_fd;
+    /* The package is opened for each request and closed after it, never held for the job (#979):
+     * a package deleted once Sony has it (the console's own copy, removed after its install)
+     * keeps its space allocated for as long as any descriptor is open, and a job stays serving
+     * for ten minutes after Sony's last request, or until the next install when Sony skipped a
+     * byte. Measured on a Pro's M.2 (bfs, FW 13.60): a 4.3 GB package deleted 8 s after its
+     * install came back 10 minutes later with the held descriptor, within 10 s without it. Each
+     * open is checked to be the same file the job started with (pkg_dev/pkg_ino/total). */
+    char            pkg_path[1024];
+    dev_t           pkg_dev;
+    ino_t           pkg_ino;
     uint64_t        total;
     char            dir[512];      /* directory of pkg_path, for .crc sidecars */
     char            attempt[64];
@@ -65,6 +74,21 @@ static int send_all(int fd, const void *b, size_t len) {
         sent += (size_t)n;
     }
     return 0;
+}
+
+/* The job's package, opened for one request: -1 when it is gone or is no longer the file the job
+ * started with (replaced, or a different size), so another file's bytes are never served under
+ * this job's name. */
+static int open_pkg(const struct inst_loopback *lb) {
+    struct stat st;
+    int fd = open(lb->pkg_path, O_RDONLY);
+    if (fd < 0) return -1;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_dev != lb->pkg_dev || st.st_ino != lb->pkg_ino ||
+        (uint64_t)st.st_size != lb->total) {
+        close(fd);
+        return -1;
+    }
+    return fd;
 }
 
 /* Send a file's whole content (used for a .crc sidecar). */
@@ -167,6 +191,16 @@ static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t
         return h.keep_alive;
     }
 
+    /* Opened before anything is answered: a package deleted (or replaced) since the job started
+     * is gone for this job too. */
+    int pkg_fd = open_pkg(lb);
+    if (pkg_fd < 0) {
+        log_request(lb, req, "404 (package gone)");
+        char b[128]; int n = inst_http_hdr_404(b, sizeof(b), 0);
+        if (n > 0) send_all(conn, b, (size_t)n);
+        return 0;
+    }
+
     uint64_t total = lb->total;
     char rangev[128];
     uint64_t start = 0, end = (total > 0) ? total - 1 : 0;
@@ -180,6 +214,7 @@ static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t
     time_t now = time(NULL);
     log_request(lb, req, rr == INST_RANGE_UNSAT ? "416" : rr == INST_RANGE_OK ? "206" : "200");
     if (rr == INST_RANGE_UNSAT) {
+        close(pkg_fd);
         hlen = inst_http_hdr_416(hdr, sizeof(hdr), total, h.keep_alive);
         if (hlen <= 0 || send_all(conn, hdr, (size_t)hlen) != 0) return 0;
         return h.keep_alive;
@@ -189,17 +224,26 @@ static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t
         start = 0; end = (total > 0) ? total - 1 : 0;
         hlen = inst_http_hdr_200(hdr, sizeof(hdr), total, now, lb->fixed_lm, h.keep_alive);
     }
-    if (hlen <= 0 || send_all(conn, hdr, (size_t)hlen) != 0) return 0;
-    if (h.is_head || total == 0) return h.keep_alive;
+    if (hlen <= 0 || send_all(conn, hdr, (size_t)hlen) != 0) {
+        close(pkg_fd);
+        return 0;
+    }
+    if (h.is_head || total == 0) {
+        close(pkg_fd);
+        return h.keep_alive;
+    }
 
     /* body — heap buffer, never the thread stack (see send_file_bytes). */
     char *buf = malloc(LB_SEND_CHUNK);
-    if (!buf) return 0;
+    if (!buf) {
+        close(pkg_fd);
+        return 0;
+    }
     uint64_t off = start;
     while (off <= end) {
         uint64_t remain = end - off + 1;
         size_t want = remain > LB_SEND_CHUNK ? LB_SEND_CHUNK : (size_t)remain;
-        ssize_t n = pread(lb->pkg_fd, buf, want, (off_t)off);
+        ssize_t n = pread(pkg_fd, buf, want, (off_t)off);
         if (n <= 0) break;
         if (send_all(conn, buf, (size_t)n) != 0) break;
         pthread_mutex_lock(&lb->mutex);
@@ -211,6 +255,7 @@ static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t
         off += (uint64_t)n;
     }
     free(buf);
+    close(pkg_fd);
     /* A body cut short leaves the stream out of step: only a complete answer keeps the
      * connection. */
     return (off > end) ? h.keep_alive : 0;
@@ -392,11 +437,19 @@ int inst_loopback_start(inst_loopback_t **out, const char *pkg_path,
     char *slash = strrchr(lb->dir, '/');
     if (slash) *slash = '\0'; else strcpy(lb->dir, ".");
 
-    lb->pkg_fd = open(pkg_path, O_RDONLY);
-    if (lb->pkg_fd < 0) { free(lb); return -1; }
+    if (strlen(pkg_path) >= sizeof(lb->pkg_path)) { free(lb); return -1; }
+    snprintf(lb->pkg_path, sizeof(lb->pkg_path), "%s", pkg_path);
+    lb->pkg_dev = st.st_dev;
+    lb->pkg_ino = st.st_ino;
+    {
+        /* Readable now, or the install is refused here rather than by Sony's first request. */
+        int fd = open_pkg(lb);
+        if (fd < 0) { free(lb); return -1; }
+        close(fd);
+    }
 
     lb->listen_fd = lb_listen(0);                /* ephemeral */
-    if (lb->listen_fd < 0) { close(lb->pkg_fd); free(lb); return -1; }
+    if (lb->listen_fd < 0) { free(lb); return -1; }
     struct sockaddr_in a;
     memset(&a, 0, sizeof(a));
     socklen_t al = sizeof(a);
@@ -404,7 +457,7 @@ int inst_loopback_start(inst_loopback_t **out, const char *pkg_path,
     lb->port = ntohs(a.sin_port);
     lb->running = 1;
     if (pthread_create(&lb->listener, NULL, listener, lb) != 0) {
-        close(lb->listen_fd); close(lb->pkg_fd); free(lb); return -1;
+        close(lb->listen_fd); free(lb); return -1;
     }
     *out = lb;
     *out_port = lb->port;
@@ -450,7 +503,6 @@ void inst_loopback_stop(inst_loopback_t *lb) {
                 lb->workers);
         return;
     }
-    close(lb->pkg_fd);
     pthread_mutex_destroy(&lb->mutex);
     free(lb);
 }

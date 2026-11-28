@@ -114,6 +114,8 @@ import {
 import { validateBatch } from "../../lib/uploadBatch";
 import { archiveDefault } from "../../lib/archiveDefault";
 import { archiveKindOf } from "../../state/rarPackages";
+import { canChooseEntries, withArchiveChoice, type ArchiveChoice } from "../../lib/archiveChoice";
+import { ArchiveChooseCard } from "./ArchiveChooseCard";
 import { scanChildren } from "../../lib/folderScan";
 import {
   useUploadBatch,
@@ -314,6 +316,18 @@ export default function UploadScreen({
     if (mode !== "as-is") setUnpackPlacement(mode);
   };
   const archiveAsIs = archiveExtractMode === "as-is";
+  // "Choose files" (#969): the entries of this archive to unpack, when not all of them.
+  const [archiveChosen, setArchiveChosen] = useState<{
+    path: string;
+    choice: ArchiveChoice;
+  } | null>(null);
+  const chosenOfSource =
+    source?.kind === "archive" &&
+    !archiveAsIs &&
+    archiveChosen?.path === source.path &&
+    archiveChosen.choice.paths
+      ? { paths: archiveChosen.choice.paths, bytes: archiveChosen.choice.bytes }
+      : null;
   const archiveIntoSubfolder = archiveExtractMode
     ? archiveExtractMode === "subfolder"
     : unpackPlacement === "subfolder";
@@ -522,6 +536,7 @@ export default function UploadScreen({
       pkgDir: storage.dir,
       nonce,
       now,
+      archiveOnly: chosenOfSource,
     };
   };
 
@@ -1128,6 +1143,11 @@ export default function UploadScreen({
           registerAfterUpload={registerAfterUpload}
           archiveExtractMode={archiveExtractMode}
           onSetArchiveExtractMode={setArchiveExtractMode}
+          archiveChosen={chosenOfSource}
+          rarPassword={rarPassword}
+          onChooseArchive={(choice) =>
+            setArchiveChosen({ path: source.path, choice })
+          }
           onQueueAllParts={handleQueueAllParts}
           destinationVolume={destinationVolume}
           destinationSubpath={destinationSubpath}
@@ -1336,6 +1356,10 @@ function Step2Options(props: {
   registerAfterUpload: boolean;
   archiveExtractMode: ArchiveMode | null;
   onSetArchiveExtractMode: (m: ArchiveMode) => void;
+  /** "Choose files" (#969): the chosen entries of the archive, or null for all of it. */
+  archiveChosen: { paths: string[]; bytes: number } | null;
+  rarPassword: string | null;
+  onChooseArchive: (choice: ArchiveChoice) => void;
   destinationVolume: string | null;
   destinationSubpath: string;
   availableVolumes: Volume[];
@@ -1373,6 +1397,9 @@ function Step2Options(props: {
     registerAfterUpload,
     archiveExtractMode,
     onSetArchiveExtractMode,
+    archiveChosen,
+    rarPassword,
+    onChooseArchive,
     destinationVolume,
     destinationSubpath,
     availableVolumes,
@@ -1879,6 +1906,23 @@ function Step2Options(props: {
         />
       )}
 
+      {/* An archive that is unpacked: choose which of its entries go (#969). */}
+      {unpacks &&
+        !archiveUndecided &&
+        !detecting &&
+        !detectError &&
+        !isRemotePath(source.path) &&
+        canChooseEntries(source.path) && (
+          <ArchiveChooseCard
+            key={source.path}
+            archivePath={source.path}
+            password={rarPassword}
+            chosen={archiveChosen?.paths ?? null}
+            chosenBytes={archiveChosen?.bytes ?? null}
+            onChoose={onChooseArchive}
+          />
+        )}
+
       <FolderDiffSlot
         source={source}
         destinationVolume={destinationVolume}
@@ -2268,7 +2312,10 @@ function Step2Options(props: {
         archiveIntoSubfolder={archiveExtractMode === "subfolder"}
         destinationVolume={destinationVolume}
         destinationSubpath={destinationSubpath}
-        excludes={excludes.filter((e) => e.enabled).map((e) => e.pattern)}
+        excludes={withArchiveChoice(
+          excludes.filter((e) => e.enabled).map((e) => e.pattern),
+          unpacks ? archiveChosen?.paths : null,
+        )}
       />
       )}
     </>

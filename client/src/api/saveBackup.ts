@@ -56,10 +56,11 @@ export interface ConsoleCopyStatus {
 
 /** A PS5 drive a copy of each backup can go to (never the internal storage). */
 export interface ConsoleDrive {
-  /** `/mnt/ext0`, `/mnt/usb1` … */
+  /** `/data`, `/mnt/ext0`, `/mnt/usb1` … */
   path: string;
-  /** `ext`: M.2 / extended storage; `usb`: a USB drive. */
-  kind: "ext" | "usb";
+  /** `internal`: the PS5's own storage; `ext`: M.2 / extended storage; `usb`: a USB drive. An
+   *  engine before 12.6.44 offers no `internal`. */
+  kind: "internal" | "ext" | "usb";
   total_bytes: number;
   free_bytes: number;
 }
@@ -122,13 +123,15 @@ export interface ServerBackupSettings {
   /** `remote://<connection-id>/<folder>`; "" when none is chosen. */
   target: string;
   every_hours: number;
+  /** Minutes between passes (10 to 10080); 0: `every_hours`. Absent from an older engine. */
+  every_minutes?: number;
   keep: number;
   /** Consoles to back up (bare IPs); empty: every console. */
   hosts: string[];
   /** Console users to back up; empty: every user. */
   users: number[];
-  /** A drive in the PS5 itself (`/mnt/ext0` M.2, `/mnt/usb0` USB) that also gets a copy of each
-   *  backup (#885); "" for none. An engine before 12.6.16 leaves it out (it can't). */
+  /** A drive in the PS5 itself (`/data` internal, `/mnt/ext0` M.2, `/mnt/usb0` USB) that also
+   *  gets a copy of each backup (#885); "" for none. An engine before 12.6.16 leaves it out. */
   console_drive?: string;
   /** Versions of each save kept on that drive; 0: as many as `keep`. */
   console_keep?: number;
@@ -398,7 +401,7 @@ export const saveBackupApi = {
     (await call<{ drives: ConsoleDrive[] }>(`/console/drives?addr=${encodeURIComponent(addr)}`)).drives,
   /** A game's backup copies on the chosen PS5 drive of the console `addr` (bare IP). */
   consoleList: (addr: string, titleId: string) =>
-    call<{ drive: string; kind: "ext" | "usb" | ""; backups: SaveBackupFile[] }>(
+    call<{ drive: string; kind: "internal" | "ext" | "usb" | ""; backups: SaveBackupFile[] }>(
       `/console/list?addr=${encodeURIComponent(addr)}&title_id=${encodeURIComponent(titleId)}`,
     ),
   /** Put a backup copy on the PS5 drive back, as `restore` does (the save there now kept first). */

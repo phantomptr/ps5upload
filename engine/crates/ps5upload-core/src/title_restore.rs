@@ -58,6 +58,13 @@ pub struct RestoreReply {
     pub free_volume: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub free_internal: Option<u64>,
+    /// What the package's own drive needs free for the new copy (its size; on the console's
+    /// storage 1.2x plus 1 GiB, which its reserve takes as it is written).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_volume: Option<u64>,
+    /// What the console's own storage needs free for the new copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_internal: Option<u64>,
     /// prepare: the copy aside to install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_path: Option<String>,
@@ -77,12 +84,30 @@ pub struct RestoreReply {
     /// finish: the copy aside, kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<String>,
+    /// clear: Sony's uninstall was asked to remove the console's unfinished copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared: Option<bool>,
+    /// clear: Sony's answer to that uninstall (0 accepted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sony_rc: Option<u32>,
+    /// clear refused: the title's update left in its place (the uninstall could take it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<String>,
+    /// clear refused: the title's add-ons on a drive (the uninstall could take them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addons: Option<String>,
 }
 
 impl RestoreReply {
     /// The check answered "this title can be put back".
     pub fn restorable(&self) -> bool {
         self.ok && self.state == "restorable"
+    }
+
+    /// A clear or rollback that has to wait for Sony to finish removing its copy: asking again
+    /// later (finish with rollback) puts the package back.
+    pub fn clearing(&self) -> bool {
+        self.state == "unsettled" && self.reason.as_deref() == Some("clearing")
     }
 }
 
@@ -109,6 +134,10 @@ pub fn valid_title_id(id: &str) -> bool {
         && b[4..].iter().all(|c| c.is_ascii_digit())
 }
 
+/// How long clear may take: Sony's uninstall (FW 13.60 repeats it for two records, 10 s or more),
+/// the helper's wait for the title's folders to go (up to 10 s) and its settle look (3 s).
+const CLEAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 fn call(
     addr: &str,
     op: &str,
@@ -121,24 +150,32 @@ fn call(
         anyhow::bail!("restore_invalid_title: {title_id:?} is not a title id");
     }
     let req = serde_json::to_vec(&body(op, &id, rollback, install_ended))?;
-    let bytes = mgmt::call(addr, m::APP_RESTORE, &req).map_err(|e| {
-        if crate::console_files::is_unsupported(&e) {
-            anyhow::anyhow!(
-                "{UNSUPPORTED} the PS5 helper is an older version; send the helper again"
-            )
-        } else {
-            e
-        }
-    })?;
+    // A rollback after a clear settles too (3 s); clear runs Sony's uninstall.
+    let timeout = (op == "clear" || rollback).then_some(CLEAR_TIMEOUT);
+    let bytes =
+        mgmt::call_with(addr, m::APP_RESTORE, "APP_RESTORE", &req, timeout).map_err(|e| {
+            if crate::console_files::is_unsupported(&e) {
+                anyhow::anyhow!(
+                    "{UNSUPPORTED} the PS5 helper is an older version; send the helper again"
+                )
+            } else {
+                e
+            }
+        })?;
     let r: RestoreReply = serde_json::from_slice(&bytes).context("parse APP_RESTORE reply")?;
     crate::clog!(
         Info,
         "install",
-        "{op} {id} on {addr}: ok={} state={} err={:?} reason={:?}",
+        "{op} {id} on {addr}: ok={} state={} err={:?} reason={:?}{}",
         r.ok,
         r.state,
         r.err,
-        r.reason
+        r.reason,
+        match (r.cleared, r.sony_rc) {
+            (Some(true), Some(rc)) => format!(" cleared (uninstall rc=0x{rc:08X})"),
+            (Some(true), None) => " cleared earlier".to_string(),
+            _ => String::new(),
+        }
     );
     Ok(r)
 }
@@ -170,6 +207,15 @@ pub fn finish(
         rollback,
         install_ended || rollback,
     )
+}
+
+/// The install of the copy aside failed after the console took it: Sony's uninstall removes the
+/// console's unfinished copy (and the failed download in its queue, which blocks every later
+/// install), then the package goes back. Refused (`unsettled` with a `reason`) while the title's
+/// update or add-ons are in place or the copy aside is missing; `clearing` until Sony has finished
+/// removing its copy (then [`finish`] with `rollback` puts the package back).
+pub fn clear(addr: &str, title_id: &str) -> Result<RestoreReply> {
+    call(addr, "clear", title_id, false, false)
 }
 
 #[cfg(test)]
@@ -234,6 +280,19 @@ mod tests {
         .unwrap();
         assert!(!r.restorable());
         assert_eq!(r.err.as_deref(), Some("restore_registered"));
+
+        let r: RestoreReply = serde_json::from_str(
+            r#"{"ok":true,"title_id":"PPSA01234","state":"unsettled","reason":"clearing","cleared":true,"sony_rc":0,"kept":"/x"}"#,
+        )
+        .unwrap();
+        assert!(r.clearing());
+        assert_eq!((r.cleared, r.sony_rc), (Some(true), Some(0)));
+        let r: RestoreReply = serde_json::from_str(
+            r#"{"ok":true,"state":"unsettled","reason":"uninstall_refused","cleared":true,"sony_rc":2159155970}"#,
+        )
+        .unwrap();
+        assert!(!r.clearing());
+        assert_eq!(r.sony_rc, Some(0x80B2_1B02));
 
         let r: RestoreReply =
             serde_json::from_str(r#"{"ok":true,"state":"system_title"}"#).unwrap();

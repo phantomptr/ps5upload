@@ -31,7 +31,7 @@ import { mgmtAddr, transferAddr } from "../../lib/addr";
 import { isBackportEligible } from "../../lib/backport";
 import { krakenGameFor, krakenTitleIds } from "../../lib/mounter";
 import { isSmpMountSource } from "../../lib/mountPaths";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeUninstallError } from "../../lib/humanizeError";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { audit } from "../../state/auditLog";
@@ -207,7 +207,7 @@ export function OnThisPs5Card({
       if (probe.isStale()) return;
       setActionError({
         title: tr("installed_uninstall_failed", { name: t.titleName }, `Couldn't uninstall ${t.titleName}`),
-        detail: humanizePs5Error(e instanceof Error ? e.message : String(e)),
+        detail: humanizeUninstallError(e instanceof Error ? e.message : String(e)),
       });
     } finally {
       setBusy(null);
@@ -360,20 +360,13 @@ export function OnThisPs5Card({
       const raw = e instanceof Error ? e.message : String(e);
       // Sony's 0x80B2xxxx codes read as install failures in the shared wording: an uninstall
       // says what it is.
-      const code = /0x80B2_?[0-9A-Fa-f]{4}/i.exec(raw)?.[0];
       setActionError({
         title: tr(
           "installed_uninstall_failed",
           { name: t.titleName },
           `Couldn't uninstall ${t.titleName}`,
         ),
-        detail: code
-          ? tr(
-              "installed_uninstall_refused",
-              { code },
-              `The PS5 refused to uninstall it (${code}). Close the game if it is running and try again; if it stays, delete it from the PS5's Settings → Storage.`,
-            )
-          : humanizePs5Error(raw),
+        detail: humanizeUninstallError(raw),
       });
     } finally {
       setBusy(null);

@@ -14,6 +14,9 @@ import { COMPACT_QUERY, useMedia } from "./immersive";
 import { StreamPanel } from "./StreamPanel";
 import { JoinAFriend } from "./JoinAFriend";
 import { useJoinStore } from "../../state/joinSession";
+import { useTvMode } from "../../state/tvMode";
+import { TvHomeButton } from "../../layout/TvModeFrame";
+import { useScreenBack } from "../../lib/systemBack";
 
 /** Play my PS5 (Remote Play), Play together (host friends on it), Join a friend's game, or
  *  Receive what a friend shared (a Share link). */
@@ -28,6 +31,9 @@ export default function PlayScreen() {
   const tr = useTr();
   const navigate = useNavigate();
   const compact = useMedia(COMPACT_QUERY);
+  // TV mode (#976): Play is the game and little else. Back goes to TV mode's home, where Resume
+  // brings the stream back; the stream fills the screen as it starts.
+  const tv = useTvMode();
   const streaming = useRemotePlayStore(
     (s) => !!s.stream && s.phase !== null && s.phase !== "ended",
   );
@@ -50,6 +56,9 @@ export default function PlayScreen() {
   const [mode, setMode] = useState<PlayMode>(() =>
     joined || joinParam || friendParam ? "friend" : "mine",
   );
+  // Back from the stream: TV mode's home (Resume is there). Not on Join a friend, whose game
+  // takes Back step by step itself (buttons, then full screen) and then leaves by the history.
+  useScreenBack(tv && mode !== "friend", () => navigate("/tv", { replace: true }));
   useEffect(() => {
     if (!friendParam) return;
     setMode("friend");
@@ -95,7 +104,7 @@ export default function PlayScreen() {
         icon={MonitorPlay}
         title={tr("play_title", undefined, "Play")}
         description={
-          lean
+          lean || tv
             ? undefined
             : tr(
                 "rp_play_description2",
@@ -104,21 +113,25 @@ export default function PlayScreen() {
               )
         }
         right={
-          // Easy to find (10.0.1): a filled button with the progress while setup isn't done.
-          <Button
-            variant={setupDone ? "secondary" : "primary"}
-            size="md"
-            leftIcon={<ListChecks size={16} />}
-            onClick={() => navigate("/play/setup")}
-            data-testid="play-setup-button"
-          >
-            {setupDone
-              ? tr("play_setup_short", undefined, "Set up")
-              : tr("play_setup_button_progress", { done: setup.progress.done, total: setup.progress.total }, `Set up Play · ${setup.progress.done}/${setup.progress.total}`)}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* TV mode (#976): the way back to its home on a screen with no navigation. */}
+            <TvHomeButton />
+            {/* Easy to find (10.0.1): a filled button with the progress while setup isn't done. */}
+            <Button
+              variant={setupDone ? "secondary" : "primary"}
+              size="md"
+              leftIcon={<ListChecks size={16} />}
+              onClick={() => navigate("/play/setup")}
+              data-testid="play-setup-button"
+            >
+              {setupDone
+                ? tr("play_setup_short", undefined, "Set up")
+                : tr("play_setup_button_progress", { done: setup.progress.done, total: setup.progress.total }, `Set up Play · ${setup.progress.done}/${setup.progress.total}`)}
+            </Button>
+          </div>
         }
       />
-      {!lean && (
+      {!lean && !tv && (
         <SegmentedControl
           ariaLabel={tr("play_mode_label", undefined, "What to play")}
           value={mode}
@@ -134,7 +147,7 @@ export default function PlayScreen() {
       {mode === "friend" ? (
         <JoinAFriend pending={pendingJoin} onPendingDone={() => setPendingJoin(null)} />
       ) : (
-        <StreamPanel together={mode === "together"} onTogether={onTogether} />
+        <StreamPanel together={mode === "together"} onTogether={onTogether} tvFull={tv} />
       )}
     </div>
   );

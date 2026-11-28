@@ -6,6 +6,93 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Installs**
+- **Deleting a package right after installing it from the console gives its space back (#979).** The installer kept the package open for 10 minutes after the install (longer if the PS5 skipped part of it), so the space stayed used after the delete. It now opens the package only while the PS5 is reading it.
+
+**Clean up**
+- **Space no file uses (#979).** For an M.2 or USB drive, **Check** compares the space the drive counts as used with what its files take, and says how much no file holds. It reads names and sizes only.
+
+**Save sync**
+- **Save sync no longer stops working until a restart** when you pressed Send while its once-a-minute check was running.
+
+## 12.6.45
+
+**PS5Upload Minion**
+- **Save backup times show the PS5's own time (#978).** On some consoles the page still showed backup times in UTC (3 hours ahead in Recife). Minion now reads the time zone the way the PS5's own clock does, and falls back to the old way when it can't. If times still look wrong, **Settings › Time zone** lets you pick your UTC offset by hand. Needs the new helper.
+
+**Play Together**
+- **When a friend's controller does nothing on "Who's using this controller?"** (reported on an early-firmware PS5), the helper log now says whether the PS5 took or refused that controller's input, so a bug report from the host shows where it stops. The friend's guide says to ask the host for one.
+
+**Installs**
+- The message for a 0x80B2 install error is in plain words now, in every language.
+
+## 12.6.44
+
+**TV mode (#976)**
+- **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
+
+**Files**
+- **Folder sizes, without scanning in the background (#974).** A folder shows its size when it's already known (for example "48.2 GiB · 2 days ago"), from "What takes space?", clean-up scans or an earlier measure. **Measure size** (a folder's menu) and **Measure everything here** measure on request, one folder at a time, pausing while anything else runs on that console; a packed game shows the space it really takes. A size is forgotten when PS5Upload changes something inside the folder. "Keep folder sizes fresh" (off by default) re-measures folders you open, at most once a day.
+- Going back in the second pane of the two-pane view highlights the folder you came from, as the PS5 side already did.
+
+**Games**
+- **"Something wrong?" on the game page** checks the usual reasons a game won't show or start, in order: kstuff for fake packages, the mount layer, the package size limit, missing from the home screen, file permissions and free space. Each says OK, problem or can't tell, with what to do.
+- **Fake packages on firmware 11.61 to 13.60:** the install screen says they need the latest kstuff (fake-package support up to 13.60), and a launch that fails (CE-100022-5) says the same.
+- Game folders made by Convert on the PS5 can be read and started by the console.
+
+**Save backups**
+- Network-share backups run every 10 minutes, 30 minutes, 1 hour, 6 hours or once a day (and after a game closes, as before).
+- The PS5's internal storage can hold an extra copy too; a console reset wipes it, so the computer or network copy stays the safe one.
+
+**Bug reports**
+- The GitHub report no longer claims a zip is attached: the app shows where it saved the zip, with **Show in folder**, and the issue form has a box to drag it into.
+
+**Help**
+- The FAQ covers installing from a laptop over a direct Ethernet cable.
+
+**Fixes from a full review**
+- **Uninstall with "delete the files" re-checks the whole folder right before deleting**, and refuses a folder that holds another game, another game's disk image, or a game whose name differs only in letter case.
+- **Restore:** only one restore can start or finish on a console at a time; a game that can't be checked no longer fails the whole list; when the PS5's uninstall isn't available it says so.
+- **Play Together:** a friend pressing PS no longer resets the guard that keeps a plain ✕ from picking your user; saved switches can't be lost or corrupted when two change at once, and one bad entry no longer resets the rest; a friend mashing buttons can't flood the log.
+- **Folder sizes:** a size measured while something was being written isn't kept; installs, uninstall, clean-up and restore now forget the sizes they change; the same console over Wi-Fi and Tailscale shares its sizes; folders above PS5Upload's own data can be measured.
+- **Something wrong?:** a game on PS5Upload's own disk-image mount no longer asks for ShadowMount+, and the check never waits more than 30 seconds on a console that doesn't answer.
+- **Convert on the PS5** checks a package's size against that console's own firmware.
+- **Archives:** a crafted RAR archive can no longer make the PS5's unpacker hang or grow in memory, Stop works while it checks a password, and passwords and keys are wiped after use. The console page's "Choose items" asks for an archive's password first.
+- **Network shares on the console page:** one failed read no longer loses a game's title for good, lost covers come back, and very long image files read fast.
+- **Cheats:** a cheat line of exactly 255 characters applies.
+- **Workshop:** content ids are written only into fake-signed programs; a typed-in source starts without the last game's options.
+- **TV mode:** a "TV home" button on Play and its setup, and Esc in a text field leaves the field, not the screen.
+- Smaller fixes: Sound on works in one press at volume 0; the guest page's hint goes away; a refused account ID write no longer shows "Saved"; network-share save backups keep other consoles' users; a folder called "constructor" shows no bogus size.
+
+## 12.6.43
+
+**Install from archives**
+- **Choose what to install or unpack from an archive (#969).** When a .zip, .7z, .rar or tar holds several packages or folders (a game, its update and add-ons), "Choose files…" lists what's inside with checkboxes; only what you tick is installed, uploaded or unpacked. Packages inside a .zip show their game, version and type first. Extract on the PS5 (in the app and on the console's own page) can leave out top-level items the same way.
+
+**Fake packages (Workshop)**
+- **The Workshop won't build a package the PS5 can't open.** The PS5 limits how large a fake package it will open: on firmware 13.x the package plus the add-on space the game reserves must stay under 450 GiB (256 GiB on 7 to 10, and so on). Before any work, the check shows how much room is left, and a package that wouldn't fit is refused with the reason and a "Make a game image instead" button.
+- **Leave out the AMPR emulator from a game that isn't in asset packs.** Offered when the check says it's safe (the library in the game is the emulator, and nothing points at packs), off by default; otherwise it says why the emulator stays.
+- While a game is being checked, the options line says so, instead of "Check a game first".
+- A game's emulator log (`playgo.log` and similar at the game's top level) no longer makes the AMPR index look out of date.
+
+**Restore to home screen (#961)**
+- **A restore that fails no longer blocks the rest.** The PS5's unfinished copy is removed (which also clears it from the PS5's downloads), the package goes back where it was, and Restore all carries on with the next game. It stops only when the PS5's installer stops answering, and says to restart the PS5.
+- The room check now counts what the PS5's internal storage really uses (about 1.2 times the package plus 1 GiB), the likely cause of restores failing near the end of a long batch; each restore logs room, Sony's code and how it ended.
+- A restore no longer stays "queued" or "being restored" after its run ended or the engine stopped answering.
+- **A screen that hits an error shows "Try again" instead of a blank window**, and the rest of the app keeps working.
+
+**Remote Play**
+- **Pairing setup (#971):** the offline sign-in step only ticks once the account really is signed in, "Allow" writes the same user that pairing uses and checks it took, and a changed account ID is read back; if a restart drops it, the setup offers to put it back.
+- **The stream's stats show "PS5 sent N fps" and "N skipped here" (#972)**, so a stuttering picture shows whether the PS5 or this computer is behind.
+
+**Cheats**
+- **Large cheat tables apply.** A patch longer than about 85 bytes failed with "Patch bytes exceed helper limit"; long patches are now split safely, and the limits match the helper's (64 cheats, 4096 locations each). Errors name the cheat and the limit.
+
+**Uninstall**
+- A failed uninstall says what the PS5 refused, instead of an install error.
+
+## 12.6.42
+
 **Docker and the self-hosted web UI**
 - **Go live works from a phone or another computer.** Opening the web UI from a device the engine lets in (`PS5UPLOAD_ALLOW_IP`), Go live said "Can't reach the engine": Docker Desktop makes every visitor look like the computer itself, so the engine refused them. It now lets in the devices the setting lists, as it does for everything else, and stream keys still never leave the engine. Play Together's host controls had the same problem and work now too.
 - **Go live can run in the Docker image**, on ARM (Apple Silicon, ARM NAS boxes) and x86 alike: the image now carries what the downloaded ffmpeg needs to start, including the certificates for secure stream sites.

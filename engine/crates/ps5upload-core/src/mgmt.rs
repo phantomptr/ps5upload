@@ -19,7 +19,7 @@
 //! (`payload rejected <LABEL>: <cause>`, the text callers already match on). Use
 //! `err.downcast_ref::<MgmtError>()` to read the status and cause.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -396,6 +396,7 @@ job_ops! {
     (ARCHIVE_EXTRACT, 12, "ARCHIVE_EXTRACT", "fs_extract"),
     (APP_DUMP, 13, "APP_DUMP", "app_dump"),
     (CONSOLE_CONVERT, 14, "CONSOLE_CONVERT", "console_convert"),
+    (TREE_SIZE, 15, "FS_SIZE", "fs_size"),
 }
 
 /// How one long operation is run and followed.
@@ -425,6 +426,54 @@ static TRANSPORT: RwLock<Option<Arc<dyn MgmtTransport>>> = RwLock::new(None);
 
 thread_local! {
     static SCOPED: RefCell<Option<Arc<dyn MgmtTransport>>> = const { RefCell::new(None) };
+    static DEADLINE: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+
+/// The cause of a call refused because this thread's [`scoped_deadline`] has passed.
+pub const DEADLINE_PASSED: &str = "deadline_passed";
+
+/// Every management call this thread makes until the guard drops ends by `at`: its timeout is
+/// cut to what is left, and once nothing is left it fails at once ([`DEADLINE_PASSED`]). For a
+/// read-only report made of many calls (the game doctor), so a helper that never answers holds
+/// the thread no longer than that. An earlier deadline already set stays.
+pub fn scoped_deadline(at: std::time::Instant) -> ScopedDeadline {
+    let prev = DEADLINE.with(|d| d.get());
+    let at = prev.map_or(at, |p| p.min(at));
+    DEADLINE.with(|d| d.set(Some(at)));
+    ScopedDeadline { prev }
+}
+
+pub struct ScopedDeadline {
+    prev: Option<std::time::Instant>,
+}
+
+impl Drop for ScopedDeadline {
+    fn drop(&mut self) {
+        let prev = self.prev;
+        DEADLINE.with(|d| d.set(prev));
+    }
+}
+
+/// Whether `e` is a call refused because this thread's deadline passed.
+pub fn is_deadline_passed(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<MgmtError>()
+        .is_some_and(|m| m.cause == DEADLINE_PASSED)
+}
+
+/// `timeout` cut to this thread's deadline; an error once it has passed.
+fn within_deadline(label: &str, timeout: Duration) -> Result<Duration> {
+    let Some(at) = DEADLINE.with(|d| d.get()) else {
+        return Ok(timeout);
+    };
+    let left = at.saturating_duration_since(std::time::Instant::now());
+    if left.is_zero() {
+        return Err(anyhow::Error::new(MgmtError {
+            label: label.to_string(),
+            status: 0,
+            cause: DEADLINE_PASSED.to_string(),
+        }));
+    }
+    Ok(timeout.min(left))
 }
 
 /// Registers the process's transport (once, at engine start). A second call replaces it.
@@ -437,6 +486,12 @@ pub fn set_transport(t: Arc<dyn MgmtTransport>) {
 pub fn scoped_transport(t: Arc<dyn MgmtTransport>) -> ScopedTransport {
     let prev = SCOPED.with(|s| s.borrow_mut().replace(t));
     ScopedTransport { prev }
+}
+
+/// This thread's [`scoped_transport`], if any: for work this thread hands to threads of its own
+/// (a folder walk's workers), so a test's transport reaches them too.
+pub fn scoped_now() -> Option<Arc<dyn MgmtTransport>> {
+    SCOPED.with(|s| s.borrow().clone())
 }
 
 pub struct ScopedTransport {
@@ -475,14 +530,9 @@ pub fn call_with(
     body: &[u8],
     timeout: Option<Duration>,
 ) -> Result<Vec<u8>> {
+    let timeout = within_deadline(label, timeout.unwrap_or(DEFAULT_TIMEOUT))?;
     if let Some(t) = current() {
-        if let Some(reply) = t.call(
-            addr,
-            method,
-            label,
-            body,
-            timeout.unwrap_or(DEFAULT_TIMEOUT),
-        )? {
+        if let Some(reply) = t.call(addr, method, label, body, timeout)? {
             return Ok(reply);
         }
         return Err(helper_not_ava1(label));
@@ -747,6 +797,34 @@ mod tests {
         assert_eq!(seen[0].1, 72);
         assert_eq!(seen[0].2, "HW_INFO");
         assert_eq!(seen[0].4, DEFAULT_TIMEOUT);
+    }
+
+    /// Under a deadline each call's timeout is what is left of it, and once it has passed a call
+    /// fails at once without reaching the transport; the guard puts things back.
+    #[test]
+    fn a_deadline_bounds_every_call_on_the_thread() {
+        let t = fake(|_, _| Ok(Some(b"ok".to_vec())));
+        let _g = scoped_transport(t.clone());
+        let now = std::time::Instant::now();
+        {
+            let _d = scoped_deadline(now + Duration::from_secs(5));
+            call("10.0.0.1", m::HW_INFO, b"").unwrap();
+            {
+                // A later deadline inside does not stretch the earlier one.
+                let _later = scoped_deadline(now + Duration::from_secs(60));
+                call("10.0.0.1", m::HW_INFO, b"").unwrap();
+            }
+            let seen = t.seen.lock().unwrap();
+            assert!(seen.iter().all(|s| s.4 <= Duration::from_secs(5)));
+        }
+        {
+            let _d = scoped_deadline(now);
+            let e = call("10.0.0.1", m::HW_INFO, b"").unwrap_err();
+            assert!(is_deadline_passed(&e), "{e}");
+            assert_eq!(t.seen.lock().unwrap().len(), 2, "never sent");
+        }
+        call("10.0.0.1", m::HW_INFO, b"").unwrap();
+        assert_eq!(t.seen.lock().unwrap()[2].4, DEFAULT_TIMEOUT);
     }
 
     /// A registered transport that does not serve the console (nothing on the AVA1 port, an

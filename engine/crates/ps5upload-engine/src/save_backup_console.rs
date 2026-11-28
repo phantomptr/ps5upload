@@ -1,6 +1,7 @@
-//! A copy of each automatic save backup on a drive in the PS5 itself: its M.2 (extended storage)
-//! or a USB drive, never the internal storage. Resetting a PS5 wipes the internal drive, saves
-//! with it; an M.2 or USB drive keeps its files.
+//! A copy of each automatic save backup on a drive in the PS5 itself: its M.2 (extended storage),
+//! a USB drive, or its internal storage (`/data`). Resetting a PS5 wipes the internal drive, the
+//! copies with it, and formatting an M.2 or USB drive wipes that one; the app says so where the
+//! drive is chosen, so a copy on a computer or a network share stays the safer one.
 //!
 //! When a drive is chosen (`Settings::console_drive`, such as `/mnt/ext0`), each backup the engine
 //! makes in the backup folder (automatic, Back up now, snapshot) is checked there (every entry
@@ -117,9 +118,16 @@ impl Drive for Live<'_> {
     }
 }
 
-/// A drive path the copies may go to: a top-level M.2 (`/mnt/ext<N>`) or USB (`/mnt/usb<N>`)
-/// mount. Never the internal storage, a disk image or anything under another folder.
+/// The internal storage, as a drive the copies may go to.
+pub const INTERNAL: &str = "/data";
+
+/// A drive path the copies may go to: the internal storage (`/data`), or a top-level M.2
+/// (`/mnt/ext<N>`) or USB (`/mnt/usb<N>`) mount. Never a disk image or anything under another
+/// folder.
 pub fn drive_path_ok(drive: &str) -> bool {
+    if drive == INTERNAL {
+        return true;
+    }
     let Some(rest) = drive
         .strip_prefix("/mnt/ext")
         .or_else(|| drive.strip_prefix("/mnt/usb"))
@@ -129,29 +137,32 @@ pub fn drive_path_ok(drive: &str) -> bool {
     !rest.is_empty() && rest.len() <= 2 && rest.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// `ext` (M.2 / extended storage) or `usb`, for a drive path that `drive_path_ok` takes.
+/// `internal`, `ext` (M.2 / extended storage) or `usb`, for a drive path that `drive_path_ok`
+/// takes.
 pub fn drive_kind(drive: &str) -> &'static str {
-    if drive.starts_with("/mnt/usb") {
+    if drive == INTERNAL {
+        "internal"
+    } else if drive.starts_with("/mnt/usb") {
         "usb"
     } else {
         "ext"
     }
 }
 
-/// Whether `v` is a drive the copies can go to now: an M.2 or USB mount, really there,
-/// writable, and not the internal storage or a disk image.
+/// Whether `v` is a drive the copies can go to now: the internal storage, or an M.2 or USB
+/// mount, really there, writable, and not a disk image.
 pub fn eligible(v: &Volume) -> bool {
     drive_path_ok(&v.path)
         && !v.is_placeholder
         && v.writable
-        && !v.is_internal_user_storage()
+        && (v.path == INTERNAL || !v.is_internal_user_storage())
         && !v.is_attached_image()
 }
 
 /// The folder of `title_id`'s copies on `drive`.
 pub fn title_folder(drive: &str, title_id: &str) -> Result<String, String> {
     if !drive_path_ok(drive) {
-        return Err(format!("{drive} is not a PS5 M.2 or USB drive"));
+        return Err(format!("{drive} is not a PS5 drive (internal, M.2 or USB)"));
     }
     if !plain(title_id) {
         return Err("unexpected title id".into());
@@ -177,7 +188,7 @@ pub fn ours(title_id: &str, name: &str) -> bool {
 /// Where the copies go on `drive`: `<drive>/ps5upload/save-backups`.
 pub fn root_of(drive: &str) -> Result<String, String> {
     if !drive_path_ok(drive) {
-        return Err(format!("{drive} is not a PS5 M.2 or USB drive"));
+        return Err(format!("{drive} is not a PS5 drive (internal, M.2 or USB)"));
     }
     Ok(format!("{drive}/{FOLDER}"))
 }
@@ -193,7 +204,7 @@ fn drive_list<'a>(
 /// The volume at `drive` on the console, when it is one the copies can go to; why not otherwise.
 pub(crate) fn check_drive(c: &dyn Drive, drive: &str) -> Result<(), String> {
     if !drive_path_ok(drive) {
-        return Err(format!("{drive} is not a PS5 M.2 or USB drive"));
+        return Err(format!("{drive} is not a PS5 drive (internal, M.2 or USB)"));
     }
     let vols = c.volumes()?;
     match vols.iter().find(|v| v.path == drive) {
@@ -582,15 +593,15 @@ pub struct AddrQuery {
 pub struct DriveChoice {
     /// The mount, such as `/mnt/ext0`.
     pub path: String,
-    /// `ext` (M.2 / extended storage) or `usb`.
+    /// `internal` (`/data`), `ext` (M.2 / extended storage) or `usb`.
     pub kind: &'static str,
     pub total_bytes: u64,
     pub free_bytes: u64,
 }
 
 /// `GET /api/save-backup/console/drives?addr=` — `{drives: [{path, kind, total_bytes,
-/// free_bytes}]}`, the console's M.2 and USB drives a copy of each save backup can go to (never
-/// the internal storage).
+/// free_bytes}]}`, the console's drives a copy of each save backup can go to: its internal
+/// storage (`/data`), M.2 and USB drives.
 pub async fn get_drives(Query(q): Query<AddrQuery>) -> Response {
     let host = q.addr.trim().to_string();
     match tokio::task::spawn_blocking(move || Live(&host).volumes()).await {
@@ -801,9 +812,15 @@ pub(crate) mod tests {
             title_folder("/mnt/usb1", T).unwrap(),
             "/mnt/usb1/ps5upload/save-backups/PPSA01234"
         );
-        // Never the internal storage, a folder below a drive, or a name of another shape.
+        // The internal storage, as /data.
+        assert_eq!(
+            title_folder("/data", T).unwrap(),
+            "/data/ps5upload/save-backups/PPSA01234"
+        );
+        // Never another name of the internal storage, a folder below a drive, or a name of
+        // another shape.
         for bad in [
-            "/data",
+            "/data/x",
             "/user",
             "/mnt/ext",
             "/mnt/ext0/x",
@@ -870,7 +887,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn only_m2_and_usb_drives_are_offered() {
+    fn internal_m2_and_usb_drives_are_offered() {
         let mut img = vol("/mnt/ext1", "/dev/lvd2");
         img.source_image = "/data/x.exfat".into();
         let mut ro = vol("/mnt/usb0", "/dev/da0");
@@ -892,7 +909,8 @@ pub(crate) mod tests {
             .filter(|v| eligible(v))
             .map(|v| v.path.as_str())
             .collect();
-        assert_eq!(ok, vec!["/mnt/ext0", "/mnt/usb2"]);
+        assert_eq!(ok, vec!["/data", "/mnt/ext0", "/mnt/usb2"]);
+        assert_eq!(drive_kind("/data"), "internal");
         assert_eq!(drive_kind("/mnt/ext0"), "ext");
         assert_eq!(drive_kind("/mnt/usb2"), "usb");
     }
@@ -919,7 +937,8 @@ pub(crate) mod tests {
         assert!(check_drive(&ro, "/mnt/ext0")
             .unwrap_err()
             .contains("read-only"));
-        assert!(check_drive(&with_m2(), "/data").is_err());
+        assert!(check_drive(&with_m2(), "/data").is_ok());
+        assert!(check_drive(&with_m2(), "/user").is_err());
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 
@@ -1090,6 +1109,7 @@ pub(crate) mod tests {
     #[test]
     fn a_drive_with_no_copies_lists_none() {
         assert!(list_copies(&with_m2(), "/mnt/ext0", T).unwrap().is_empty());
-        assert!(list_copies(&with_m2(), "/data", T).is_err());
+        assert!(list_copies(&with_m2(), "/data", T).unwrap().is_empty());
+        assert!(list_copies(&with_m2(), "/user", T).is_err());
     }
 }

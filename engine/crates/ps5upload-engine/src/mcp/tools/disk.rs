@@ -1,6 +1,7 @@
 //! What takes a console's space, and clearing what it no longer needs: `disk_usage_start`,
-//! `disk_usage_status`, `disk_usage_cancel`, `cleanup_scan`, `cleanup_scan_status`, `cleanup_apply`,
-//! `cleanup_apply_status`, `cleanup_cancel`.
+//! `disk_usage_status`, `disk_usage_cancel`, `folder_sizes`, `folder_sizes_measure`, `folder_sizes_queue`,
+//! `folder_sizes_cancel`, `cleanup_scan`, `cleanup_scan_status`, `cleanup_apply`,
+//! `cleanup_apply_status`, `cleanup_cancel`, `space_check`.
 
 use serde_json::json;
 
@@ -46,6 +47,82 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 method: "POST",
                 path: "/api/ps5/disk-usage/{id}/cancel",
                 done: "Stopped the walk.",
+            ),
+        },
+        ToolDef {
+            name: "folder_sizes",
+            title: "Known folder sizes",
+            description: "The sizes already known of a console folder and the folders directly \
+                          in it, each with when it was measured (`measured_at_ms`) and where it \
+                          came from; it measures nothing. A folder missing from `children` has \
+                          no known size: folder_sizes_measure measures it. `queue` says what is \
+                          being measured.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_optional(),
+                    "dir": text("The folder, like /data/homebrew."),
+                }),
+                &["dir"],
+            ),
+            run: route!(path: "/api/ps5/folder-sizes", done: "The known sizes."),
+        },
+        ToolDef {
+            name: "folder_sizes_measure",
+            title: "Measure folder sizes",
+            description: "Queues console folders to be measured in the background, one at a time \
+                          (paused while a transfer or install runs on that console): the folders \
+                          in `paths`, or every folder directly in `dir`. Reads names and sizes \
+                          only. folder_sizes_queue follows it; folder_sizes then has the sizes.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_optional(),
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Folders to measure, like /data/homebrew/GAME.",
+                    },
+                    "dir": text("Measure every folder directly in this one instead."),
+                }),
+                &[],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/folder-sizes/measure",
+                done: "Queued.",
+            ),
+        },
+        ToolDef {
+            name: "folder_sizes_queue",
+            title: "Follow folder measuring",
+            description: "What is being measured and what waits, for one console or all; \
+                          `paused: \"busy\"` while a transfer or install runs there.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(path: "/api/ps5/folder-sizes/queue", done: "The measuring queue."),
+        },
+        ToolDef {
+            name: "folder_sizes_cancel",
+            title: "Stop measuring folders",
+            description: "Stops measuring the folders in `paths`, or every folder of the console \
+                          without it (every console's without a console).",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_optional(),
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "The folders to stop.",
+                    },
+                }),
+                &[],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/folder-sizes/cancel",
+                done: "Stopped.",
             ),
         },
         ToolDef {
@@ -113,6 +190,25 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 &["id"],
             ),
             run: route!(path: "/api/ps5/cleanup/apply/{id}", done: "The clean-up's state."),
+        },
+        ToolDef {
+            name: "space_check",
+            title: "Find space no file uses",
+            description: "On an M.2 or USB drive (`path` like /mnt/ext1, not internal storage), \
+                          sets the space the drive counts as used against what its files take. \
+                          `unaccounted_bytes` is used space no file holds, typically a file deleted \
+                          while a program still had it open. `verdict`: clear, held, partial \
+                          (some folders could not be counted) or busy (the drive changed during \
+                          the count). Reads names and sizes only; can take minutes.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_optional(),
+                    "path": text("The drive's top folder, like /mnt/ext1."),
+                }),
+                &["path"],
+            ),
+            run: route!(method: "POST", path: "/api/ps5/space-check", done: "The check's result."),
         },
         ToolDef {
             name: "health_scan",

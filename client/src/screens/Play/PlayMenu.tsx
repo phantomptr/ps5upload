@@ -19,7 +19,7 @@ import {
 import { FIT_ORDER, type PictureFit } from "../../lib/remotePlayStream";
 import { MicTile } from "./MicControl";
 import { useTr } from "../../state/lang";
-import { useRemotePlayStore } from "../../state/remotePlay";
+import { soundToggle, useRemotePlayStore } from "../../state/remotePlay";
 import { CaptureRow } from "./CaptureControls";
 import { GoLiveBarIcon } from "./GoLivePanel";
 import { useTouchFirst } from "./TouchControls";
@@ -303,7 +303,7 @@ export function PlayMenu({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 });
+            setPrefs(soundToggle(prefs));
           }}
           aria-label={
             muted

@@ -74,6 +74,11 @@ pub struct Inspection {
     /// game's own emulator has to go. Absent when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ampr_emu: Option<String>,
+    /// For a game that is not in asset packs (and not inside an archive) and carries an AMPR
+    /// emulator in its fakelib: what a `.pkg`'s `leave_out_ampr_emu` would leave out, and why it
+    /// can't when it can't (`ps5upload_convert_core::plain_emulator`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain_ampr_emu: Option<ps5upload_convert_core::plain_emulator::PlainEmulator>,
     pub has_eboot: bool,
     pub warnings: Vec<String>,
 }
@@ -256,6 +261,7 @@ pub fn inspect_keeping(
         unpacked_bytes: None,
         unpack_keeps_emulator: None,
         ampr_emu: None,
+        plain_ampr_emu: None,
         has_eboot: has(tree.as_ref(), "eboot.bin"),
         // What the conversion leaves out of an archive (files beside its game folder).
         warnings: tree.notes(),
@@ -307,6 +313,13 @@ pub fn inspect_keeping(
                 out.unpack_keeps_emulator = Some(a.own_emulator_suits);
             }
             Err(e) => out.warnings.push(format!("asset packs: {e}")),
+        }
+    } else if out.has_eboot {
+        // A plain game's own AMPR emulator, which a .pkg can leave out: from its fakelib's
+        // libSceAmpr.sprx, the eboot's imports and its ampr_emu.index.
+        match ps5upload_convert_core::plain_emulator::assess(tree.as_mut()) {
+            Ok(found) => out.plain_ampr_emu = found,
+            Err(e) => out.warnings.push(format!("AMPR emulator: {e}")),
         }
     }
     Ok((out, None))

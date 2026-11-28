@@ -86,8 +86,15 @@ interface Stat {
   missing?: true;
 }
 
-/** What Uninstall of `titleId` can offer to delete, read now; null when nothing (or unreadable). */
-export async function planSource(titleId: string, callFn: CallFn = call, walk?: WalkDeps): Promise<SourcePlan | null> {
+/** What Uninstall of `titleId` can offer to delete, read now; null when nothing (or unreadable).
+ *  `stopped`: the question was cancelled (or another one asked); the reads stop there, the folder
+ *  walk included, and the answer is null. */
+export async function planSource(
+  titleId: string,
+  callFn: CallFn = call,
+  walk?: WalkDeps,
+  stopped: () => boolean = () => false,
+): Promise<SourcePlan | null> {
   try {
     const reg = parseRegistered(await callFn<unknown>("/api/apps/registered"));
     if (!reg.whole) return null;
@@ -95,6 +102,7 @@ export async function planSource(titleId: string, callFn: CallFn = call, walk?: 
     const r = resolveSource(titleId, [...reg.apps.values()], vols?.volumes ?? []);
     if ("reason" in r) return null;
     const stat = (path: string) => callFn<Stat>("/api/fs/stat", { path, missing_ok: true });
+    if (stopped()) return null;
     const st = await stat(r.path);
     if (st.missing || st.kind !== (r.kind === "image" ? "file" : "dir")) return null;
     if (r.kind === "image") return { ...r, bytes: typeof st.size === "number" ? st.size : null, partial: false };
@@ -103,14 +111,14 @@ export async function planSource(titleId: string, callFn: CallFn = call, walk?: 
     const size = await walkFolder(
       r.path,
       {
-        cancelled: () => nested,
+        cancelled: () => nested || stopped(),
         onDir: (parent, name) => {
           if (parent !== r.path && name.toLowerCase() === "sce_sys") nested = true;
         },
       },
       walk,
     );
-    if (nested || size.end === "error") return null;
+    if (nested || size.end === "error" || size.end === "cancelled") return null;
     return { ...r, bytes: size.bytes, partial: size.end !== "done" };
   } catch {
     return null;

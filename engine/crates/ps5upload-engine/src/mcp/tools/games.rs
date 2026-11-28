@@ -1,7 +1,8 @@
 //! Running and starting things on a console: `processes_list`, `processes_kill`, `shell_run`,
 //! `games_installed`, `games_launch`, `games_stop`, `games_register`, `games_unregister`, and
 //! Restore to home screen (#961): `games_restore_list`, `games_restore_check`, `games_restore`,
-//! `games_restore_status`, `games_restore_finish`.
+//! `games_restore_status`, `games_restore_finish`; and `games_doctor` (why a game won't show or
+//! start).
 
 use serde_json::{json, Value};
 
@@ -201,6 +202,34 @@ pub(super) fn tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
+            name: "games_doctor",
+            title: "Why a game won't show or start",
+            description: "Checks, in order, the usual reasons a game does not show on the home \
+                          screen or does not start, and says which one failed: `fake_package` \
+                          (kstuff for a fake package; on firmware above 11.60 kstuff 1.15 or \
+                          newer, and kstuff's version can't be read, so that is a hint), \
+                          `mount_layer` (ShadowMount+ for a disk image, an attached folder for a \
+                          folder game), `package_size` (a fake package past its firmware's \
+                          ceiling), `database` (missing from the PS5's app.db), `permissions` (a \
+                          game folder's files the console can't read or run) and `free_space`. \
+                          Each `status` is `pass`, `problem` or `unknown`; `fix` names what the \
+                          app offers. `first_problem` is the first check that found one. \
+                          Changes nothing.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "GET",
+                path: "/api/ps5/app/doctor",
+                done: "Checked the game.",
+            ),
+        },
+        ToolDef {
             name: "games_restore",
             title: "Restore games to the home screen",
             description: "Puts games that games_restore_list shows as `restorable` back on the \
@@ -208,8 +237,11 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           already on the drive again (no download; it needs free space for one \
                           more copy while it runs). The helper first copies the console's app \
                           databases aside and moves the package aside on the same drive; a \
-                          failed install puts it back. One install per console: titles go one \
-                          after the other. Confirm with the user first. Follow each title with \
+                          failed install puts it back, after removing what the failed install \
+                          left on the console (its unfinished copy and its download in the PS5's \
+                          queue). One install per console: titles go one after the other, and a \
+                          failed title does not stop the rest unless the console's installer \
+                          stopped answering. Confirm with the user first. Follow each title with \
                           games_restore_status (`job` is also an install_wait job).",
             kind: Kind::Write { idempotent: false },
             schema: object(
@@ -235,7 +267,8 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "How a restore stands",
             description: "This engine's restore of one title: `phase` queued, installing (with \
                           the install's `job` and status), finishing, restored, rolled_back (the \
-                          install did not take; the package is back where it was), pending \
+                          install did not take; the package is back where it was; `cleared` when \
+                          the failed install was removed from the console first), pending \
                           (the console may still be working on it: finish it later with \
                           games_restore_finish), or failed (refused before anything moved).",
             kind: Kind::Read,
@@ -259,9 +292,13 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           game on the home screen, so the copy aside is deleted (only once the \
                           console lists the game and has its package in place). `rollback`: the \
                           game did not come back, so the package and its update go back where \
-                          they were (only while the console does not list it). With neither, \
-                          it only says where the restore stands. Refused while an install runs \
-                          on the console. Ask the user which one first.",
+                          they were (only while the console does not list it). `clear` with \
+                          `rollback`: a failed install the PS5 still lists (stuck near 100% in \
+                          its downloads, which blocks every later install) is removed with the \
+                          console's own uninstall first; never while the game's update or \
+                          add-ons are in place. With none, it only says where the restore \
+                          stands. Refused while an install runs on the console. Ask the user \
+                          which one first.",
             kind: Kind::Write { idempotent: true },
             schema: object(
                 json!({
@@ -269,6 +306,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "title_id": text("The title's id, like PPSA01234."),
                     "install_ended": flag("The install has ended and the game shows on the home screen."),
                     "rollback": flag("Put the package back where it was."),
+                    "clear": flag("Remove the failed install the console still lists, then put the package back."),
                 }),
                 &["console", "title_id"],
             ),

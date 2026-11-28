@@ -57,6 +57,36 @@ static int free_bytes(const char *dir, uint64_t *out) {
 
 static void at(char *buf, size_t cap, const char *path) { snprintf(buf, cap, "%s%s", root, path); }
 
+/* Sony's uninstall, as the test sets it: how many times it ran, the code it answers, and what it
+ * removes before it returns (the title's app folder, the record) or leaves for later. */
+static int g_uninstalls;
+static uint32_t g_uninstall_rc;
+static int g_uninstall_removes_files = 1, g_uninstall_drops_record = 1;
+static int g_uninstall_missing; /* the helper has no Sony uninstall to call: -1, nothing done */
+static void rm_tree(const char *p);
+static int uninstall(const char *id, uint32_t *rc) {
+    char p[1024];
+    snprintf(p, sizeof p, "%s/mnt/ext1/user/app/%s", root, id);
+    g_uninstalls++;
+    if (g_uninstall_missing) return -1;
+    *rc = g_uninstall_rc;
+    if (g_uninstall_rc == 0) {
+        if (g_uninstall_removes_files) rm_tree(p);
+        if (g_uninstall_drops_record) g_appdb = 0;
+    }
+    return 0;
+}
+/* What happens on the console during one settle: a file Sony is still deleting goes. */
+static char g_settle_removes[256];
+static void settle(void) {
+    if (g_settle_removes[0]) {
+        char p[1024];
+        snprintf(p, sizeof p, "%s%s", root, g_settle_removes);
+        unlink(p);
+        g_settle_removes[0] = 0;
+    }
+}
+
 static void mkdirs(const char *path) {
     char p[1024];
     at(p, sizeof p, path);
@@ -151,6 +181,12 @@ static void fresh(void) {
     g_backup_ok = 1;
     g_free = 1ull << 40;
     g_backups = 0;
+    g_uninstalls = 0;
+    g_uninstall_rc = 0;
+    g_uninstall_removes_files = 1;
+    g_uninstall_drops_record = 1;
+    g_uninstall_missing = 0;
+    g_settle_removes[0] = 0;
 }
 
 int main(void) {
@@ -162,6 +198,8 @@ int main(void) {
     env.appinfo_has = appinfo_has;
     env.backup_db = backup_db;
     env.free_bytes = free_bytes;
+    env.uninstall = uninstall;
+    env.settle = settle;
 
     /* ---- check: what each console state answers, read-only ---- */
     fresh();
@@ -308,6 +346,132 @@ int main(void) {
     CHECK(run("finish", ID, 0) > 0 && says("nothing_pending"));
     CHECK(run("bogus", ID, 0) > 0 && says("bad_request"));
     printf("✓ an interrupted prepare leaves nothing to undo\n");
+
+    /* ---- room: the console's own storage costs more than the package's size ---- */
+    fresh();
+    g_free = 4096; /* the M.2 package: its drive takes exactly what is written */
+    CHECK(run("check", ID, 0) > 0 && says("restorable") && says("\"need_volume\":4096"));
+    rm(PKG);
+    rm(PATCH);
+    put_file("/user/app/" ID "/app.pkg", FAKE, sizeof FAKE, 1000);
+    g_free = 1000 + 4096; /* enough for the size alone, not for the reserve that grows with it */
+    CHECK(run("check", ID, 0) > 0 && says("\"state\":\"no_room\"") && says("\"need_internal\":1073743024"));
+    CHECK(run("prepare", ID, 0) > 0 && says("restore_no_room"));
+    CHECK(has("/user/app/" ID "/app.pkg") && g_backups == 0);
+    g_free = title_restore_internal_need(1000);
+    CHECK(run("check", ID, 0) > 0 && says("restorable"));
+    CHECK(title_restore_internal_need(10ull << 30) == 13ull << 30);
+    printf("✓ room: the internal drive is asked for 1.2x the package plus 1 GiB, extended storage for its size\n");
+
+    /* ---- clear: an install that failed after the console took it (#961, stuck at 99.9%) ---- */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000); /* the console's unfinished copy */
+    put_file("/mnt/ext1/user/app/" ID "/sce_sys/param.json", FAKE, sizeof FAKE, 8);
+    g_appdb = 1; /* and its record: the failed download on the home screen */
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("unsettled") && says("on_home_screen"));
+    CHECK(g_uninstalls == 0 && has(ASIDE "/app.pkg"));
+    CHECK(run("clear", ID, 0) > 0 && says("\"state\":\"rolled_back\"") && says("\"cleared\":true") &&
+          says("\"sony_rc\":0") && says("\"patch\":\"" PATCH "\""));
+    CHECK(g_uninstalls == 1 && size_of(PKG) == 4096 && size_of(PATCH) == 1024 && !has(ASIDE) &&
+          !has("/mnt/ext1/user/app/" ID "/sce_sys/param.json"));
+    CHECK(run("check", ID, 0) > 0 && says("restorable"));
+    printf("✓ clear: the console's unfinished copy goes with Sony's uninstall, then the package and update go back\n");
+
+    /* Sony still deleting after its call returned: nothing moves until the folder is left alone */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000);
+    put_file("/mnt/ext1/user/app/" ID "/leftover.bin", FAKE, sizeof FAKE, 8);
+    g_appdb = 1;
+    g_uninstall_removes_files = 0;
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"clearing\"") && says("\"cleared\":true"));
+    CHECK(g_uninstalls == 1 && size_of(PKG) == 4000 && has(ASIDE "/app.pkg") && has(REC));
+    /* a later finish that says the install ended never deletes the only good copy */
+    CHECK(run("finish", ID, TITLE_RESTORE_INSTALL_ENDED) > 0 && says("\"reason\":\"clearing\"") && has(ASIDE "/app.pkg"));
+    rm(PKG);
+    snprintf(g_settle_removes, sizeof g_settle_removes, "/mnt/ext1/user/app/" ID "/leftover.bin");
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"reason\":\"clearing\"") && has(ASIDE "/app.pkg"));
+    CHECK(run("clear", ID, 0) > 0 && says("\"state\":\"rolled_back\"") && says("\"cleared\":true"));
+    CHECK(g_uninstalls == 1 && size_of(PKG) == 4096 && !has(ASIDE));
+    printf("✓ clear: a folder Sony is still emptying gets nothing back until it stops changing\n");
+
+    /* the guards: nothing is uninstalled unless our copy is aside and nothing else of the title is in place */
+    fresh();
+    CHECK(run("clear", ID, 0) > 0 && says("nothing_pending") && g_uninstalls == 0);
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000);
+    g_appdb = 1;
+    put_file(PATCH, FAKE, sizeof FAKE, 99);
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"update_in_place\"") && g_uninstalls == 0);
+    rm(PATCH);
+    put_file("/mnt/ext0/user/addcont/" ID "/DLC0001/ac.pkg", FAKE, sizeof FAKE, 8);
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"addons_present\"") && g_uninstalls == 0);
+    {
+        char p[1024];
+        at(p, sizeof p, "/mnt/ext0/user/addcont/" ID);
+        rm_tree(p);
+    }
+    g_appdb = -1;
+    CHECK(run("clear", ID, 0) > 0 && says("db_unreadable") && g_uninstalls == 0);
+    g_appdb = 1;
+    env.uninstall = NULL;
+    CHECK(run("clear", ID, 0) > 0 && says("uninstall_unavailable") && g_uninstalls == 0);
+    env.uninstall = uninstall;
+    g_uninstall_rc = 0x80B21B02u;
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_refused\"") && says("\"sony_rc\":2159155970"));
+    CHECK(g_uninstalls == 1 && size_of(PKG) == 4000 && has(ASIDE "/app.pkg"));
+    {
+        char p[1024];
+        at(p, sizeof p, ASIDE "/app.pkg");
+        char q[1024];
+        at(q, sizeof q, ASIDE "/held.pkg");
+        CHECK(rename(p, q) == 0);
+        CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"no_copy_aside\"") && g_uninstalls == 1);
+        CHECK(rename(q, p) == 0);
+    }
+    printf("✓ clear refuses with an update or add-on in place, an unreadable database, no copy aside; a refusal is named\n");
+
+    /* No Sony uninstall to call: said as such on every later answer (never "clearing": nothing is
+     * being removed), the wait for the folder to settle kept for what the user removes on the PS5,
+     * and a later clear tries the uninstall again. */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000);
+    g_appdb = 1;
+    g_uninstall_missing = 1;
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\"") && !says("cleared"));
+    CHECK(g_uninstalls == 1 && has(ASIDE "/app.pkg") && has(REC));
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"reason\":\"uninstall_unavailable\""));
+    CHECK(run("finish", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\""));
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\"") && g_uninstalls == 2);
+    /* the user deletes the failed download on the PS5; the console is still emptying the folder */
+    rm(PKG);
+    g_appdb = 0;
+    put_file("/mnt/ext1/user/app/" ID "/leftover.bin", FAKE, sizeof FAKE, 8);
+    snprintf(g_settle_removes, sizeof g_settle_removes, "/mnt/ext1/user/app/" ID "/leftover.bin");
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"reason\":\"uninstall_unavailable\"") &&
+          has(ASIDE "/app.pkg"));
+    CHECK(run("finish", ID, TITLE_RESTORE_ROLLBACK) > 0 && says("\"state\":\"rolled_back\""));
+    CHECK(size_of(PKG) == 4096 && !has(ASIDE));
+    /* and when the uninstall is there again, the next clear runs it */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    put_file(PKG, FAKE, sizeof FAKE, 4000);
+    g_appdb = 1;
+    g_uninstall_missing = 1;
+    CHECK(run("clear", ID, 0) > 0 && says("\"reason\":\"uninstall_unavailable\""));
+    g_uninstall_missing = 0;
+    CHECK(run("clear", ID, 0) > 0 && says("\"state\":\"rolled_back\"") && says("\"cleared\":true"));
+    CHECK(g_uninstalls == 2 && size_of(PKG) == 4096 && !has(ASIDE));
+    printf("✓ clear with no Sony uninstall says so on every answer, still waits for the folder, and tries again\n");
+
+    /* an install the console refused outright left nothing: no uninstall, a plain rollback */
+    fresh();
+    CHECK(run("prepare", ID, 0) > 0 && says("prepared"));
+    CHECK(run("clear", ID, 0) > 0 && says("\"state\":\"rolled_back\"") && !says("cleared"));
+    CHECK(g_uninstalls == 0 && size_of(PKG) == 4096 && !has(ASIDE));
+    printf("✓ clear with nothing of the install on the console is a plain rollback\n");
 
     /* ---- a reply that does not fit is -1, not a cut JSON ---- */
     {

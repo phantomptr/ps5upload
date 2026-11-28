@@ -16,14 +16,30 @@ interface Sortable {
   mtime?: number;
 }
 
-/** Folders first (as every file manager does), then by the chosen column; ties by name. */
-export function sortEntries<T extends Sortable>(entries: T[], sort: SortState): T[] {
+/** Folders first (as every file manager does), then by the chosen column; ties by name.
+ *  By size, a folder sorts by its known size (`dirSize`, #974); a folder whose size is not known
+ *  goes after the known ones whichever way the column runs. */
+export function sortEntries<T extends Sortable>(
+  entries: T[],
+  sort: SortState,
+  dirSize?: (name: string) => number | undefined,
+): T[] {
   const dir = sort.desc ? -1 : 1;
   const byName = (a: T, b: T) => compareNames(a.name, b.name);
   return [...entries].sort((a, b) => {
     const ad = a.kind === "dir" ? 0 : 1;
     const bd = b.kind === "dir" ? 0 : 1;
     if (ad !== bd) return ad - bd;
+    if (sort.key === "size" && ad === 0) {
+      const as = dirSize?.(a.name);
+      const bs = dirSize?.(b.name);
+      if (as === undefined || bs === undefined) {
+        if (as !== undefined) return -1;
+        if (bs !== undefined) return 1;
+        return byName(a, b);
+      }
+      return as === bs ? byName(a, b) : (as - bs) * dir;
+    }
     const c =
       sort.key === "size"
         ? a.size - b.size

@@ -57,6 +57,11 @@ static int may_read(const char *p, int unsafe_read) {
     return mgmt_fs_read_allowed(p, unsafe_read);
 }
 
+/* A folder's size (JOB_OP_TREE_SIZE, fs_jobs.c): fs.read's rule as it is. The store and what is in
+ * it are refused there; a folder above the store is sized (the walk skips the store), where
+ * may_read refused /, /user, /data and /data/ps5upload outright. */
+static int may_size(const char *p) { return mgmt_fs_read_allowed(p, 0); }
+
 /* 1 same device, 0 crosses (refuse: a cross-device rename panics this kernel), -1 unknown.
  * Callers treat anything but 1 as a refusal: unknown is never "same" (review 007 #4). */
 static int same_device(const char *from, const char *to_dir) {
@@ -268,6 +273,7 @@ int ava1_payload_start(void) {
                  * (JF_READBACK, SPEC.md §13.5; #783) */
                 cfg.caps = AVA1_CAP_DATA_PLANE | AVA1_CAP_SHARED_JOBS | AVA1_CAP_READBACK;
                 g_data_on = 1;
+                __atomic_store_n(&fsj_size_may_read, may_size, __ATOMIC_RELEASE);
                 fsj_register_ops(); /* job.run: delete, chmod -R, hash, crc32 (the table adds the rest) */
                 webui_pkg_register_ops(); /* job.run: the console page's package install */
                 archive_extract_register(); /* job.run: an archive extracted on the console */

@@ -2641,15 +2641,17 @@ async fn each_post_tool_sends_what_its_route_reads() {
     let asked = route_of(
         &server,
         "games_restore_finish",
-        json!({"console": c, "title_id": "PPSA00001", "rollback": true}),
+        json!({"console": c, "title_id": "PPSA00001", "rollback": true, "clear": true}),
     )
     .await;
     assert_eq!(asked["path"], "/api/ps5/app/restore/finish");
     reads_as::<crate::title_restore_api::RestoreFinish>(&asked["body"]);
+    assert_eq!(asked["body"]["clear"], true);
 
     for (tool, path) in [
         ("games_restore_check", "/api/ps5/app/restore/check"),
         ("games_restore_status", "/api/ps5/app/restore/status"),
+        ("games_doctor", "/api/ps5/app/doctor"),
     ] {
         let asked = route_of(
             &server,

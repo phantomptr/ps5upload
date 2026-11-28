@@ -103,6 +103,8 @@ import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst
 import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useInRouterContext, useNavigate } from "react-router";
 import { NetworkFixActions } from "../InstallPackage/NetworkFixActions";
+import { archiveChoosable } from "../../lib/archiveChoice";
+import { ArchiveChooseCard, ArchiveChoiceText } from "./ArchiveChooseCard";
 import { formatNumber, formatDuration } from "../../lib/formatDate";
 
 /** One console's slice of the queue, in first-seen order. */
@@ -1738,6 +1740,24 @@ export function QueueRow({
                 }
           }
         />
+      )}
+      {/* "Choose files" on an archive that waits to be unpacked (#969). */}
+      {archiveChoosable(item) && (
+        <ArchiveChooseCard
+          compact
+          archivePath={item.sourcePath}
+          password={item.rarPassword ?? null}
+          chosen={item.archiveOnly ?? null}
+          chosenBytes={item.archiveOnly ? (item.estimatedBytes ?? null) : null}
+          onChoose={(c) =>
+            useUploadQueueStore.getState().chooseArchiveEntries(item.id, c.paths, c.bytes)
+          }
+        />
+      )}
+      {item.sourceKind === "archive" && item.status !== "pending" && item.archiveOnly && (
+        <p className="mt-1 text-xs text-[var(--color-muted)]" data-testid="archive-choose-done">
+          <ArchiveChoiceText count={item.archiveOnly.length} />
+        </p>
       )}
       {partialUploadPath(item) && (
         <PartialFileNote id={item.id} path={partialUploadPath(item)!} />

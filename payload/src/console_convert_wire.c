@@ -51,9 +51,13 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
         if (strcmp(b->format, "pkg") == 0 && b->pkg_level[0] &&
             put_member(out, cap, &at, 1, "pkg_level", b->pkg_level) != 0)
             return -1;
+        /* The console's own firmware: a package past what it opens is refused before any work. */
+        if (strcmp(b->format, "pkg") == 0 && b->console_fw[0] &&
+            put_member(out, cap, &at, 1, "console_firmware", b->console_fw) != 0)
+            return -1;
         /* Only when asked: absent, the converter packages the game as it is. */
-        if (strcmp(b->format, "pkg") == 0 && b->unpack_packs) {
-            w = snprintf(out + at, cap - at, ",\"unpack_packs\":true%s",
+        if (strcmp(b->format, "pkg") == 0 && (b->unpack_packs || b->leave_out_ampr_emu)) {
+            w = snprintf(out + at, cap - at, "%s%s", b->unpack_packs ? ",\"unpack_packs\":true" : "",
                          b->leave_out_ampr_emu ? ",\"leave_out_ampr_emu\":true" : "");
             if (w < 0 || (size_t)w >= cap - at) return -1;
             at += (size_t)w;
@@ -108,10 +112,10 @@ const char *cc_start_tail(const char *json, size_t n, const char *dest, char *ou
     if (strcmp(format, "pkg") == 0) {
         if (start_word(json, n, "pkg_level", words.pkg_level, sizeof words.pkg_level, cc_pkg_level_ok) != 0)
             return "convert_bad_pkg_level";
-        /* Absent is false. The emulator is left out only of a game that is unpacked: in its packs
-         * nothing else reads it. */
+        /* Absent is false. The emulator left out alone is for a game in no packs; the converter
+         * refuses it for one that stays in its packs (nothing else reads them). */
         if (webui_json_bool(json, n, "unpack_packs", &unpack) < 0 ||
-            webui_json_bool(json, n, "leave_out_ampr_emu", &leave_out) < 0 || (leave_out && !unpack))
+            webui_json_bool(json, n, "leave_out_ampr_emu", &leave_out) < 0)
             return "convert_bad_unpack";
     }
     /* console_convert.c reads it back with fsj_json_str: every word is a plain one by now, and
@@ -134,8 +138,9 @@ const char *cc_start_tail(const char *json, size_t n, const char *dest, char *ou
         (words.ffpfsc_level[0] && put_member(out, cap, &at, 1, "ffpfsc_level", words.ffpfsc_level) != 0) ||
         (words.pkg_level[0] && put_member(out, cap, &at, 1, "pkg_level", words.pkg_level) != 0))
         return "bad_path";
-    if (unpack) {
-        w = snprintf(out + at, cap - at, ",\"unpack_packs\":true%s", leave_out ? ",\"leave_out_ampr_emu\":true" : "");
+    if (unpack || leave_out) {
+        w = snprintf(out + at, cap - at, "%s%s", unpack ? ",\"unpack_packs\":true" : "",
+                     leave_out ? ",\"leave_out_ampr_emu\":true" : "");
         if (w < 0 || (size_t)w >= cap - at) return "bad_path";
     }
     return NULL;

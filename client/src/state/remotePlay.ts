@@ -165,6 +165,12 @@ export function audioBufferFor(p: Pick<RpPrefs, "lowLatency" | "audioBufferMs">)
   return p.lowLatency ? Math.min(LOWEST_AUDIO_BUFFER_MS, p.audioBufferMs) : p.audioBufferMs;
 }
 
+/** What the Mute / Sound on button changes. It reads muted the way the button shows it (muted, or
+ *  the volume at 0): at volume 0 one press is Sound on, not a "mute" that leaves it silent. */
+export function soundToggle(p: Pick<RpPrefs, "muted" | "volume">): Partial<RpPrefs> {
+  return p.muted || p.volume === 0 ? { muted: false, volume: p.volume || 1 } : { muted: true };
+}
+
 const PREFS_KEY = "ps5upload.rp_prefs.v1";
 
 /** The bitrates Settings › Picture offers (kbit/s; 0 = Auto), highest first. The engine takes

@@ -37,7 +37,7 @@ export interface ReportForm {
 export const GITHUB_NEW_ISSUE_URL = "https://github.com/phantomptr/ps5upload/issues/new";
 export const GITHUB_URL_MAX = 7500;
 export const DISCORD_MAX = 1900;
-const TRUNCATED = "(truncated — see zip)";
+const TRUNCATED = "(truncated — the bug report zip has all of it)";
 
 const DOING_LABEL: Record<Exclude<Doing, "other">, string> = {
   connecting: "Connecting",
@@ -166,8 +166,9 @@ export function githubIssueUrl(f: ReportForm, problemLines: string[]): string {
     payloads: f.payloads.trim(),
   };
   let lines = problemLines.slice(-30);
-  const logsOf = (ls: string[], cut: boolean) =>
-    [ls.join("\n"), cut ? TRUNCATED : "", "Full report: the attached zip."].filter(Boolean).join("\n");
+  // Never "the attached zip": a link can't attach a file, and an issue sent without dragging the
+  // zip in said it had one. The template's "Bug report zip" box is left empty for the drag.
+  const logsOf = (ls: string[], cut: boolean) => [ls.join("\n"), cut ? TRUNCATED : ""].filter(Boolean).join("\n");
   x.logs = logsOf(lines, false);
   let url = buildIssueUrl(f, x);
   while (url.length > GITHUB_URL_MAX && lines.length > 0) {
@@ -192,7 +193,6 @@ export function discordText(f: ReportForm): string {
   const tail = [
     ...(f.pinned.length ? ["```", ...pinnedLines(f).slice(0, 5).map((l) => truncateChars(l, 160, "…")), "```"] : []),
     f.githubIssueUrl.trim() ? `Issue: ${f.githubIssueUrl.trim()}` : "",
-    "Full report zip attached.",
   ].filter(Boolean);
   const fixed = [...head, ...tail].join("\n").length + 2;
   const what = truncateChars(f.whatHappened.trim(), Math.max(0, DISCORD_MAX - fixed), "…");

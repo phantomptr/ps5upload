@@ -6,10 +6,13 @@ import { Button, WarningCard } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { formatBytes } from "../../lib/format";
 import {
+  normalizeRestoreReply,
   restoreConfirmText,
   restoreEnded,
   restoreErrorText,
   restoreNeeded,
+  restorePendingWhy,
+  restoreRollbackNeedsClear,
   restoreStateText,
 } from "../../lib/titleRestore";
 import { useTr } from "../../state/lang";
@@ -40,7 +43,7 @@ export function useRestoreCheck(
     if (!host.trim() || !titleId || !/^[A-Za-z]{4}\d{5}$/.test(titleId)) return;
     restoreCheck(host, titleId)
       .then((r) => {
-        if (!cancelled) setReply(r);
+        if (!cancelled) setReply(normalizeRestoreReply(r));
       })
       .catch(() => {});
     return () => {
@@ -119,7 +122,24 @@ export function RestoreHomeScreenCard({
     if (!ok) return;
     setBusy(rollback ? "rollback" : "finish");
     try {
-      const r = await restoreFinish(host, titleId, rollback ? { rollback: true } : { installEnded: true });
+      const ask = async (opts: Parameters<typeof restoreFinish>[2]) =>
+        normalizeRestoreReply(await restoreFinish(host, titleId, opts)) ?? { ok: false, title_id: titleId, state: "" };
+      let r = await ask(rollback ? { rollback: true } : { installEnded: true });
+      if (rollback && restoreRollbackNeedsClear(r)) {
+        // What the failed restore left on the PS5 is in the way (#961: a download stuck near
+        // 100% that blocks every later install). Only the user can tell it from a game that did
+        // come back, so ask before removing it.
+        const clear = await confirm({
+          title: tr("restore_clear_title", { name }, "Remove the failed install of {name}?"),
+          message: tr(
+            "restore_clear_body",
+            undefined,
+            "The PS5 still lists this game, or part of it, from the restore. If the game shows on the home screen and starts, choose Cancel and then Finish. If the PS5 shows it as a failed or stuck download, PS5Upload removes it, the same as deleting it on the PS5 (only the PS5's own new copy: the package PS5Upload kept is not touched), and then puts the package back, so other installs can run again.",
+          ),
+          confirmLabel: tr("restore_clear_action", undefined, "Remove and put back"),
+        });
+        if (clear) r = await ask({ rollback: true, clear: true });
+      }
       const body =
         r.state === "restored"
           ? tr("restore_done", { name }, "{name} is back on the home screen.")
@@ -127,11 +147,12 @@ export function RestoreHomeScreenCard({
             ? tr("restore_put_back", { name }, "{name}'s package is back where it was.")
             : r.state === "nothing_pending"
               ? tr("restore_nothing_pending", { name }, "There was nothing left to finish for {name}.")
-              : tr(
+              : (restorePendingWhy(r, name) ??
+                tr(
                   "restore_not_yet",
                   { name },
                   "{name} is not on the home screen yet, so nothing was deleted. Wait for the PS5 to finish, or put the package back.",
-                );
+                ));
       pushNotification(r.state === "restored" || r.state === "rolled_back" ? "success" : "info", withConsolePrefix(host, name), {
         body,
       });

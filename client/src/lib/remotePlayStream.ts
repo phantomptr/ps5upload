@@ -600,6 +600,14 @@ export function ps5SendMbps(st: { quality?: unknown; video_bytes?: unknown } | n
   return null;
 }
 
+/** Where the frames go, for the log (#972): what the PS5 sent the engine last second and the
+ *  pictures the engine skipped since the start because this page fell behind. */
+export function flowLogText(consoleFps: number | null, pageSkips: number | null): string {
+  const sent = consoleFps === null ? "PS5 frames ?/s" : `PS5 sent ${consoleFps} frames/s`;
+  const skips = pageSkips === null ? "page skips ?" : `skipped for a slow page ${pageSkips}`;
+  return `${sent}, ${skips}`;
+}
+
 /** Whether the engine's stats say no sound reaches this device, and why. Engines before 11.5
  *  don't report it (no audio_frames_total), and then nothing is said. */
 export function soundMissingFrom(
@@ -649,6 +657,13 @@ export interface StreamStats {
   stages?: StageSummary | null;
   /** Times the video decoder was rebuilt because it stopped giving pictures (rpDecoderWatch.ts). */
   decoderRestarts?: number;
+  /** Frames the PS5's stream brought to the engine in the last second (null: not reported yet,
+   *  or an older engine). Next to `fps` (what this device decoded) it says whether a low frame
+   *  rate comes from the console or from this device (#972). */
+  consoleFps?: number | null;
+  /** Pictures the engine skipped since the start because this page fell behind (each one waits
+   *  for the next keyframe). null: an older engine that does not say. */
+  pageSkips?: number | null;
   /** How the sound has played since the start. */
   audio?: AudioHealth;
 }
@@ -977,6 +992,10 @@ export class RemotePlayStream {
   private lastLoss = { lossPct: 0, rebuilt: 0, lost: 0 };
   private consoleRttMs: number | null = null;
   private ps5Mbps: number | null = null;
+  /** The engine's own count of frames from the PS5 last second, and of pictures it skipped
+   *  because this page fell behind (StreamStats). */
+  private consoleFps: number | null = null;
+  private pageSkips: number | null = null;
   /** The console's last connection-quality report, raw (engine rp_stream proto.rs), for logs. */
   private quality: unknown = null;
   private rttMs: number | null = null;
@@ -1554,6 +1573,8 @@ export class RemotePlayStream {
         rttMs: this.rttMs,
         consoleRttMs: this.consoleRttMs,
         ps5Mbps: this.ps5Mbps,
+        consoleFps: this.consoleFps,
+        pageSkips: this.pageSkips,
         stages: this.stages.summary(performance.now()),
         decoderRestarts: this.decoderRestarts,
         ...this.lastLoss,
@@ -2048,7 +2069,8 @@ export class RemotePlayStream {
     const input = inputEstimate({ pageRttMs: this.rttMs, consoleRttMs: this.consoleRttMs, stages });
     return (
       `${stagesLogText(stages)}; round trip to the engine ${ms(this.rttMs)}, engine to PS5 ${ms(this.consoleRttMs)}; ` +
-      `input ≈ ${ms(input)} + the game; PS5 report ${this.quality ? JSON.stringify(this.quality) : "none yet"}` +
+      `input ≈ ${ms(input)} + the game; ${flowLogText(this.consoleFps, this.pageSkips)}; ` +
+      `PS5 report ${this.quality ? JSON.stringify(this.quality) : "none yet"}` +
       this.mseLogText()
     );
   }
@@ -2379,6 +2401,9 @@ export class RemotePlayStream {
         this.consoleRttMs = typeof st.console_rtt_ms === "number" && Number.isFinite(st.console_rtt_ms) ? st.console_rtt_ms : null;
         if (st.quality && typeof st.quality === "object") this.quality = st.quality;
         this.ps5Mbps = ps5SendMbps(st);
+        const numOrNull = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+        this.consoleFps = numOrNull(st.frames);
+        this.pageSkips = numOrNull(st.page_skips);
         if (this.audioMs > 0) this.soundEverPlayed = true;
         const silent = num(st.audio_frames_total) === 0 || !this.soundEverPlayed;
         this.silentSeconds = num(st.frames) > 0 && silent && this.pictureOn ? this.silentSeconds + 1 : 0;

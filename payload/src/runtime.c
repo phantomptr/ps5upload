@@ -10171,11 +10171,27 @@ static int handle_trophy_fix(const char *body) {
     return rc;
 }
 
-/* app.restore (title_restore.c, #961). Body {"op":"check"|"prepare"|"finish","title_id":"PPSA01234",
- * "rollback":b,"install_ended":b}. File operations only (stat, mkdir, a same-device rename checked with
+/* app.restore (title_restore.c, #961). Body {"op":"check"|"prepare"|"finish"|"clear","title_id":"PPSA01234",
+ * "rollback":b,"install_ended":b}. File operations (stat, mkdir, a same-device rename checked with
  * cross_device.h, unlink of our own copy) plus read-only app.db / appinfo.db queries and SQLite backup
- * copies of both: no Sony call, so no sony_api_lock. The install between prepare and finish is the
- * engine's (installer daemon). */
+ * copies of both. The install between prepare and finish is the engine's (installer daemon). The one
+ * Sony call is clear's uninstall of the console's own unfinished copy: unregister_title_ex, which
+ * takes sony_api_lock and swaps the authid itself, exactly as the game page's Uninstall does. */
+static int restore_uninstall(const char *id, uint32_t *rc) {
+    const char *why = NULL;
+    unregister_outcome_t outcome;
+    memset(&outcome, 0, sizeof outcome);
+    int r = unregister_title_ex(id, 0, &why, &outcome);
+    *rc = outcome.sony_rc;
+    if (r != 0 || !outcome.api_called) {
+        PLOG(PLOG_WARN, PLOG_INSTALL, "[restore] %s: uninstall not run (%s)", id, why ? why : "no Sony uninstall");
+        return -1;
+    }
+    PLOG(PLOG_INFO, PLOG_INSTALL, "[restore] %s: uninstall rc=0x%08X still_present=%d", id, (unsigned)outcome.sony_rc,
+         outcome.still_present);
+    return 0;
+}
+static void restore_settle(void) { usleep(3u * 1000u * 1000u); }
 static int restore_appdb_has(const char *id) { return content_db_has_title(id); }
 static int restore_appinfo_has(const char *id) { return content_db_appinfo_has_title(id); }
 static int restore_backup_db(const char *which, const char *dst, char *err, size_t cap) {
@@ -10220,6 +10236,8 @@ static int handle_title_restore(const char *body) {
     env.appdb_has = restore_appdb_has;
     env.appinfo_has = restore_appinfo_has;
     env.backup_db = restore_backup_db;
+    env.uninstall = restore_uninstall;
+    env.settle = restore_settle;
     char stamp[32];
     {
         time_t now = time(NULL);

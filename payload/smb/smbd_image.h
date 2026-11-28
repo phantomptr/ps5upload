@@ -23,6 +23,11 @@
 
 #include "pkg_info.h"
 
+/* This reader's version, kept with each image the library lists (smbd_library.c): an image an
+ * older reader refused is read once more by a newer one. Raise it whenever the reader can read
+ * something it refused before (a layout it now takes, a refusal that was wrong); 1 = 12.6.44. */
+#define IMG_READER_VERSION 1
+
 /* The most bytes of one folder's entries looked through for a name. */
 #define IMG_DIR_MAX (1024u * 1024u)
 

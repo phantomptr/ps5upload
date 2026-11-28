@@ -1157,21 +1157,23 @@ fn ampr_index_verdict(tree: &mut dyn SourceTree, packs: Option<&'static str>) ->
 /// own logs are no game files: a dump's index lists these as they were in the dump, before the
 /// executables were signed, param.json rewritten and the icons moved into the container, so
 /// their records differ in every converted game and say nothing about whether it plays (a
-/// zstd .ffpkg warned "7 listed missing, 10 sizes differ" and played).
+/// zstd .ffpkg warned "7 listed missing, 10 sizes differ" and played). The logs are any `.log`
+/// at the game's root, where the emulators write theirs as the game runs (ampr_emu.log, and a
+/// folder that played listed `playlgo.log` at 641 bytes with 770 on disk); a `.log` deeper in the
+/// game is the game's own and still counts.
 fn read_through_ampr(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
     let suffix = |s: &str| p.ends_with(s);
+    let root_log = !p.contains('/') && suffix(".log");
     !(p == "eboot.bin"
+        || root_log
         || p.starts_with("sce_sys/")
         || p.starts_with("sce_module/")
         || suffix(".sprx")
         || suffix(".prx")
         || suffix(".self")
         || suffix(".elf")
-        || matches!(
-            p.as_str(),
-            "ampr_commands.bin" | "ampr_emu.log" | "apr_emu.log"
-        ))
+        || p == "ampr_commands.bin")
 }
 
 /// Report readiness for a source tree. Never blocks: the caller decides which findings
@@ -1919,6 +1921,37 @@ mod tests {
         .unwrap();
         let ampr = check(&dir);
         assert!(ampr.ok, "{}", ampr.detail);
+
+        // Logs the emulators write at the game's root as it runs (Discord: `playlgo.log` listed
+        // at 641 bytes, 770 on disk, beside two unlisted ones) are no game files either.
+        std::fs::write(dir.join("playlgo.log"), [b'x'; 770]).unwrap();
+        std::fs::write(dir.join("ampr_emu.log"), [b'x'; 10]).unwrap();
+        std::fs::write(dir.join("PlayGo.LOG"), [b'x'; 3]).unwrap();
+        let mut logged = dumped.clone();
+        logged.push(("playlgo.log".to_string(), 641));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&logged, 0).unwrap(),
+        )
+        .unwrap();
+        let ampr = check(&dir);
+        assert!(ampr.ok, "{}", ampr.detail);
+        // A .log inside the game's own folders is still one of its files.
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/story.log"), [1u8; 9]).unwrap();
+        logged.push(("data/story.log".to_string(), 8));
+        std::fs::write(
+            dir.join("ampr_emu.index"),
+            crate::ampr_index::build(&logged, 0).unwrap(),
+        )
+        .unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
+        assert!(ampr.detail.contains("data/story.log"), "{}", ampr.detail);
+        std::fs::remove_dir_all(dir.join("data")).unwrap();
+        for f in ["playlgo.log", "ampr_emu.log", "PlayGo.LOG"] {
+            std::fs::remove_file(dir.join(f)).unwrap();
+        }
 
         // A stale one (a game file listed and gone, or resized) is reported, never passed
         // unchecked.
