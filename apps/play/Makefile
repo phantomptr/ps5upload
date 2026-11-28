@@ -4,6 +4,8 @@
 #   make -C apps/play test      host unit tests + the app's network code against a stand-in
 #                               engine (host compiler and python3 only, no Docker)
 #   make -C apps/play shots     every screen as a picture in build/host-tests/shots (after a build)
+#   make -C apps/play e2e-engine  the app's network code against the REAL engine (Play Rooms:
+#                               knocks, chat, voice, many controllers, the companion); needs cargo
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 HOST_CXX ?= clang++
@@ -27,7 +29,7 @@ TLS_INC := -I$(BEARSSL)/inc -I../../tailnet/src
 BR_SRCS := $(sort $(wildcard $(BEARSSL)/src/*/*.c))
 BR_LIB := $(T)/libbearssl.a
 
-.PHONY: all app release test unit e2e shots clean
+.PHONY: all app release test unit e2e e2e-engine shots clean
 
 all: app
 
@@ -48,6 +50,12 @@ unit: $(T)/test_core $(T)/test_route $(T)/test_rooms
 
 e2e: $(T)/play-cli
 	$(PYTHON) -I tests/e2e_host.py $(T)/play-cli $(T)/e2e
+
+# The engine's join.rs `play_cli` test: the real engine's routes in-process, this play-cli as the
+# PS5 (engine/crates/ps5upload-engine/src/play_cli_e2e_tests.rs).
+e2e-engine: $(T)/play-cli
+	cd ../../engine && cargo build -q -p ps5upload-unrar && \
+	    PS5UPLOAD_PLAY_CLI=$(abspath $(T)/play-cli) cargo test -q -p ps5upload-engine --lib play_cli_rooms_end_to_end -- --ignored --nocapture
 
 $(T)/test_core: tests/test_core.cpp $(CORE) src/ui/i18n.cpp src/ui/strings.cpp $(wildcard src/core/*.hpp src/ui/*.hpp)
 	@mkdir -p $(T)

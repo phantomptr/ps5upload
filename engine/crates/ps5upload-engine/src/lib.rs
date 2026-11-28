@@ -87,6 +87,7 @@ mod join;
 mod join_chat;
 mod join_comms;
 mod join_friends;
+mod join_history;
 mod join_names;
 mod join_net;
 mod join_room;
@@ -14632,8 +14633,17 @@ fn build_app_and_mcp(
         .route("/api/join/room", post(join::room))
         .route("/api/join/unblock", post(join::unblock))
         .route("/api/join/seat", post(join::seat))
+        // Play Rooms: the ready check, and Recent players (the host's only, join_history.rs).
+        .route("/api/join/ready", post(join::ready))
+        .route("/api/join/history", get(join_history::get))
+        .route("/api/join/history/forget", post(join_history::forget_route))
         .route("/api/join/preview", get(join::preview))
         .route("/api/join/rooms", get(join::rooms_proxy))
+        .route("/api/join/rooms/status", get(join::rooms_status_proxy))
+        .route(
+            "/api/join/rooms/{id}/preview",
+            get(join::rooms_preview_proxy),
+        )
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
@@ -15591,6 +15601,9 @@ mod loopback_guard_tests {
             "/api/join/rooms",
             "/api/join/seat",
             "/api/join/unblock",
+            "/api/join/ready",
+            "/api/join/history",
+            "/api/join/history/forget",
             "/api/join/playing",
             "/api/join/settings",
             "/api/join/comms",

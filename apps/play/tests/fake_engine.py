@@ -135,7 +135,9 @@ def knock_secret(ws, args, gid):
     ok = bool(plain) and plain.get("secret") == args.room_pw and plain.get("challenge") == c and plain.get("gid") == gid
     rec("knocks", {"sealed": m.get("knock") == "sealed", "ok": ok, "gid": gid})
     if not ok:
-        ws.text({"knock": "no", "why": "password", "left": 4})
+        # as the engine says it (join.rs): on the guest socket a refusal stage, on a lobby a knock answer
+        ws.text({"stage": "refused", "why": "password", "tries_left": 4} if gid == "" else
+                {"knock": "no", "why": "password", "tries_left": 4})
     return ok
 
 
@@ -227,7 +229,8 @@ def guest(ws, args, state, via=None):
         if not knock_secret(ws, args, ""):
             return
     if args.name_taken and h.get("name") == args.name_taken and not resume:
-        ws.text({"name_taken": {"suggest": args.name_taken + " (2)"}})
+        s = args.name_taken + " (2)"
+        ws.text({"stage": "refused", "why": "name_taken", "suggest": s, "name_taken": {"suggest": s}})
         return
     if args.refuse:
         ws.text({"stage": "refused", "why": args.refuse})
@@ -453,7 +456,7 @@ def app(ws, args, state):
                                  "invite": {"code": "ABCDEF", "code_display": "ABC-DEF",
                                             "url": "http://192.168.1.2:19113/join#i=key", "works": "wifi",
                                             "expires_in_s": 1700},
-                                 "pending": [{"id": 7, "name": "Sam", "client_kind": "ps5", "codec_warning": None}],
+                                 "pending": [{"id": 7, "name": "Sam", "client_kind": "ps5", "codec_warning": None, "came": "nearby", "tag": "4F2A", "own": False}],
                                  "guests": [{"id": 3, "player": 2, "name": "Alex", "state": "playing", "rtt_ms": 4,
                                              "via": "lan", "client_kind": None, "client_app": None,
                                              "codec_warning": None}],

@@ -1222,6 +1222,9 @@ pub(crate) struct Guest {
     codec_warning: Option<&'static str>,
     /// How they came, their device tag, protocol (Play Rooms, crate::join_room).
     meta: Meta,
+    /// Many controllers: the host let every player from this guest's PS5 in (`allow: "group"`), so
+    /// another controller there gets in without asking (still within the room's size).
+    group_ok: bool,
 }
 
 /// Who an ask or a guest is, for the room's rules (crate::join_room): how they came, their
@@ -1236,16 +1239,27 @@ pub(crate) struct Meta {
     pub password_ok: Option<bool>,
     pub rtt_hint: Option<u32>,
     pub who: crate::join_room::Who,
+    /// Many controllers: the guest id of the first player from the same PS5 (the media holder).
+    pub group: Option<u64>,
+    /// Many controllers: that first player came from the public Rooms list, so this one is a
+    /// stranger too.
+    pub group_stranger: bool,
+    /// The host's own device ("It's me"): this computer, or a PS5 whose PS5Upload Play is paired
+    /// with this engine. Shown on the ask; only such an ask may be answered "It's me" (Player 1).
+    pub own: bool,
+    /// Seated on the stream's controller by "It's me": the host on another device of theirs keeps
+    /// it while no host page drives it, whatever "A friend on the stream's controller" says.
+    pub me: bool,
 }
 
 impl Meta {
     fn via(&self) -> crate::join_room::Via {
         self.via.unwrap_or(crate::join_room::Via::Invite)
     }
-    /// Came from the public Rooms list: never Player 1, never the host's profile, PS & Create
-    /// blocked.
+    /// Came from the public Rooms list (or plays beside someone who did): never Player 1, never
+    /// the host's profile, PS & Create blocked.
     fn stranger(&self) -> bool {
-        self.via().stranger()
+        self.via().stranger() || self.group_stranger
     }
 }
 
@@ -1399,6 +1413,10 @@ impl Guest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Decision {
     Allow,
+    /// Allow, and let every further player from that PS5 in without asking (many controllers).
+    AllowGroup,
+    /// "It's me": the host's own device, let in as Player 1 (the stream's controller) when free.
+    Me,
     Deny,
     /// The host did not answer in time.
     NoAnswer,
@@ -1487,6 +1505,16 @@ pub(crate) enum Effect {
     Seat(Option<u64>),
     /// Move this guest off the stream's controller onto a helper pad ([`move_off_seat`]).
     MoveOff(u64),
+    /// Start the host's stream again with no page attached: a friend took the host's user and
+    /// nobody's page started it again ([`crate::rp_stream_api::restart_for_friends`]).
+    RestartHost,
+    /// Someone who played left: remembered in Recent players (join_history.rs).
+    Played {
+        name: String,
+        tag: Option<String>,
+        came: &'static str,
+        played_s: u64,
+    },
 }
 
 /// Play Together for one console.
@@ -1515,6 +1543,11 @@ pub(crate) struct Party {
     front_at: Option<Instant>,
     /// The Play Room's run-time state (lock, blocks, mutes, listing; crate::join_room).
     pub(crate) room: crate::join_room::RoomRun,
+    /// The engine's own restarts of the host's stream since the host last played.
+    restarts: u8,
+    /// "It's me": the stream's controller is still free for the host's own device (no host page
+    /// drives it), as the watch last saw it.
+    owner_seat_kept: bool,
 }
 
 /// How guests reach this engine.
@@ -1551,6 +1584,8 @@ impl Party {
             front_user: None,
             front_at: None,
             room: crate::join_room::RoomRun::new(Instant::now()),
+            restarts: 0,
+            owner_seat_kept: false,
         }
     }
 
@@ -1697,6 +1732,7 @@ impl Party {
             client: ClientInfo::default(),
             codec_warning: None,
             meta: Meta::default(),
+            group_ok: false,
         });
         self.guests.last()
     }
@@ -1735,10 +1771,54 @@ impl Party {
         fx
     }
 
+    /// Many controllers: a player from guest `id`'s PS5 (their group) still plays.
+    fn group_playing(&self, id: u64) -> bool {
+        self.guests
+            .iter()
+            .any(|g| g.active() && g.meta.group == Some(id))
+    }
+
+    /// The group a guest is shown in (many controllers): the first player's id, for them and for
+    /// every other player from their PS5; None when they play alone.
+    fn group_of(&self, g: &Guest) -> Option<u64> {
+        g.meta
+            .group
+            .or_else(|| self.group_playing(g.id).then_some(g.id))
+    }
+
+    /// The names from a PS5 asking to add a player (many controllers): those of its group already
+    /// in, then the one asking. Empty for an ask that isn't another controller.
+    fn ask_players(&self, a: &Ask) -> Vec<String> {
+        let Some(lead) = a.meta.group else {
+            return Vec::new();
+        };
+        let mut v: Vec<String> = self
+            .guests
+            .iter()
+            .filter(|g| g.active() && (g.id == lead || g.meta.group == Some(lead)))
+            .map(|g| g.name.clone())
+            .collect();
+        v.push(a.name.clone());
+        v
+    }
+
+    /// Many controllers: the first player of a PS5 leaves while others from it play on. Their
+    /// pad and place go; their socket stays (it carries the picture and sound for the others).
+    /// None when nobody else from that PS5 plays: a plain leave then.
+    fn release(&mut self, id: u64, now: Instant) -> Option<Vec<Effect>> {
+        if !self.group_playing(id) {
+            return None;
+        }
+        // The socket is the session's to keep: nothing is said on it.
+        self.guest_mut(id)?.conn = None;
+        Some(self.leave(id, "left", now))
+    }
+
     /// The guest is out (`why`: left, kicked, timeout, closed, lost): their socket is told, their
     /// pad removed, their token no longer works.
     fn leave(&mut self, id: u64, why: &'static str, now: Instant) -> Vec<Effect> {
         let mut fx = Vec::new();
+        self.room.ready_gone(id, now);
         let Some(g) = self.guest_mut(id) else {
             return fx;
         };
@@ -1775,6 +1855,14 @@ impl Party {
             fx.push(Effect::Seat(None));
         }
         g.seat_move = SeatMove::No;
+        // Recent players (join_history.rs, the host's only): who played, how long, how they came.
+        let played = now.duration_since(g.joined_at);
+        fx.push(Effect::Played {
+            name: g.name.clone(),
+            tag: g.meta.tag.clone(),
+            came: g.meta.via().word(),
+            played_s: played.as_secs(),
+        });
         let s = &g.stats;
         let n = s.rtt_n.load(Ordering::Relaxed);
         let avg = s.rtt_sum.load(Ordering::Relaxed).checked_div(n);
@@ -2043,6 +2131,7 @@ impl Party {
                 // its guests' pictures ended with the old one, so they come back to the new).
                 self.session = s;
                 self.host_gone = None;
+                self.restarts = 0;
                 // Who ended the last session is settled: blamed again, they would hear it for
                 // the host's next ordinary Stop too.
                 for g in self.guests.iter_mut() {
@@ -2125,13 +2214,25 @@ impl Party {
                         }));
                     }
                 }
+                // A friend took the host's user and no page started the stream again (the host's
+                // phone asleep, the desktop closed, the TV app hosting): the engine starts it
+                // itself with the stored keys, once the console has let the old one go.
+                if let Some(at) = HOST_AUTO_RESTART.get(usize::from(self.restarts)) {
+                    if gone >= *at && self.guests.iter().any(|g| g.active() && g.took_host) {
+                        self.restarts += 1;
+                        fx.push(Effect::RestartHost);
+                    }
+                }
             }
         }
         if self.invite.as_ref().is_some_and(|i| i.until <= now) {
             self.invite = None;
         }
         // The picture back on, a phone playing, or the host turned the seat off: it is theirs.
-        if live.is_some() && (!seat_kept || !self.settings.stream_seat) {
+        // The host's own device on it ("It's me") keeps it until a host page drives it again.
+        let owner_keeps =
+            self.owner_seat_kept && self.guests.iter().any(|g| g.on_seat() && g.meta.me);
+        if live.is_some() && !owner_keeps && (!seat_kept || !self.settings.stream_seat) {
             fx.extend(self.give_back_seat(if seat_kept {
                 "the host turned it off"
             } else {
@@ -2228,6 +2329,11 @@ impl Party {
                     "from_rooms": g.meta.stranger(),
                     "proto": g.meta.proto,
                     "caps": g.meta.caps,
+                    // Many controllers: the first player's id for everyone from one PS5.
+                    "group": self.group_of(g),
+                    "own": g.meta.own,
+                    // Said ready in the ready check now shown.
+                    "ready": self.room.is_ready(g.id, now),
                 })
             })
             .collect();
@@ -2252,6 +2358,12 @@ impl Party {
                 "password_ok": a.meta.password_ok,
                 "rtt_hint": a.meta.rtt_hint,
                 "from_rooms": a.meta.stranger(),
+                // Another controller of a PS5 already in: its group, and everyone from that PS5
+                // (the host's "Let all from that PS5 in" is `allow: "group"`).
+                "group": a.meta.group,
+                "players": self.ask_players(a),
+                // The host's own device: "It's me" (`allow: "me"`) gives it Player 1.
+                "own": a.meta.own,
             })).collect::<Vec<_>>(),
             "room": room_api::room_view(self, now),
             "settings": settings_view(&self.settings),
@@ -2376,6 +2488,8 @@ pub(crate) fn diag_summary() -> serde_json::Value {
         "settings": s,
         // Play Rooms chat and voice: counts only (join_comms.rs).
         "comms": crate::join_comms::diag(),
+        // Recent players: the count only, never a name.
+        "history": crate::join_history::diag(),
     })
 }
 
@@ -2391,6 +2505,11 @@ pub(crate) fn needs_session(console: &str) -> bool {
 
 /// The friends in on `console` now (each guest's name, "Friend" when they gave none), for the
 /// "friends playing" guard (together_guard.rs). Empty: nobody would be cut off.
+/// The console's user in front (the one the host's stream plays as), when the helper said lately.
+pub(crate) fn front_user(console: &str) -> Option<String> {
+    with_party(&host_key(console), |p| p.front_user.clone()).flatten()
+}
+
 pub(crate) fn friends_playing(console: &str) -> Vec<String> {
     with_party(&host_key(console), |p| friend_names(p)).unwrap_or_default()
 }
@@ -2511,6 +2630,20 @@ fn apply(console: &str, fx: Vec<Effect>) {
             Effect::Log(s) => crate::log_at!(Info, "together", "{s}"),
             Effect::SeatPad(id, state) => crate::rp_stream_api::push_guest_pad(console, id, state),
             Effect::Seat(guest) => crate::rp_stream_api::guest_seat(console, guest),
+            Effect::RestartHost => restart_host(console, Instant::now()),
+            Effect::Played {
+                name,
+                tag,
+                came,
+                played_s,
+            } => {
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+                    .saturating_sub(played_s);
+                crate::join_history::played(&name, tag.as_deref(), came, at, played_s);
+            }
             Effect::MoveOff(id) => match tokio::runtime::Handle::try_current() {
                 Ok(h) => {
                     h.spawn(move_off_seat(console.to_string(), id));
@@ -2527,6 +2660,58 @@ fn apply(console: &str, fx: Vec<Effect>) {
                 }
             },
         }
+    }
+}
+
+/// How long after the host's stream ended (a friend took the host's user) the engine starts it
+/// again itself, each try: the console holds its Remote Play slot for 12-30 s after a session.
+const HOST_AUTO_RESTART: [Duration; 2] = [Duration::from_secs(15), Duration::from_secs(35)];
+/// Engine-side restarts of one console's stream at most, per [`RESTARTS_WINDOW`].
+const RESTARTS_MAX: usize = 3;
+const RESTARTS_WINDOW: Duration = Duration::from_secs(10 * 60);
+static RESTARTS: Mutex<Option<HashMap<String, VecDeque<Instant>>>> = Mutex::new(None);
+
+/// [`Effect::RestartHost`]: starts the host's stream on `console` again (no page attached), at
+/// most [`RESTARTS_MAX`] times in [`RESTARTS_WINDOW`] for a console. Logged either way.
+fn restart_host(console: &str, now: Instant) {
+    let allowed = {
+        let mut g = RESTARTS.lock().unwrap_or_else(|e| e.into_inner());
+        let q = g
+            .get_or_insert_with(HashMap::new)
+            .entry(host_key(console))
+            .or_default();
+        while q
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= RESTARTS_WINDOW)
+        {
+            q.pop_front();
+        }
+        let ok = q.len() < RESTARTS_MAX;
+        if ok {
+            q.push_back(now);
+        }
+        ok
+    };
+    if !allowed {
+        crate::log_at!(
+            Info,
+            "together",
+            "join: a friend took the host's user on {console}; not starting the stream again ({RESTARTS_MAX} restarts in {} min already)",
+            RESTARTS_WINDOW.as_secs() / 60
+        );
+        return;
+    }
+    match crate::rp_stream_api::restart_for_friends(console) {
+        Ok(s) => crate::log_at!(
+            Info,
+            "together",
+            "join: a friend took the host's user on {console}; started the host's stream again (session {s}, no page attached)"
+        ),
+        Err(why) => crate::log_at!(
+            Info,
+            "together",
+            "join: a friend took the host's user on {console}; the stream could not start again ({why})"
+        ),
     }
 }
 
@@ -2810,9 +2995,11 @@ fn spawn_watch(key: String) {
             };
             let live = session_of(&console);
             let seat_kept = seat_kept(&console);
+            let owner_kept = crate::rp_stream_api::stream_seat_kept_for_owner(&console);
             let now = Instant::now();
             let r = with_parties(|m| {
                 let p = m.get_mut(&key)?;
+                p.owner_seat_kept = owner_kept;
                 let (fx, keep) = p.tick_seat(now, live, seat_kept);
                 if !keep {
                     m.remove(&key);
@@ -2836,12 +3023,15 @@ fn spawn_watch(key: String) {
 /// host's stream plays as, which "Who's using this controller?" lists too. Its name goes in that
 /// guest's status (`host_user`) so their page can say not to pick it.
 fn keep_front_user(key: &str, console: &str, now: Instant) {
+    // PS5Upload Play's host screens offer ending and loosening actions only to the stream's user
+    // (`session.user`): kept known while the TV app is paired, too.
+    let app = crate::play_app::is_paired(console);
     let due = with_party(key, |p| {
         let picking = p
             .guests
             .iter()
             .any(|g| g.active() && !g.playing && g.conn.is_some() && g.player != STREAM_SEAT);
-        let due = picking
+        let due = (picking || app)
             && p.host_gone.is_none()
             && p.front_at
                 .is_none_or(|t| now.duration_since(t) >= FRONT_USER_EVERY);
@@ -3315,6 +3505,15 @@ struct Hello {
     /// home network or the tailnet; over the hub it is sealed, join_net/lobby.rs).
     #[serde(default)]
     knock: Option<serde_json::Value>,
+    /// Many controllers on one PS5: false when this socket carries no picture or sound (the first
+    /// player's socket of that PS5 does); pads, status, rumble and light still flow.
+    #[serde(default)]
+    media: Option<bool>,
+    /// Many controllers on one PS5: the resume token of a player already in from the same PS5. It
+    /// proves the device, so no invite or code is needed; the host is asked unless they let that
+    /// PS5's players in (`decide` `allow: "group"`).
+    #[serde(default)]
+    group: Option<String>,
 }
 
 impl Hello {
@@ -3436,6 +3635,8 @@ enum Entry {
     Nearby,
     /// A friend pass (join_friends.rs): the console it was for.
     Again(String),
+    /// Many controllers: another player of a PS5 already in (its console and that player's id).
+    Group(String, u64),
 }
 
 static WRONG_CODES: Mutex<Option<HashMap<IpAddr, VecDeque<Instant>>>> = Mutex::new(None);
@@ -3507,7 +3708,13 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             addr: Some(ip),
             cid: socket.hub_cid(),
         },
+        group: None,
+        group_stranger: false,
+        own: socket.net().is_none() && own_device(&client, ip),
+        me: false,
     };
+    // Many controllers: this socket carries no picture or sound (the first player's does).
+    let media = hello.media != Some(false);
     let mut knock_password = hello.knock_field("password");
     // A knock that needs the room password and didn't say it: the password sealed to the room
     // key (PS5Upload Play, the secure page), `{"knock": "challenge", "c", "pk"}` → `{"knock":
@@ -3596,7 +3803,20 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         .filter(|p| !p.is_empty() && admit.is_none());
     let mut name = name;
     let mut again_refused = None;
+    // Many controllers: another player of a PS5 already in, proven by that player's token.
+    let group = hello
+        .group
+        .as_deref()
+        .filter(|t| !t.is_empty() && admit.is_none());
     let entry = match (hello.invite.as_deref(), hello.code.as_deref(), again) {
+        _ if group.is_some() => match group.and_then(group_leader) {
+            Some((console, leader)) => Some(Entry::Group(console, leader)),
+            None => {
+                // That player is gone (left, or their place ran out): nothing to play beside.
+                again_refused = Some("expired");
+                None
+            }
+        },
         (Some(k), ..) if !k.is_empty() => Some(Entry::Key(k.to_string())),
         (_, Some(c), _) if !c.trim().is_empty() => Some(Entry::Code(normalize_code(c))),
         (_, _, Some(pass)) => match crate::join_friends::again(pass, inbox.clone(), Instant::now())
@@ -3677,6 +3897,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
                         })
                         .unwrap_or(crate::join_room::Via::Nearby),
                     Entry::Again(_) => crate::join_room::Via::Again,
+                    Entry::Group(..) => crate::join_room::Via::Group,
                     Entry::Key(_) | Entry::Code(_) => crate::join_room::Via::Invite,
                 });
                 match ask(
@@ -3759,7 +3980,23 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         let _ = socket.send(say(v)).await;
         return;
     }
-    play(socket, console, id, ip, client, friend).await;
+    play(socket, console, id, ip, client, friend, media).await;
+}
+
+/// The host's own device: this computer itself, or a PS5 whose PS5Upload Play is paired with this
+/// engine (the same owner's). Its ask may be answered "It's me" (Player 1).
+fn own_device(client: &ClientInfo, ip: IpAddr) -> bool {
+    ip.is_loopback()
+        || (client.kind.as_deref() == Some("ps5")
+            && crate::play_app::is_paired(&crate::play_app::console_of(ip)))
+}
+
+/// The player (still in) whose resume token this is: their console and guest id.
+fn group_leader(token: &str) -> Option<(String, u64)> {
+    with_parties(|m| {
+        m.values()
+            .find_map(|p| p.by_token(token).map(|id| (p.console.clone(), id)))
+    })
 }
 
 /// A guest coming back with `token`: None when the socket closed while waiting for the host.
@@ -4117,8 +4354,8 @@ const PENDING_PER_ADDRESS: usize = 2;
 
 /// What an ask came to before the guest is seated.
 enum Asked {
-    /// Let in (by the host, or an approval): seat them.
-    In,
+    /// Let in (by the host, or an approval): seat them. The host's answer (Allow, AllowGroup, Me).
+    In(Decision),
     /// A refusal as the guest gets it.
     Refused(serde_json::Value),
     /// The socket closed while waiting.
@@ -4144,6 +4381,12 @@ async fn ask<S: GuestSocket>(
     }
     let friend = matches!(entry, Entry::Again(_));
     let found = with_parties(|m| {
+        if let Entry::Group(console, _) = &entry {
+            return m
+                .get(&host_key(console))
+                .map(|p| (host_key(console), p.console.clone()))
+                .ok_or("expired");
+        }
         if let Entry::Again(console) = &entry {
             // Not open (and not opened for it: the console isn't being played).
             return m
@@ -4170,7 +4413,7 @@ async fn ask<S: GuestSocket>(
             .find(|(_, p)| match &entry {
                 Entry::Key(k) => p.key_ok(k, now),
                 Entry::Code(c) => p.code_ok(c, now),
-                Entry::Nearby | Entry::Again(_) => false,
+                Entry::Nearby | Entry::Again(_) | Entry::Group(..) => false,
             })
             .map(|(k, p)| (k.clone(), p.console.clone()));
         if let Some(h) = hit {
@@ -4209,11 +4452,30 @@ async fn ask<S: GuestSocket>(
         Ok(Ok(false)) => return Some(Admit::Refused("old_helper")),
         _ => return Some(Admit::Refused("unreachable")),
     }
+    // Many controllers: beside a player still in; the host may have let that PS5's players in.
+    let mut group_ok = false;
+    if let Entry::Group(_, leader) = &entry {
+        let found = with_party(&key, |p| {
+            p.guests
+                .iter()
+                .find(|g| g.id == *leader && g.active())
+                .map(|g| (g.group_ok, g.meta.stranger()))
+        })
+        .flatten();
+        let Some((ok, stranger)) = found else {
+            return Some(Admit::Refused("expired"));
+        };
+        group_ok = ok;
+        meta.group = Some(*leader);
+        meta.group_stranger = stranger;
+    }
     // A name nobody else in the room has (design 3.5). An older page or app can't pick another:
     // it plays as the suggestion.
     let mut name = name.to_string();
-    // The same device already asking (a second tab, a retry): told so, not "name taken".
-    let asking = meta.who.tag_sha256.is_some()
+    // The same device already asking (a second tab, a retry): told so, not "name taken". Another
+    // controller of a PS5 already in asks from that same device, and may.
+    let asking = meta.group.is_none()
+        && meta.who.tag_sha256.is_some()
         && with_party(&key, |p| {
             p.pending
                 .iter()
@@ -4277,9 +4539,12 @@ async fn ask<S: GuestSocket>(
         match crate::join_room::gate(&now_room, &asker) {
             crate::join_room::Gate::Refuse(r) => Err(r.json()),
             crate::join_room::Gate::LetIn => Ok(false),
+            // The host let every player from that PS5 in (`allow: "group"`).
+            crate::join_room::Gate::Ask if group_ok => Ok(false),
             crate::join_room::Gate::Ask => {
                 // One ask per device (or pass) at a time, and a few per address.
-                let same_device = meta.who.tag_sha256.is_some()
+                let same_device = meta.group.is_none()
+                    && meta.who.tag_sha256.is_some()
                     && p.pending
                         .iter()
                         .any(|a| a.meta.who.tag_sha256 == meta.who.tag_sha256);
@@ -4337,12 +4602,31 @@ async fn ask<S: GuestSocket>(
                 ""
             }
         );
-        Asked::In
+        Asked::In(Decision::Allow)
     };
     match asked {
         Asked::Gone => None,
         Asked::Refused(v) => Some(Admit::RefusedWith(v)),
-        Asked::In => Some(seat_guest(&key, &console, &name, meta).await),
+        Asked::In(d) => {
+            let me = d == Decision::Me && meta.own;
+            let leader = meta.group;
+            let a = seat_guest(&key, &console, &name, meta, me).await;
+            // "Let all from that PS5 in": the first player's group (or this one's, if first).
+            if let (Decision::AllowGroup, Admit::New(_, gid)) = (d, &a) {
+                let lead = leader.unwrap_or(*gid);
+                with_party(&key, |p| {
+                    if let Some(g) = p.guest_mut(lead) {
+                        g.group_ok = true;
+                    }
+                });
+                crate::log_at!(
+                    Info,
+                    "together",
+                    "join: the host lets every player from guest {lead}'s PS5 in on {console}"
+                );
+            }
+            Some(a)
+        }
     }
 }
 
@@ -4395,7 +4679,7 @@ async fn wait_for_host<S: GuestSocket>(
         Some(Decision::NoAnswer) => "no_answer",
         Some(Decision::HostStopped) => "not_playing",
         Some(Decision::Closed) => "closed",
-        Some(Decision::Allow) => return Asked::In,
+        Some(d @ (Decision::Allow | Decision::AllowGroup | Decision::Me)) => return Asked::In(d),
     };
     Asked::Refused(serde_json::json!({"stage": "refused", "why": why}))
 }
@@ -4403,15 +4687,28 @@ async fn wait_for_host<S: GuestSocket>(
 /// A guest let in gets a player number and the helper's pad for it (a slot another engine holds
 /// is skipped). People from the public Rooms list never get the stream's controller (Player 1,
 /// the host's PS5 user) nor a profile the host marked as their own.
-async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta) -> Admit {
+async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta, me: bool) -> Admit {
     let console = console.to_string();
     let stranger = meta.stranger();
     let mut tried = Vec::new();
     loop {
         let now = Instant::now();
         let seat_free = !stranger && crate::rp_stream_api::stream_seat_free(&console);
+        // "It's me": the host on another device of theirs takes Player 1 whenever nobody on the
+        // host's side drives it, whatever "A friend on the stream's controller" says.
+        let me_seat = me && !stranger && crate::rp_stream_api::stream_seat_free_for_owner(&console);
         let g = with_party(key, |p| {
-            let player = p.next_player(&tried, seat_free)?;
+            let player = if me_seat
+                && !p
+                    .guests
+                    .iter()
+                    .any(|g| g.active() && g.player == STREAM_SEAT)
+                && p.guests_in() < usize::from(p.settings.max_players.clamp(1, MAX_GUESTS))
+            {
+                STREAM_SEAT
+            } else {
+                p.next_player(&tried, seat_free)?
+            };
             let g = p.admit(name, player, now)?;
             let gid = g.id;
             let pad_token = g.pad_token.clone();
@@ -4430,6 +4727,7 @@ async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta) -> Admit {
                 p.guest_mut(gid).filter(|g| g.active()).map(|g| {
                     g.playing = true;
                     g.joined_at = now;
+                    g.meta.me = me_seat;
                 })
             })
             .flatten()
@@ -4705,6 +5003,7 @@ async fn play<S: GuestSocket>(
     ip: IpAddr,
     client: ClientInfo,
     friend: Option<String>,
+    media: bool,
 ) {
     static GEN: AtomicU64 = AtomicU64::new(1);
     let gen = GEN.fetch_add(1, Ordering::Relaxed);
@@ -4734,14 +5033,19 @@ async fn play<S: GuestSocket>(
     };
     apply(&console, fx);
     let spect = SPECTATOR_BASE | gen;
-    let feed = crate::rp_stream_api::add_player(
-        spect,
-        &console,
-        PLAYER_QUEUE,
-        stats.skipped.clone(),
-        internet,
-        client.timing,
-    );
+    // Many controllers: only the first player's socket of a PS5 carries the picture and sound.
+    let feed = if media {
+        crate::rp_stream_api::add_player(
+            spect,
+            &console,
+            PLAYER_QUEUE,
+            stats.skipped.clone(),
+            internet,
+            client.timing,
+        )
+    } else {
+        None
+    };
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
     // An internet guest whose page offered a video track gets the pictures there (join_net::rtc).
     let track = match &feed {
@@ -4757,6 +5061,7 @@ async fn play<S: GuestSocket>(
         "together",
         "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
         match (&feed, track) {
+            (None, _) if !media => "none (another controller of a PS5 already in)",
             (None, _) => "none (no session)",
             (Some(_), true) if audio => "on the video track, sound on the audio track",
             (Some(_), true) => "on the video track",
@@ -4795,6 +5100,9 @@ async fn play<S: GuestSocket>(
     let mut key_ask = KeyAsk::default();
     let mut skipped_seen = stats.skipped.load(Ordering::Relaxed);
     let mut behind_for = 0u32;
+    // Many controllers: the first player left (`{"release": 1}`) while others from their PS5 play
+    // on; this socket keeps the picture and sound for them until the last one leaves.
+    let mut released = false;
     loop {
         if ended {
             break; // the joined message could not go: the socket is gone
@@ -4803,7 +5111,7 @@ async fn play<S: GuestSocket>(
         let pictures_waiting = video.as_ref().is_some_and(|r| !r.is_empty());
         tokio::select! {
             biased;
-            out = rx.recv() => match out {
+            out = rx.recv(), if !released => match out {
                 Some(Out::Text(v)) => if socket.send(say(v)).await.is_err() { break },
                 Some(Out::Bye(why)) => {
                     let _ = socket.send(say(serde_json::json!({"bye": why}))).await;
@@ -4819,7 +5127,9 @@ async fn play<S: GuestSocket>(
                 }
             } => {
                 if let Some(st) = pacer.take(Instant::now()) {
-                    forward_pad(&key, &console, id, gen, st);
+                    if !released {
+                        forward_pad(&key, &console, id, gen, st);
+                    }
                 }
             },
             inc = socket.recv() => match inc {
@@ -4829,7 +5139,9 @@ async fn play<S: GuestSocket>(
                     } else if let Some((_seq, st)) = parse_pad(&b, client.raw_pad) {
                         stats.pad_frames.fetch_add(1, Ordering::Relaxed);
                         if let Some(st) = pacer.offer(Instant::now(), st) {
-                            forward_pad(&key, &console, id, gen, st);
+                            if !released {
+                                forward_pad(&key, &console, id, gen, st);
+                            }
                         }
                     }
                 }
@@ -4842,11 +5154,34 @@ async fn play<S: GuestSocket>(
                         #[serde(default)] keyframe: bool,
                         /// The page's picture report (every 2 s at most), for the host's panel.
                         #[serde(default)] stats: Option<serde_json::Value>,
+                        /// Many controllers: the first player leaves, the others play on.
+                        #[serde(default)] release: Option<serde_json::Value>,
+                        /// The room's ready check: "Ready?" answered.
+                        #[serde(default)] ready: Option<bool>,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
                         if m.leave.is_some() {
                             left = true;
                             break;
+                        }
+                        if m.release.is_some() && !released {
+                            let now = Instant::now();
+                            match with_party(&key, |p| p.release(id, now)).flatten() {
+                                Some(fx) => {
+                                    released = true;
+                                    apply(&console, fx);
+                                    crate::log_at!(Info, "together",
+                                        "join: Player {player} on {console} left; their PS5's other players play on (socket {gen} keeps the picture)");
+                                }
+                                // Nobody else from that PS5: the same as leaving.
+                                None => {
+                                    left = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if m.ready == Some(true) && !released {
+                            with_party(&key, |p| p.room.ready_answer(id, Instant::now()));
                         }
                         // The guest's picture waits for a keyframe (#648): ask the console, at
                         // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
@@ -4941,6 +5276,17 @@ async fn play<S: GuestSocket>(
                 if sent.is_err() { break }
             },
             _ = tick.tick() => {
+                if released {
+                    // The others from this PS5 still play: keep the picture; the last one gone
+                    // ends it.
+                    if !with_party(&key, |p| p.group_playing(id)).unwrap_or(false) {
+                        let _ = socket.send(say(serde_json::json!({"bye": "left"}))).await;
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                    let _ = socket.send(Message::Ping(now_ms().to_le_bytes().to_vec().into())).await;
+                    continue;
+                }
                 let skipped = stats.skipped.load(Ordering::Relaxed);
                 behind_for = if skipped != skipped_seen { BEHIND_FOR_TICKS } else { behind_for.saturating_sub(1) };
                 skipped_seen = skipped;
@@ -4996,7 +5342,10 @@ async fn play<S: GuestSocket>(
 
 #[path = "join_room_api.rs"]
 pub(crate) mod room_api;
-pub use room_api::{close, kick, preview, room, rooms_proxy, seat, unblock};
+pub use room_api::{
+    close, kick, preview, ready, room, rooms_preview_proxy, rooms_proxy, rooms_status_proxy, seat,
+    unblock,
+};
 #[cfg(test)]
 use room_api::{CloseBody, KickBody};
 
@@ -5262,6 +5611,17 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
                     "name": a.name,
                     "client_kind": a.client.kind,
                     "codec_warning": a.client.codec_warning(codec),
+                    // Play Rooms (as GET /api/join): how they came, their device tag, the
+                    // password's check, a round trip hint, a stranger, a PS5's group, the host's own
+                    // device.
+                    "came": a.meta.via().word(),
+                    "tag": a.meta.tag,
+                    "password_ok": a.meta.password_ok,
+                    "rtt_hint": a.meta.rtt_hint,
+                    "from_rooms": a.meta.stranger(),
+                    "group": a.meta.group,
+                    "players": p.ask_players(a),
+                    "own": a.meta.own,
                 })
             })
             .collect();
@@ -5286,6 +5646,11 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
                     "client_kind": g.client.kind,
                     "client_app": g.client.app,
                     "codec_warning": g.codec_warning,
+                    "came": g.meta.via().word(),
+                    "tag": g.meta.tag,
+                    "from_rooms": g.meta.stranger(),
+                    "group": p.group_of(g),
+                    "own": g.meta.own,
                 })
             })
             .collect();
@@ -5325,8 +5690,11 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
     // The Play Room (its settings, lock, listing, blocks) and its chat and voice (counts and
     // modes only, never lines): PS5Upload Play's My room shows and changes them.
     let room = with_party(&host_key(&c), |p| room_api::room_view(p, now));
-    // The stream's PS5 user (the one in front), for actions only they may take on the TV.
-    let front = with_party(&host_key(&c), |p| p.front_user.clone()).flatten();
+    // The stream's PS5 user (the one in front, else the session's paired user), for actions only
+    // they may take on the TV.
+    let front = with_party(&host_key(&c), |p| p.front_user.clone())
+        .flatten()
+        .or_else(|| crate::rp_stream_api::session_user(&c));
     let mut v = serde_json::json!({
         "open": true,
         "playing": playing,
@@ -5649,7 +6017,20 @@ pub(crate) fn internet_wanted(key: &str) -> bool {
 #[derive(serde::Deserialize)]
 pub struct DecideBody {
     id: u64,
-    allow: bool,
+    /// true, false, "group" (let every player from that PS5 in) or "me" (the host's own device:
+    /// Player 1).
+    allow: serde_json::Value,
+}
+
+/// The host's answer as `decide` takes it: true / false, "group", "me".
+pub(crate) fn decision_from(v: &serde_json::Value) -> Option<Decision> {
+    match v {
+        serde_json::Value::Bool(true) => Some(Decision::Allow),
+        serde_json::Value::Bool(false) => Some(Decision::Deny),
+        serde_json::Value::String(s) if s == "group" => Some(Decision::AllowGroup),
+        serde_json::Value::String(s) if s == "me" => Some(Decision::Me),
+        _ => None,
+    }
 }
 
 /// `POST /api/join/decide {id, allow}`: answer a guest who asks.
@@ -5661,20 +6042,22 @@ pub async fn decide(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    let Some(d) = decision_from(&b.allow) else {
+        return bad(StatusCode::BAD_REQUEST, "allow");
+    };
     let found = with_parties(|m| {
-        m.values_mut().find_map(|p| {
-            let i = p.pending.iter().position(|a| a.id == b.id)?;
-            Some(p.pending.remove(i))
-        })
+        m.values()
+            .find(|p| p.pending.iter().any(|a| a.id == b.id))
+            .map(|p| p.console.clone())
     });
-    let ok = found.is_some();
-    if let Some(a) = found {
-        let _ = a.answer.send(if b.allow {
-            Decision::Allow
-        } else {
-            Decision::Deny
-        });
-    }
+    let ok = match found {
+        Some(console) => match decide_on(&console, b.id, d) {
+            Ok(()) => true,
+            Err("not_own") => return bad(StatusCode::CONFLICT, "not_own"),
+            Err(_) => false,
+        },
+        None => false,
+    };
     Json(serde_json::json!({ "ok": ok })).into_response()
 }
 
@@ -5688,20 +6071,23 @@ pub struct PlayerBody {
 /// Answers ask `id` on `addr` only (PS5Upload Play acts on its own console's Play Together). The
 /// first answer wins: Err("already_answered") when the ask is no longer waiting (answered from
 /// PS5Upload or another app, given up, timed out).
-pub(crate) fn decide_on(addr: &str, id: u64, allow: bool) -> Result<(), &'static str> {
+/// `d`: Allow, AllowGroup ("let all from that PS5 in"), Me ("It's me": only an ask from the
+/// host's own device, Err("not_own") otherwise) or Deny.
+pub(crate) fn decide_on(addr: &str, id: u64, d: Decision) -> Result<(), &'static str> {
     let found = with_party(&host_key(addr), |p| {
         let i = p.pending.iter().position(|a| a.id == id)?;
-        Some(p.pending.remove(i))
+        if d == Decision::Me && !p.pending[i].meta.own {
+            return Some(Err("not_own"));
+        }
+        Some(Ok(p.pending.remove(i)))
     })
     .flatten();
-    let Some(a) = found else {
-        return Err("already_answered");
+    let a = match found {
+        Some(Ok(a)) => a,
+        Some(Err(e)) => return Err(e),
+        None => return Err("already_answered"),
     };
-    let _ = a.answer.send(if allow {
-        Decision::Allow
-    } else {
-        Decision::Deny
-    });
+    let _ = a.answer.send(d);
     Ok(())
 }
 
@@ -6084,8 +6470,16 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/join/room", post(room))
         .route("/api/join/unblock", post(unblock))
         .route("/api/join/seat", post(seat))
+        .route("/api/join/ready", post(room_api::ready))
+        .route("/api/join/history", get(crate::join_history::get))
+        .route(
+            "/api/join/history/forget",
+            post(crate::join_history::forget_route),
+        )
         .route("/api/join/preview", get(preview))
         .route("/api/join/rooms", get(rooms_proxy))
+        .route("/api/join/rooms/status", get(rooms_status_proxy))
+        .route("/api/join/rooms/{id}/preview", get(rooms_preview_proxy))
         .route("/api/join/playing", post(playing))
         .route("/api/join/settings", post(set_settings))
         .route("/api/join/profiles", get(profiles))
@@ -8339,6 +8733,184 @@ mod tests {
         assert_eq!(told(&fx), vec!["bye:host_stopped"]);
     }
 
+    /// A friend took the host's user and nobody's page started the stream again: the engine starts
+    /// it itself twice at most (15 s, 35 s), then no more; an ordinary Stop never does.
+    #[test]
+    fn the_engine_starts_the_hosts_stream_again_after_a_friend_took_the_hosts_user() {
+        let restarts = |fx: &[Effect]| {
+            fx.iter()
+                .filter(|e| matches!(e, Effect::RestartHost))
+                .count()
+        };
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        p.guest_mut(id)
+            .unwrap()
+            .pad_made(&OpenResult::Ok, Some(None));
+        assert_eq!(p.blame_pick(t), Some(2));
+        let (fx, _) = p.tick(t, None);
+        assert_eq!(
+            restarts(&fx),
+            0,
+            "not at once: the console holds its slot a while"
+        );
+        let (fx, _) = p.tick(t + Duration::from_secs(10), None);
+        assert_eq!(restarts(&fx), 0);
+        let (fx, _) = p.tick(t + HOST_AUTO_RESTART[0], None);
+        assert_eq!(restarts(&fx), 1);
+        let (fx, _) = p.tick(t + HOST_AUTO_RESTART[0] + Duration::from_secs(1), None);
+        assert_eq!(restarts(&fx), 0, "once per try");
+        let (fx, _) = p.tick(t + HOST_AUTO_RESTART[1], None);
+        assert_eq!(restarts(&fx), 1, "a second try");
+        let (fx, _) = p.tick(t + Duration::from_secs(50), None);
+        assert_eq!(restarts(&fx), 0, "two tries at most");
+        // The host plays again: the tries start over; an ordinary Stop (nobody took the user)
+        // never starts it.
+        let _ = p.tick(t + Duration::from_secs(51), Some(p.session + 1));
+        assert_eq!(p.restarts, 0);
+        let (fx, _) = p.tick(t + Duration::from_secs(52), None);
+        let (fx2, _) = p.tick(t + Duration::from_secs(52) + HOST_AUTO_RESTART[0], None);
+        assert_eq!(restarts(&fx) + restarts(&fx2), 0);
+    }
+
+    /// The engine-side restart is capped per console and goes to rp_stream_api (recorded in tests).
+    #[test]
+    fn restarts_are_capped_per_console() {
+        let console = "10.0.0.91";
+        crate::rp_stream_api::TEST_RESTARTS.lock().unwrap().clear();
+        let t = Instant::now();
+        for i in 0..5 {
+            restart_host(console, t + Duration::from_secs(i));
+        }
+        let n = crate::rp_stream_api::TEST_RESTARTS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|h| h.as_str() == console)
+            .count();
+        assert_eq!(n, RESTARTS_MAX);
+        restart_host(console, t + RESTARTS_WINDOW + Duration::from_secs(10));
+        let n = crate::rp_stream_api::TEST_RESTARTS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|h| h.as_str() == console)
+            .count();
+        assert_eq!(n, RESTARTS_MAX + 1, "the window moves on");
+    }
+
+    /// Many controllers: the first player's `release` frees their place while the others of that
+    /// PS5 play; with nobody else it is a plain leave. Groups show in the host's view.
+    #[test]
+    fn a_ps5s_first_player_leaves_and_the_others_play_on() {
+        let mut p = party();
+        let t = Instant::now();
+        let lead = admit(&mut p, "Sam", t);
+        let (tx, _rx) = conn();
+        p.attach(lead, 1, tx);
+        assert!(p.release(lead, t).is_none(), "alone: a plain leave");
+        let mia = admit(&mut p, "Mia", t);
+        p.guest_mut(mia).unwrap().meta.group = Some(lead);
+        let s = p.snapshot(t, serde_json::Value::Null);
+        let g = |n: &str| {
+            s["guests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["name"] == n)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(g("Sam")["group"], lead);
+        assert_eq!(g("Mia")["group"], lead);
+        let in_before = p.guests_in();
+        assert!(p.release(lead, t).is_some());
+        assert_eq!(p.guests_in(), in_before - 1, "their place is free");
+        assert!(p.group_playing(lead), "Mia plays on");
+        p.leave(mia, "left", t);
+        assert!(!p.group_playing(lead));
+    }
+
+    /// The ready check: everyone in is asked, answers count once, it ends early when all are
+    /// ready, one at a time and at most one a minute.
+    #[test]
+    fn the_ready_check() {
+        let mut p = party();
+        let t = Instant::now();
+        assert_eq!(p.room.ready_start(Vec::new(), t), Err("nobody"));
+        let a = admit(&mut p, "A", t);
+        let b = admit(&mut p, "B", t);
+        p.room.ready_start(vec![a, b], t).unwrap();
+        assert_eq!(p.room.ready_start(vec![a, b], t), Err("running"));
+        p.room.ready_answer(a, t);
+        p.room.ready_answer(a, t);
+        let v = p.room.ready_json(t);
+        assert_eq!(v["ready"], serde_json::json!([a]));
+        assert_eq!(v["all"], false);
+        assert!(p.room.is_ready(a, t) && !p.room.is_ready(b, t));
+        // B leaves: nobody else to wait for
+        p.leave(b, "left", t);
+        assert_eq!(p.room.ready_json(t)["all"], true);
+        let later = t + crate::join_room::READY_SHOWN + Duration::from_secs(1);
+        assert!(
+            p.room.ready_json(later).is_null(),
+            "shown a moment, then gone"
+        );
+        assert_eq!(p.room.ready_start(vec![a], later), Err("slow_down"));
+        let after = t + crate::join_room::READY_GAP;
+        p.room.ready_start(vec![a], after).unwrap();
+        assert!(p
+            .room
+            .ready_json(after + crate::join_room::READY_FOR + Duration::from_secs(1))
+            .is_null());
+    }
+
+    /// "It's me" answers only an ask from the host's own device; "group" and plain answers go to
+    /// any ask.
+    #[test]
+    fn its_me_only_for_the_hosts_own_device() {
+        let console = "10.0.0.92";
+        let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+        let (tx1, mut rx1) = oneshot::channel();
+        let (tx2, mut rx2) = oneshot::channel();
+        p.pending.push(Ask {
+            id: 901,
+            name: "X".into(),
+            client: ClientInfo::default(),
+            answer: tx1,
+            meta: Meta::default(),
+        });
+        p.pending.push(Ask {
+            id: 902,
+            name: "Me".into(),
+            client: ClientInfo::default(),
+            answer: tx2,
+            meta: Meta {
+                own: true,
+                ..Meta::default()
+            },
+        });
+        with_parties(|m| m.insert(host_key(console), p));
+        assert_eq!(decide_on(console, 901, Decision::Me), Err("not_own"));
+        assert_eq!(decide_on(console, 902, Decision::Me), Ok(()));
+        assert_eq!(rx2.try_recv().unwrap(), Decision::Me);
+        assert_eq!(decide_on(console, 901, Decision::AllowGroup), Ok(()));
+        assert_eq!(rx1.try_recv().unwrap(), Decision::AllowGroup);
+        assert_eq!(
+            decision_from(&serde_json::json!("group")),
+            Some(Decision::AllowGroup)
+        );
+        assert_eq!(
+            decision_from(&serde_json::json!(false)),
+            Some(Decision::Deny)
+        );
+        assert_eq!(decision_from(&serde_json::json!("maybe")), None);
+        with_parties(|m| m.remove(&host_key(console)));
+    }
+
     #[test]
     fn only_a_guest_the_tv_was_asking_or_who_just_picked_is_blamed() {
         let mut p = party();
@@ -10221,7 +10793,7 @@ mod tests {
                 h,
                 Json(DecideBody {
                     id: id.unwrap(),
-                    allow,
+                    allow: allow.into(),
                 }),
             )
             .await,
@@ -11250,6 +11822,11 @@ mod tests {
     // Play Rooms (join_room.rs, join_room_api.rs, join_net/lobby.rs).
     mod rooms {
         include!("join_room_tests.rs");
+    }
+
+    // The real engine with PS5Upload Play's own network code (apps/play play-cli).
+    mod play_cli {
+        include!("play_cli_e2e_tests.rs");
     }
 
     mod internet {

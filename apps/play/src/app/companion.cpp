@@ -77,8 +77,10 @@ bool parse_companion_doc(const char *text, std::size_t len, CompanionDoc &doc) n
         jstr(d, d.get(a, "name"), x.name, sizeof x.name);
         jstr(d, d.get(a, "client_kind"), x.client_kind, sizeof x.client_kind);
         jstr(d, d.get(a, "codec_warning"), x.codec_warning, sizeof x.codec_warning);
-        jstr(d, d.get(a, "via"), x.via, sizeof x.via);
+        // How they found the room: the engine's word is `came` (`via` was the stand-in's).
+        jstr(d, d.get(a, "came") >= 0 ? d.get(a, "came") : d.get(a, "via"), x.via, sizeof x.via);
         jstr(d, d.get(a, "tag"), x.tag, sizeof x.tag);
+        x.own = d.boolean(d.get(a, "own"));
         const int pw = d.get(a, "password_ok");
         x.password_ok = d.type(pw) == json::Type::boolean ? (d.boolean(pw) ? 1 : 0) : -1;
         const int rh = d.get(a, "rtt_hint");
@@ -98,6 +100,7 @@ bool parse_companion_doc(const char *text, std::size_t len, CompanionDoc &doc) n
         const int r = d.get(g, "rtt_ms");
         x.rtt_ms = d.type(r) == json::Type::number ? static_cast<int>(d.integer(r)) : -1;
         jstr(d, d.get(g, "via"), x.via, sizeof x.via);
+        jstr(d, d.get(g, "came"), x.came, sizeof x.came);
         jstr(d, d.get(g, "client_kind"), x.client_kind, sizeof x.client_kind);
         jstr(d, d.get(g, "route"), x.route, sizeof x.route);
         jstr(d, d.get(g, "tier"), x.tier, sizeof x.tier);
@@ -494,10 +497,27 @@ bool Companion::allow_group(long long ask) noexcept
     return intent(b);
 }
 
-bool Companion::chat_quick(int id) noexcept
+bool Companion::its_me(long long ask) noexcept
 {
-    char b[64];
-    std::snprintf(b, sizeof b, "\"chat\":{\"quick\":%d}", id);
+    char b[96];
+    std::snprintf(b, sizeof b, "\"decide\":{\"ask\":%lld,\"allow\":\"me\"}", ask);
+    return intent(b);
+}
+
+bool Companion::ready_check() noexcept
+{
+    return intent("\"ready\":{\"start\":true}");
+}
+
+bool Companion::chat_quick(int id, int notice) noexcept
+{
+    char b[80];
+    // `notice`: the rooms notice version accepted on this PS5 (the engine takes the host's line
+    // only once it is), 0 when not
+    if (notice > 0)
+        std::snprintf(b, sizeof b, "\"chat\":{\"quick\":%d,\"notice\":%d}", id, notice);
+    else
+        std::snprintf(b, sizeof b, "\"chat\":{\"quick\":%d}", id);
     return intent(b);
 }
 

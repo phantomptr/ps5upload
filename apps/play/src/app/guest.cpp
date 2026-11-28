@@ -508,14 +508,17 @@ void Guest::chat_read() noexcept
 void Guest::handle_text(const char *t, std::size_t n) noexcept
 {
     route_heard();
+    proto::GuestEvent e;
     if (first_key(t, n, "room") || first_key(t, n, "chat") || first_key(t, n, "voice") || first_key(t, n, "muted") ||
         first_key(t, n, "comms") || first_key(t, n, "comms_refused") || first_key(t, n, "chat_history"))
     {
         handle_room_text(t, n);
-        return;
+        // The engine's status every second carries the room beside it, in one message
+        // ({"room": …, "status": …}, its keys in order): the status is read from it too.
+        if (!first_key(t, n, "room") || !proto::parse_guest(t, n, e) || e.type != proto::GuestEvent::status)
+            return;
     }
-    proto::GuestEvent e;
-    if (!proto::parse_guest(t, n, e))
+    else if (!proto::parse_guest(t, n, e))
     {
         log("guest: unread message (%zu bytes): %.*s", n, static_cast<int>(n > 160 ? 160 : n), t);
         return;

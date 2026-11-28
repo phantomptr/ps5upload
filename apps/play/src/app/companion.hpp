@@ -44,6 +44,7 @@ struct CompanionDoc
         char tag[8] = {};
         int rtt_hint = -1;
         int group_size = 0;
+        bool own = false; // the host's own device: "It's me" (`decide` allow "me") gives Player 1
     } asks[4];
     int n_asks = 0;
     struct Guest
@@ -53,7 +54,8 @@ struct CompanionDoc
         char name[48] = {};
         char state[16] = {};
         int rtt_ms = -1;
-        char via[12] = {};
+        char via[12] = {};  // "lan" or "internet": how they connect
+        char came[12] = {}; // how they found the room (invite, again, nearby, friends, rooms, group)
         char client_kind[12] = {};
         // the way they play over ("lan", "tailscale", "internet") and its tier word (docs/ROUTES.md)
         char route[12] = {};
@@ -162,7 +164,9 @@ class Companion
     bool mute(int player, bool voice, bool chat) noexcept;
     bool mute_all(bool on) noexcept;
     bool allow_group(long long ask) noexcept;                        // "Let all from that PS5 in"
-    bool chat_quick(int id) noexcept;
+    bool its_me(long long ask) noexcept;                             // the host's own device: Player 1
+    bool ready_check() noexcept;                                     // "Ready?" for everyone in
+    bool chat_quick(int id, int notice = 0) noexcept;
     bool keep_awake(const char *mode) noexcept;
     bool app_state(bool foreground) noexcept;
 

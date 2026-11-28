@@ -135,7 +135,7 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
 {
     const char *name = arg_str(argc, argv, "--name");
     guest.start(addr, port, code, name ? name : "play-cli", "13.0.0");
-    bool told_friend = false;
+    bool told_friend = false, told_token = false;
     // Play Rooms: a quick message, a typed line, and N voice frames (push-to-talk held) once in
     const int quick = arg_int(argc, argv, "--quick", 0);
     const char *text = arg_str(argc, argv, "--text");
@@ -147,6 +147,9 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
     std::uint32_t room_rev = 0;
     const int seconds = arg_int(argc, argv, "--seconds", 10);
     const int leave_after = arg_int(argc, argv, "--leave-after", -1);
+    // many controllers: the first player leaves after N s, the others from this PS5 play on
+    const int release_after = arg_int(argc, argv, "--release-after", -1);
+    bool released = false;
     const std::uint64_t t0 = net::now_us();
     int last_phase = -1;
     std::uint32_t tick = 0;
@@ -158,6 +161,12 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
             std::printf("phase %s %s\n", phase_name(v.phase), v.why);
             std::fflush(stdout);
             last_phase = v.phase;
+        }
+        if (v.phase == GuestView::joined && v.token[0] && !told_token)
+        {
+            told_token = true;
+            std::printf("token %s player %d\n", v.token, v.player);
+            std::fflush(stdout);
         }
         if (v.friend_pass[0] && !told_friend)
         {
@@ -197,7 +206,10 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
             if (text && quick)
                 std::printf("text now %d\n", guest.send_text(text) ? 1 : 0); // too soon: Slow down
             if (talk)
+            {
+                guest.send_mic("on"); // the mic on first, as the Room menu does
                 guest.send_mic("ptt_down");
+            }
         }
         if (v.phase == GuestView::joined && said && !typed && text && net::now_us() - said_at > 2100000)
         {
@@ -222,6 +234,12 @@ int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t p
             s.lx = static_cast<std::uint8_t>(tick * 3);
             guest.send_pad(s);
             ++tick;
+        }
+        if (release_after >= 0 && t >= release_after && !released && v.phase == GuestView::joined)
+        {
+            released = true;
+            std::printf("release sent %d\n", guest.release() ? 1 : 0);
+            std::fflush(stdout);
         }
         if ((leave_after >= 0 && t >= leave_after) || t >= seconds)
             guest.leave();
@@ -369,6 +387,11 @@ int companion(int argc, char **argv)
     const bool want_invite = has(argc, argv, "--invite");
     const bool allow_first = has(argc, argv, "--allow-first");
     const bool room_intents = has(argc, argv, "--room-intents");
+    // Play Rooms: answer the first ask "let all from that PS5 in" / "It's me", start a ready check
+    const bool group_first = has(argc, argv, "--allow-group-first");
+    const bool me_first = has(argc, argv, "--its-me-first");
+    const bool ready = has(argc, argv, "--ready-check");
+    bool sent_ready = false;
     bool sent_room = false;
     bool asked_pair = false, asked_invite = false;
     std::uint32_t rev = 0;
@@ -390,7 +413,17 @@ int companion(int argc, char **argv)
             c.kick_block(2, "room");
             c.unblock("9C11");
             c.allow_group(7);
-            c.chat_quick(5);
+            c.chat_quick(5, 1);
+        }
+        static char last_err[32] = {};
+        if (std::strcmp(v.last_error, last_err))
+        {
+            std::snprintf(last_err, sizeof last_err, "%s", v.last_error);
+            if (last_err[0])
+            {
+                std::printf("intent_error %s\n", last_err);
+                std::fflush(stdout);
+            }
         }
         if (v.phase != phase)
         {
@@ -415,11 +448,32 @@ int companion(int argc, char **argv)
                         d.paired, d.engine_name, d.engine_version, d.console_addr, d.playing, d.together_open,
                         d.code_display, d.n_asks, d.n_guests, d.rp_paired, d.helper_present, d.block_system_buttons,
                         d.max_players);
+            std::printf("doc_user user=%s owner=%s\n", d.stream_user[0] ? d.stream_user : "-",
+                        d.console_owner[0] ? d.console_owner : "-");
+            for (int i = 0; i < d.n_asks; ++i)
+                std::printf("doc_ask id=%lld name=%s came=%s tag=%s pw=%d group=%d own=%d\n", d.asks[i].id, d.asks[i].name,
+                            d.asks[i].via[0] ? d.asks[i].via : "-", d.asks[i].tag[0] ? d.asks[i].tag : "-",
+                            d.asks[i].password_ok, d.asks[i].group_size, d.asks[i].own);
+            for (int i = 0; i < d.n_guests; ++i)
+                std::printf("doc_guest player=%d name=%s came=%s tag=%s rooms=%d group=%lld muted=%d/%d\n",
+                            d.guests[i].player, d.guests[i].name, d.guests[i].came[0] ? d.guests[i].came : "-",
+                            d.guests[i].tag[0] ? d.guests[i].tag : "-", d.guests[i].from_rooms, d.guests[i].group,
+                            d.guests[i].muted_voice, d.guests[i].muted_chat);
+            if (d.room.known)
+                std::printf("doc_room vis=%s pw=%d chat=%s voice=%s lock=%d friends=%d pwlets=%d\n", d.room.vis,
+                            d.room.password, d.room.chat, d.room.voice, d.room.locked, d.room.approve_friends,
+                            d.room.approve_password);
             std::fflush(stdout);
             if (want_invite && d.paired && !asked_invite)
                 asked_invite = c.invite(false);
             if (allow_first && d.n_asks > 0)
                 c.decide(d.asks[0].id, true);
+            if (group_first && d.n_asks > 0)
+                c.allow_group(d.asks[0].id);
+            if (me_first && d.n_asks > 0)
+                c.its_me(d.asks[0].id);
+            if (ready && !sent_ready && d.n_guests > 0)
+                sent_ready = c.ready_check();
         }
         if (v.phase == CompanionView::failed)
             break;
@@ -712,6 +766,8 @@ int rooms_cmd(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    // a line at a time: the tests read the output while it runs
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc >= 2 && !std::strcmp(argv[1], "rooms"))
         return rooms_cmd(argc, argv);
     log_open(std::getenv("PLAY_CLI_LOG"));

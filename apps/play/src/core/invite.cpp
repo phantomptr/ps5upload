@@ -299,6 +299,24 @@ bool add_link(const char *link, Invite &inv) noexcept
     if (!join_path(u.path, ws_path, sizeof ws_path))
         return false;
     char k[132], v[200];
+    if (!inv.key[0] && !inv.lobby[0] && frag_get(u.frag, "lobby", v, sizeof v) && !frag_get(u.frag, "i", k, sizeof k) &&
+        !frag_get(u.frag, "room", k, sizeof k))
+    {
+        // A Play Room handed over (no key: a knock on its lobby, as a card from Rooms).
+        if (!room_ok(v))
+            return false;
+        std::snprintf(inv.lobby, sizeof inv.lobby, "%s", v);
+        char t[16];
+        if (frag_get(u.frag, "tag", t, sizeof t) && std::strlen(t) <= 4)
+            std::snprintf(inv.tag, sizeof inv.tag, "%s", t);
+        inv.pw = frag_get(u.frag, "pw", t, sizeof t) && !std::strcmp(t, "1");
+        std::snprintf(inv.via, sizeof inv.via, "%s",
+                      frag_get(u.frag, "via", t, sizeof t) && !std::strcmp(t, "friends") ? "friends" : "rooms");
+        inv.internet = true;
+        if (frag_get(u.frag, "n", v, sizeof v))
+            std::snprintf(inv.name, sizeof inv.name, "%s", v);
+        return true;
+    }
     if (frag_get(u.frag, "room", v, sizeof v))
     {
         // The one link for everywhere: its key, and the host's own pages as direct routes.
@@ -344,7 +362,7 @@ bool parse_handoff(const char *text, std::size_t len, Invite &inv) noexcept
     if (!d.str(d.get(o, "link"), link, sizeof link) || !add_link(link, inv))
         return false;
     const int arr = d.get(o, "links");
-    if (arr >= 0 && d.type(arr) == json::Type::array)
+    if (!inv.lobby[0] && arr >= 0 && d.type(arr) == json::Type::array)
         for (std::uint32_t i = 0; i < d.count(arr) && i < 4; ++i)
         {
             Invite more = inv; // the same key only

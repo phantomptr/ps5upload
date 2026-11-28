@@ -814,20 +814,26 @@
         ],
         "type": "object"
       },
-      "Approval": {
-        "description": "Who gets in without the host answering. The host always decides otherwise (\"Ask me\").",
+      "ApprovalSet": {
+        "description": "The approvals a room change turns on or off (absent: as they are).",
         "properties": {
           "friends": {
-            "description": "People you've played with (a friend pass) get in without asking. On (scenario audit).",
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "household": {
-            "description": "PS5s of this household (consoles this computer knows) get in without asking. Off.",
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "password": {
-            "description": "The password lets people in without asking (only with a password).",
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -3455,7 +3461,7 @@
       "DecideBody": {
         "properties": {
           "allow": {
-            "type": "boolean"
+            "description": "true, false, \"group\" (let every player from that PS5 in) or \"me\" (the host's own device:\nPlayer 1)."
           },
           "id": {
             "minimum": 0,
@@ -5288,6 +5294,20 @@
               "type": "string"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ForgetBody": {
+        "properties": {
+          "all": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -13008,6 +13028,24 @@
         ],
         "type": "object"
       },
+      "ReadyBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "start": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "addr"
+        ],
+        "type": "object"
+      },
       "Refusal": {
         "description": "Why a package's name can't be changed. `code` is for the app to word: `retail` (signed by\nits publisher), `patch` (a delta update, which holds no name of its own to change),\n`no_name`, or `unsupported` (anything else; `reason` says what).",
         "properties": {
@@ -13983,12 +14021,13 @@
           "approval": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Approval"
+                "$ref": "#/components/schemas/ApprovalSet"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Any of `friends`, `password`, `household`: the others are kept (PS5Upload Play turns one\nswitch at a time)."
           },
           "chat": {
             "anyOf": [
@@ -27265,9 +27304,17 @@
             },
             "description": "Success."
           },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error",
@@ -27445,6 +27492,143 @@
             "name": "addr",
             "required": false
           },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/join/history": {
+      "get": {
+        "description": "`GET /api/join/history` (host only).",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "players": {
+                      "items": {
+                        "x-rust-type": "_"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "(host only)",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/join/history/forget": {
+      "post": {
+        "description": "`POST /api/join/history/forget {id}` or `{all: true}` (host only).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgetBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "left": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Or `{all: true}` (host only)",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
           "response_schema": "literal"
         }
       }
@@ -27996,6 +28180,90 @@
         }
       }
     },
+    "/api/join/ready": {
+      "post": {
+        "description": "`POST /api/join/ready {addr, start: true}`: the host starts a ready check (design 7.5): everyone\nin gets \"Ready?\" for 30 s. 409 `nobody`, `running`, `slow_down` (one a minute at most),\n`not_open`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "ready": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The host starts a ready check (design 7.5): everyone in gets \"Ready?\" for 30 s",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/join/relay": {
       "get": {
         "description": "`GET /api/join/relay?url=ws://<host engine>:<port>/api/join/ws` (this computer only): an app\njoining a friend's Play Together talks to its own engine (an app page may not open a plain\n`ws://` to another machine), which passes the socket through unchanged. Only another engine's\n`/api/join/ws`, or its `/api/join/signal` (an internet invite signalled without the hub), on a\nprivate address.",
@@ -28092,24 +28360,77 @@
     },
     "/api/join/rooms": {
       "get": {
-        "description": "`GET /api/join/rooms?<the hub's /rooms query>` (the list), `?status=<ids>` (friends lookup:\n`/rooms/status`), `?preview=<id>` (`/rooms/<id>/preview`): the hub in the settings, for this\nengine's own UIs (one place for the custom hub and caching). A hub's 429 comes back as it was\n(`Retry-After`), and further asks wait it out here (with a little jitter) instead of going out.",
+        "description": "`GET /api/join/rooms?<the hub's /rooms query>`: the hub's public list, from the hub in the\nsettings, for this engine's own UIs (one place for the custom hub and caching). The same paths\nas the hub's: `/api/join/rooms/status?r=<ids>` (friends lookup) and\n`/api/join/rooms/<id>/preview` (Details through the hub). A hub's 429 comes back as it was\n(`Retry-After`), and further asks wait it out here (with a little jitter) instead of going out.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "retry_s": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "why": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Too many requests"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The hub's public list, from the hub in the settings, for this engine's own UIs (one place for the custom hub and caching)",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/join/rooms/status": {
+      "get": {
+        "description": "`GET /api/join/rooms/status?r=<lobby ids>`: the hub's `/rooms/status` (friends' rooms open).",
         "parameters": [
           {
-            "description": "Friends lookup: lobby ids (comma separated, at most 16).",
+            "description": "Friends lookup (`/api/join/rooms/status?r=`): lobby ids (comma separated, at most 16).",
             "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "description": "Details through the hub: one lobby id.",
-            "in": "query",
-            "name": "preview",
+            "name": "r",
             "required": false,
             "schema": {
               "type": [
@@ -28171,6 +28492,82 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "The hub's `/rooms/status` (friends' rooms open)",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/join/rooms/{id}/preview": {
+      "get": {
+        "description": "`GET /api/join/rooms/{id}/preview`: the hub's relayed preview of one room.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "retry_s": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "why": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Too many requests"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The hub's relayed preview of one room",
         "tags": [
           "play-together"
         ],

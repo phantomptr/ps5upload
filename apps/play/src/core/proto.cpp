@@ -152,8 +152,8 @@ std::size_t hello_ex(char *out, std::size_t cap, const char *code, const char *r
 bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
 {
     ev = GuestEvent{};
-    json::Token toks[192];
-    json::Doc d(toks, 192);
+    json::Token toks[320];
+    json::Doc d(toks, 320);
     if (!d.parse(text, len) || d.type(0) != json::Type::object)
         return false;
     int v;
@@ -177,8 +177,20 @@ bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
         copy(ev.lobby, sizeof ev.lobby, d, d.get(0, "lobby"));
         if (ev.type == GuestEvent::refused)
         {
-            const int left = d.get(0, "left");
+            // The engine says `tries_left` (a stand-in once said `left`).
+            int left = d.get(0, "tries_left");
+            if (left < 0)
+                left = d.get(0, "left");
             ev.tries_left = d.type(left) == json::Type::number ? static_cast<int>(d.integer(left)) : -1;
+            // A name already in the room: {"stage": "refused", "why": "name_taken", "suggest"}.
+            if (!std::strcmp(ev.why, "name_taken"))
+            {
+                ev.type = GuestEvent::name_taken;
+                int s = d.get(0, "suggest");
+                if (s < 0)
+                    s = d.get(d.get(0, "name_taken"), "suggest");
+                copy(ev.suggest, sizeof ev.suggest, d, s);
+            }
         }
         const int cw = d.get(0, "codec_warning");
         ev.caps_known = cw >= 0;
@@ -241,7 +253,9 @@ bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
         copy(ev.challenge, sizeof ev.challenge, d, d.get(0, "c"));
         copy(ev.pk, sizeof ev.pk, d, d.get(0, "pk"));
         copy(ev.why, sizeof ev.why, d, d.get(0, "why"));
-        const int left = d.get(0, "left");
+        int left = d.get(0, "tries_left");
+        if (left < 0)
+            left = d.get(0, "left");
         ev.tries_left = d.type(left) == json::Type::number ? static_cast<int>(d.integer(left)) : -1;
         return ev.knock_state[0] != 0;
     }

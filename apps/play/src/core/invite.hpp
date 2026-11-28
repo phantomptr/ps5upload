@@ -38,10 +38,19 @@ struct Invite
     // which remembered host this invite is from.
     char home_addr[16] = {};
     std::uint16_t home_port = 0;
+    // A Play Room handed over from the phone (the website's join page, a room card's "Play on my
+    // PS5"): `https://…/join/#lobby=<id>&hub=<host>&n=<host name>&tag=<tag>&pw=1&via=rooms|friends`.
+    // No key: it is joined like a card from Rooms (a knock on the room's lobby through this home's
+    // PS5Upload). `lobby` empty for every other link.
+    char lobby[24] = {};
+    char tag[8] = {};
+    char via[12] = {}; // "rooms" or "friends"
+    bool pw = false;
 };
 
 // A Play Together link: `http://<engine>:<port>[/prefix]/join[/]#i=<key>[&n=<name>]`, or the one
-// link for everywhere `https://…/join/#room=…&k=<key>&fp=…&hub=…[&lan=<page>][&ts=<page>][&n=…]`.
+// link for everywhere `https://…/join/#room=…&k=<key>&fp=…&hub=…[&lan=<page>][&ts=<page>][&n=…]`,
+// or a Play Room's `https://…/join/#lobby=<id>[&n=…][&tag=…][&pw=1][&via=rooms|friends]`.
 // Adds its direct routes (only private or Tailscale IPv4 addresses on http) to `inv` and sets the
 // key (a link with another key than one already read is refused). False: not a Play Together link.
 bool add_link(const char *link, Invite &inv) noexcept;

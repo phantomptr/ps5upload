@@ -873,6 +873,31 @@ pub(crate) fn user_name_of(host: &str, regist_key_hex: &str) -> Option<String> {
         .map(|i| display_name(i, &users[i]))
 }
 
+/// The keys (regist, rp; hex) of the paired user of `host` whose regist key this is: a session
+/// started again as the same user (Play Rooms' restart after a friend took the host's user).
+pub(crate) fn rp_keys_by_regist(host: &str, regist_key_hex: &str) -> Option<(String, String)> {
+    migrate();
+    let keys = lock_keys();
+    users_of(keys.get(host)?)
+        .into_iter()
+        .find(|u| {
+            u.wake_regist_key
+                .eq_ignore_ascii_case(regist_key_hex.trim())
+        })
+        .map(|u| (u.wake_regist_key, u.wake_rp_key))
+}
+
+/// Who owns the console at `host`, as far as this engine knows: the first PS5 user paired for
+/// Remote Play here that has a name (the one who set this console up with PS5Upload). None when no
+/// paired user has a name.
+pub(crate) fn owner_name(host: &str) -> Option<String> {
+    let keys = lock_keys();
+    users_of(keys.get(host)?)
+        .into_iter()
+        .map(|u| u.name)
+        .find(|n| !n.trim().is_empty())
+}
+
 // ── Paired PS5 users ────────────────────────────────────────────────────────────────────────────
 
 /// One PS5 user this app is paired as. No Debug: it holds keys.

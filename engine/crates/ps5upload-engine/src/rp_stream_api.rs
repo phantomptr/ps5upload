@@ -660,6 +660,106 @@ pub(crate) fn stream_seat_free(host: &str) -> bool {
     live_on(host).is_some_and(|l| l.seat_free())
 }
 
+/// "It's me" (Play Rooms): the stream's controller is free for the host playing from another
+/// device of theirs: free for a guest, or no host page attached at all (nobody drives it), with
+/// no guest and no phone on it.
+pub(crate) fn stream_seat_free_for_owner(host: &str) -> bool {
+    live_on(host).is_some_and(|l| {
+        l.seat_free()
+            || (l.away_for().is_some()
+                && !l.seat_held()
+                && l.sources.is_empty()
+                && !crate::pad_link::phones_playing())
+    })
+}
+
+/// "It's me" keeps the stream's controller: the host's picture is off, or no host page is attached
+/// at all, and no linked phone plays.
+pub(crate) fn stream_seat_kept_for_owner(host: &str) -> bool {
+    live_on(host).is_some_and(|l| {
+        let phones = crate::pad_link::phones_playing();
+        l.seat_kept_given(phones) || (l.away_for().is_some() && !phones)
+    })
+}
+
+/// The engine's round trip to the console of `host`'s running session (Takion), ms, at least 1:
+/// Play Rooms' "host's PS5 link". None until measured, or with no session.
+pub(crate) fn console_rtt_ms(host: &str) -> Option<u32> {
+    let l = live().filter(|l| same_console(&l.host, host))?;
+    let ms = l.stats.lock().ok()?.as_ref()?["console_rtt_ms"].as_f64()?;
+    Some((ms.round() as u32).max(1))
+}
+
+/// The paired PS5 user `host`'s running session signed in, by name (None: no session, or a user
+/// the engine has no name for).
+pub(crate) fn session_user(host: &str) -> Option<String> {
+    live().filter(|l| same_console(&l.host, host))?.user_name()
+}
+
+/// What the last session started on each console asked for: Play Rooms starts it again, with no
+/// page attached, after a friend took the host's user ([`restart_for_friends`]). Never the keys
+/// (the regist key names the paired user; the keys stay in consoles_api's store).
+#[derive(Clone, Debug)]
+struct LastStart {
+    width: Option<u32>,
+    height: Option<u32>,
+    fps: Option<u32>,
+    bitrate_kbps: Option<u32>,
+    codec: Option<String>,
+    regist_hex: String,
+}
+
+static LAST_START: Mutex<Option<std::collections::HashMap<String, LastStart>>> = Mutex::new(None);
+
+/// The consoles a restart was asked for (the tests' record: nothing is started in a test).
+#[cfg(test)]
+pub(crate) static TEST_RESTARTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Starts the host's stream on `console` again with no page attached, as the last session there
+/// was (its size, rate, codec and paired user, the keys from the engine's store): a friend's pad
+/// took the host's user and the PS5 ended the stream, and nobody's page started it again. The
+/// session is held while friends play (`held_without_page`), and a host page that comes back
+/// attaches to it. Err: `running` (a session runs), `no_start` (none started here before),
+/// `no_keys` (that user's keys are gone).
+pub(crate) fn restart_for_friends(console: &str) -> Result<u64, &'static str> {
+    let host = crate::vinput_api::host_key(console);
+    if cfg!(test) {
+        #[cfg(test)]
+        TEST_RESTARTS.lock().unwrap().push(host.clone());
+        return Err("test");
+    }
+    let last = LAST_START
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref()?.get(&host).cloned())
+        .ok_or("no_start")?;
+    let (r, k) =
+        crate::consoles_api::rp_keys_by_regist(&host, &last.regist_hex).ok_or("no_keys")?;
+    let creds =
+        ps5upload_core::rp_session::SessionCreds::from_hex(&r, &k).map_err(|_| "no_keys")?;
+    let req: StartReq = serde_json::from_value(serde_json::json!({
+        "host": host,
+        "regist_key": "",
+        "rp_key": "",
+        "width": last.width,
+        "height": last.height,
+        "fps": last.fps,
+        "bitrate_kbps": last.bitrate_kbps,
+        "codec": last.codec,
+    }))
+    .map_err(|_| "bad_start")?;
+    let mut g = LIVE.lock().map_err(|_| "lock")?;
+    if g.is_some() {
+        return Err("running");
+    }
+    let l = begin(&req, creds);
+    if let Ok(mut a) = l.alone_since.lock() {
+        *a = Some(Instant::now());
+    }
+    *g = Some(l.clone());
+    Ok(l.session)
+}
+
 /// A guest on the stream's controller may keep it: the session runs for `host`, its picture is
 /// still off here and no linked phone plays (else the host's side needs it back, #720).
 pub(crate) fn stream_seat_kept(host: &str) -> bool {
@@ -2138,13 +2238,25 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         matches!(cfg.codec, ps5upload_core::rp_stream::Codec::H265Hdr),
         Ordering::Relaxed,
     );
-    let _ = live.regist_hex.set(
-        creds
-            .regist_key
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    );
+    let regist_hex: String = creds
+        .regist_key
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if let Ok(mut g) = LAST_START.lock() {
+        g.get_or_insert_with(std::collections::HashMap::new).insert(
+            crate::vinput_api::host_key(&start.host),
+            LastStart {
+                width: start.width,
+                height: start.height,
+                fps: start.fps,
+                bitrate_kbps: start.bitrate_kbps,
+                codec: start.codec.clone(),
+                regist_hex: regist_hex.clone(),
+            },
+        );
+    }
+    let _ = live.regist_hex.set(regist_hex);
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
@@ -2693,6 +2805,16 @@ pub(crate) mod test_live {
         /// Any kind of the stream's messages (0: the codec header, 1: a picture).
         pub(crate) fn send(&self, kind: u8, data: &[u8], key: bool) {
             self.0.to_spectators(kind, data, key);
+        }
+
+        /// The host's page left (no page attached since now).
+        pub(crate) fn page_left(&self) {
+            *self.0.alone_since.lock().unwrap() = Some(Instant::now());
+        }
+
+        /// The engine's round trip to the console, as the session's stats would say it.
+        pub(crate) fn console_rtt(&self, ms: f64) {
+            *self.0.stats.lock().unwrap() = Some(serde_json::json!({"console_rtt_ms": ms}));
         }
     }
 

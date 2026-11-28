@@ -71,14 +71,25 @@ departs from the designs (the Play Rooms design, 2026-11-28, and the integration
   the Join list, `host` the host screen), `id` on `/v1/mesh` entries. Older helpers: everything
   falls back to discovery and the code.
 
-## Assumptions the engine has to match (not in the merged API yet)
+## What the engine speaks with the app (all in the engine since rooms-gaps)
+
+Checked against the real engine by `make -C apps/play e2e-engine` (the engine's
+`play_cli_e2e_tests.rs` runs this app's `play-cli`). Where the forms first differed, one was picked
+for the engine, PS5Upload UI and this app alike (docs/ROOMS_DEVIATIONS.md "Reconciled"): asks and
+guests say how they came as `came` (`via` is `lan`/`internet`); a wrong password is
+`{"stage": "refused", "why": "password", "tries_left"}` on the guest socket; a taken name is a
+refusal with `suggest`; the status and the room push come in one message; the host's quick message
+carries `notice`; a group ask has `players` (names) and `group` (the first player's id); `decide`
+also takes `allow: "me"` (the host's own device, Player 1) and the TV can start a `ready` check.
+A room handed over from the phone (`…/join/#lobby=<id>&n=&tag=&pw=1&via=`) is joined as that
+room's card.
 
 1. **Knocks on the guest socket** (Nearby, Play again, LAN/Tailscale rooms): the hello says
    `"knock": {"via": "rooms"|"friends"|"nearby"|"again"}`, plus `"device"` (base64url of this
    PS5's 16-byte id), `"proto": 2` and `"caps": [...]`. A room with a password answers
    `{"knock": "challenge", "c": "<base64url>", "pk": "<room key>"}`; the app answers
    `{"knock": "sealed", "blob": "<base64url>"}`; then `{"knock": "wait"}` / `{"knock": "no",
-   "why", "left"}` or the usual stages. `{"name_taken": {"suggest"}}` ends the try (the app joins
+   "why", "tries_left"}` or the usual stages. A `name_taken` refusal (with `suggest`) ends the try (the app joins
    again with the name chosen).
 2. **The sealed blob** (`src/net/seal.hpp`, checked against Python `cryptography` in `make test`):
    `0x01 ‖ ephemeral P-256 point (65) ‖ nonce (12) ‖ AES-128-GCM(ciphertext ‖ tag)`, key =
@@ -95,7 +106,7 @@ departs from the designs (the Play Rooms design, 2026-11-28, and the integration
    `{"kick": {"player", "block": "room"|"always"}}`, `{"unblock": {"tag"}}`, `{"mute": {"player",
    "voice", "chat"} | {"all": true, "voice"}}`, `{"decide": {"ask", "allow": "group"}}`,
    `{"chat": {"quick"}}`. The doc carries `room` (as `GET /api/join`), each guest's `tag`,
-   `from_rooms`, `muted`, `group`, each ask's `via`, `tag`, `password_ok`, `rtt_hint`, `players`
+   `from_rooms`, `muted`, `group`, each ask's `came`, `tag`, `password_ok`, `rtt_hint`, `players`
    (a group), and `session.user` / `console.owner`. Chat and voice modes and mutes must reach
    `join_comms`.
 5. **Many controllers**: a seat's hello has `"media": false` and `"group": "<first player's

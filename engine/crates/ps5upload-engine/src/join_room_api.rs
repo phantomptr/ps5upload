@@ -114,8 +114,10 @@ pub struct RoomBody {
     size: Option<u8>,
     #[serde(default)]
     password: Option<String>,
+    /// Any of `friends`, `password`, `household`: the others are kept (PS5Upload Play turns one
+    /// switch at a time).
     #[serde(default)]
-    approval: Option<jr::Approval>,
+    approval: Option<ApprovalSet>,
     #[serde(default)]
     chat: Option<jr::ChatMode>,
     #[serde(default)]
@@ -141,6 +143,17 @@ pub struct RoomBody {
     game: Option<serde_json::Value>,
     #[serde(default)]
     public_ok: Option<bool>,
+}
+
+/// The approvals a room change turns on or off (absent: as they are).
+#[derive(serde::Deserialize, Default, Clone, Copy)]
+pub(crate) struct ApprovalSet {
+    #[serde(default)]
+    friends: Option<bool>,
+    #[serde(default)]
+    password: Option<bool>,
+    #[serde(default)]
+    household: Option<bool>,
 }
 
 fn conflict(err: &str, extra: serde_json::Value) -> Response {
@@ -194,7 +207,15 @@ fn apply_room_checked(b: &RoomBody) -> Result<(), Response> {
         s.max_players = n - 1;
     }
     if let Some(a) = b.approval {
-        room.approval = a;
+        if let Some(v) = a.friends {
+            room.approval.friends = v;
+        }
+        if let Some(v) = a.password {
+            room.approval.password = v;
+        }
+        if let Some(v) = a.household {
+            room.approval.household = v;
+        }
     }
     if let Some(c) = b.chat {
         room.chat = Some(c);
@@ -351,7 +372,22 @@ pub(crate) fn room_view(p: &Party, now: Instant) -> serde_json::Value {
         "lobby": crate::join_net::lobby::lobby_id(),
         "proto": jr::PROTO,
         "caps": jr::caps(),
+        // The ready check (or null), and the host's PS5 link (engine to console).
+        "ready": p.room.ready_json(now),
+        "host_link": host_link(&p.console),
     })
+}
+
+/// The host's PS5 link: the round trip between this engine and the console in the running session
+/// (Remote Play's own), as `{rtt_ms, tier}`; null until measured.
+pub(crate) fn host_link(console: &str) -> serde_json::Value {
+    match crate::rp_stream_api::console_rtt_ms(console) {
+        Some(ms) => serde_json::json!({
+            "rtt_ms": ms,
+            "tier": crate::join_route::engine_tier(Some(ms), false, None).map(|t| t.word()),
+        }),
+        None => serde_json::Value::Null,
+    }
 }
 
 /// What a guest's status carries about the room (`{"room": …}` beside `status`).
@@ -376,13 +412,76 @@ pub(crate) fn guest_room(p: &Party, id: u64, now: Instant) -> Option<serde_json:
         "size": p.settings.max_players.clamp(1, MAX_GUESTS) + 1,
         "players": players,
         "you": {"rtt_ms": me.stats.rtt_now(), "tier": tier},
+        "host_link": host_link(&p.console),
         "chat": cfg.chat(),
         "voice": cfg.voice(),
         "locked": p.room.locked,
         "playing_for_min": now.saturating_duration_since(p.room.opened_at).as_secs() / 60,
+        "ready": p.room.ready_json(now),
         "proto": jr::PROTO,
         "caps": jr::caps(),
     }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ReadyBody {
+    #[serde(alias = "console", alias = "host")]
+    pub(crate) addr: String,
+    #[serde(default)]
+    pub(crate) start: bool,
+}
+
+/// `POST /api/join/ready {addr, start: true}`: the host starts a ready check (design 7.5): everyone
+/// in gets "Ready?" for 30 s. 409 `nobody`, `running`, `slow_down` (one a minute at most),
+/// `not_open`.
+pub async fn ready(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(b): Json<ReadyBody>,
+) -> Response {
+    if let Some(r) = guard(&peer, &headers) {
+        return r;
+    }
+    if !b.start {
+        return bad(StatusCode::BAD_REQUEST, "start");
+    }
+    match ready_start(&b.addr) {
+        Ok(v) => Json(serde_json::json!({"ok": true, "ready": v})).into_response(),
+        Err(e) => conflict(e, serde_json::json!({})),
+    }
+}
+
+/// Starts a ready check on `addr` for everyone in now: the check as the views show it.
+pub(crate) fn ready_start(addr: &str) -> Result<serde_json::Value, &'static str> {
+    let now = Instant::now();
+    let (v, fx, console) = with_party(&host_key(addr), |p| {
+        let players: Vec<u64> = p
+            .guests
+            .iter()
+            .filter(|g| g.active())
+            .map(|g| g.id)
+            .collect();
+        p.room.ready_start(players, now)?;
+        crate::log_at!(
+            Info,
+            "together",
+            "join: the host started a ready check on {}",
+            p.console
+        );
+        // Everyone in is asked "Ready?" at once (the room push then carries who said so).
+        let ask = serde_json::json!({"ready": {"left_s": jr::READY_FOR.as_secs()}});
+        let fx: Vec<Effect> = p
+            .guests
+            .iter()
+            .filter(|g| g.active())
+            .filter_map(|g| g.conn.as_ref())
+            .map(|c| Effect::Say(c.tx.clone(), Out::Text(ask.clone())))
+            .collect();
+        Ok((p.room.ready_json(now), fx, p.console.clone()))
+    })
+    .unwrap_or(Err("not_open"))?;
+    apply(&console, fx);
+    Ok(v)
 }
 
 #[derive(serde::Deserialize)]
@@ -668,6 +767,14 @@ static PREVIEWS: Mutex<Option<jr::PreviewLimit>> = Mutex::new(None);
 pub(crate) fn preview_of(key: &str) -> Option<serde_json::Value> {
     let now = Instant::now();
     let stream = live_codec_info(key);
+    let link = with_party(key, |p| p.console.clone())
+        .and_then(|c| crate::rp_stream_api::console_rtt_ms(&c))
+        .map(|ms| {
+            (
+                ms,
+                crate::join_route::engine_tier(Some(ms), false, None).map_or("poor", |t| t.word()),
+            )
+        });
     with_party(key, |p| {
         let mut players = vec![jr::PreviewPlayer {
             name: crate::join_names::effective(&p.host_name).to_string(),
@@ -698,7 +805,7 @@ pub(crate) fn preview_of(key: &str) -> Option<serde_json::Value> {
             password: jr::has_password(),
             game: p.room.game.clone(),
             stream: stream.clone(),
-            host_link: None,
+            host_link: link,
             players,
             asking: p.pending.len(),
             open_for: now.saturating_duration_since(p.room.opened_at),
@@ -796,12 +903,9 @@ const HUB_CACHE_FOR: Duration = Duration::from_secs(5);
 
 #[derive(serde::Deserialize, Default)]
 pub struct RoomsQuery {
-    /// Friends lookup: lobby ids (comma separated, at most 16).
+    /// Friends lookup (`/api/join/rooms/status?r=`): lobby ids (comma separated, at most 16).
     #[serde(default)]
-    status: Option<String>,
-    /// Details through the hub: one lobby id.
-    #[serde(default)]
-    preview: Option<String>,
+    r: Option<String>,
 }
 
 fn lobby_ids_ok(s: &str) -> bool {
@@ -814,15 +918,18 @@ fn lobby_ids_ok(s: &str) -> bool {
         })
 }
 
-/// The hub path for a proxied ask (None: a bad one).
-pub(crate) fn rooms_path(q: &RoomsQuery, query: Option<&str>) -> Option<String> {
-    if let Some(ids) = q.status.as_deref() {
-        return lobby_ids_ok(ids).then(|| format!("/rooms/status?r={ids}"));
-    }
-    if let Some(id) = q.preview.as_deref() {
-        return (lobby_ids_ok(id) && !id.contains(',')).then(|| format!("/rooms/{id}/preview"));
-    }
-    // The list's own query, passed on (only its known keys, each short).
+/// The hub path of the friends lookup for `ids` (None: bad ids).
+pub(crate) fn status_path(ids: &str) -> Option<String> {
+    lobby_ids_ok(ids).then(|| format!("/rooms/status?r={ids}"))
+}
+
+/// The hub path of one room's preview (None: a bad id).
+pub(crate) fn preview_path(id: &str) -> Option<String> {
+    (lobby_ids_ok(id) && !id.contains(',')).then(|| format!("/rooms/{id}/preview"))
+}
+
+/// The hub path of the list, with its own query passed on (only its known keys, each short).
+pub(crate) fn rooms_path(query: Option<&str>) -> Option<String> {
     let keep: Vec<&str> = query
         .unwrap_or("")
         .split('&')
@@ -850,23 +957,52 @@ pub(crate) fn rooms_path(q: &RoomsQuery, query: Option<&str>) -> Option<String> 
     })
 }
 
-/// `GET /api/join/rooms?<the hub's /rooms query>` (the list), `?status=<ids>` (friends lookup:
-/// `/rooms/status`), `?preview=<id>` (`/rooms/<id>/preview`): the hub in the settings, for this
-/// engine's own UIs (one place for the custom hub and caching). A hub's 429 comes back as it was
+/// `GET /api/join/rooms?<the hub's /rooms query>`: the hub's public list, from the hub in the
+/// settings, for this engine's own UIs (one place for the custom hub and caching). The same paths
+/// as the hub's: `/api/join/rooms/status?r=<ids>` (friends lookup) and
+/// `/api/join/rooms/<id>/preview` (Details through the hub). A hub's 429 comes back as it was
 /// (`Retry-After`), and further asks wait it out here (with a little jitter) instead of going out.
 pub async fn rooms_proxy(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     uri: axum::http::Uri,
+) -> Response {
+    if let Some(r) = guard(&peer, &headers) {
+        return r;
+    }
+    hub_proxy(rooms_path(uri.query())).await
+}
+
+/// `GET /api/join/rooms/status?r=<lobby ids>`: the hub's `/rooms/status` (friends' rooms open).
+pub async fn rooms_status_proxy(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Query(q): Query<RoomsQuery>,
 ) -> Response {
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    hub_proxy(q.r.as_deref().and_then(status_path)).await
+}
+
+/// `GET /api/join/rooms/{id}/preview`: the hub's relayed preview of one room.
+pub async fn rooms_preview_proxy(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    if let Some(r) = guard(&peer, &headers) {
+        return r;
+    }
+    hub_proxy(preview_path(&id)).await
+}
+
+/// One proxied ask of the hub at `path` (None: a bad ask).
+async fn hub_proxy(path: Option<String>) -> Response {
     let Some(base) = hub_http(&settings().hub_url) else {
         return bad(StatusCode::BAD_GATEWAY, "hub");
     };
-    let Some(path) = rooms_path(&q, uri.query()) else {
+    let Some(path) = path else {
         return bad(StatusCode::BAD_REQUEST, "bad");
     };
     let now = Instant::now();

@@ -415,7 +415,7 @@ async fn the_first_answer_to_an_ask_wins() {
     assert_eq!(r["error"], "already_answered");
     assert_eq!(r["req"], 2);
     assert_eq!(
-        crate::join::decide_on(console, 9_002, true),
+        crate::join::decide_on(console, 9_002, crate::join::Decision::Allow),
         Err("already_answered")
     );
     // The app's own state shows in the status.

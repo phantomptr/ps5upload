@@ -207,7 +207,7 @@ describe("room state", () => {
   });
   it("player and ask facts; `via` lan/internet is not a source", () => {
     expect(readRoomPlayer({ via: "internet" }).source).toBeNull();
-    const p = readRoomPlayer({ source: "rooms", tag: "4F2A", muted: { voice: true }, speaking: true });
+    const p = readRoomPlayer({ came: "rooms", via: "lan", tag: "4F2A", muted: { voice: true }, speaking: true });
     expect(p).toMatchObject({ source: "rooms", tag: "4F2A", fromRooms: true, speaking: true, muted: { voice: true, chat: false } });
     expect(readRoomAsk({ via: "rooms", password_ok: true, tag: "9C11", rtt_hint: 70 })).toEqual({
       source: "rooms",
@@ -216,6 +216,9 @@ describe("room state", () => {
       rttHint: 70,
       group: null,
     });
+    // Another controller of a PS5 already in: `players` counts that PS5's players, `group` is an id.
+    expect(readRoomAsk({ came: "group", group: 17, players: ["Alex", "Sam"] })).toMatchObject({ source: "group", group: 2 });
+    expect(readRoomAsk({ came: "invite", group: 17 }).group).toBeNull();
   });
   it("defaults by visibility, size choices, approval needs a password", () => {
     expect(visibilityDefaults("public")).toEqual({ chat: "quick", voice: "ptt", startMuted: true });

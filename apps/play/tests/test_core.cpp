@@ -228,6 +228,17 @@ void test_guest_messages()
     CHECK(proto::parse_guest(old, std::strlen(old), e) && !e.caps_known);
     const char *r = R"({"stage":"refused","why":"denied"})";
     CHECK(proto::parse_guest(r, std::strlen(r), e) && e.type == proto::GuestEvent::refused && !std::strcmp(e.why, "denied"));
+    // Play Rooms refusals as the engine says them: tries left, a name already in the room
+    const char *pw = R"({"stage":"refused","why":"password","tries_left":3})";
+    CHECK(proto::parse_guest(pw, std::strlen(pw), e) && e.type == proto::GuestEvent::refused && e.tries_left == 3);
+    const char *nt = R"J({"stage":"refused","why":"name_taken","suggest":"Sam (2)","name_taken":{"suggest":"Sam (2)"}})J";
+    CHECK(proto::parse_guest(nt, std::strlen(nt), e) && e.type == proto::GuestEvent::name_taken &&
+          !std::strcmp(e.suggest, "Sam (2)"));
+    const char *kn = R"({"knock":"no","why":"password","tries_left":2})";
+    CHECK(proto::parse_guest(kn, std::strlen(kn), e) && e.type == proto::GuestEvent::knock && e.tries_left == 2);
+    // the status beside the room push, in one message (the engine's keys in order)
+    const char *both = R"({"room":{"name":"Couch","size":4,"players":[]},"status":{"player":3,"rtt_ms":7,"host":"Desk"}})";
+    CHECK(proto::parse_guest(both, std::strlen(both), e) && e.type == proto::GuestEvent::status && e.player == 3);
     const char *st = R"({"status":{"player":2,"state":"playing","rtt_ms":12,"host":"Desk","block_system":true,"stream_seat":false,"plays_as":null,"seat_note":null,"move_first":false,"host_user":null,"took_host":false,"queue":0,"skipped":3,"codec_warning":null}})";
     CHECK(proto::parse_guest(st, std::strlen(st), e) && e.type == proto::GuestEvent::status && e.rtt_ms == 12 && e.block_system && !std::strcmp(e.host, "Desk"));
     const char *ru = R"({"rumble":[255,10]})";
@@ -489,6 +500,19 @@ void test_invite_links()
     CHECK(!invite::add_link("ftp://192.168.1.20/join#i=abcdefgh123", inv));
     CHECK(!invite::add_link("javascript:alert(1)", inv));
     CHECK(!invite::add_link("http://192.168.1.20:99999/join#i=abcdefgh123", inv));
+    // A Play Room handed over from the phone: no key, a knock on its lobby (as a card in Rooms).
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#lobby=AAAAAAAAAAAAAAAAAAAAAA&hub=hub.example&n=Sam&tag=4F2A&pw=1&via=friends", inv));
+    CHECK(!std::strcmp(inv.lobby, "AAAAAAAAAAAAAAAAAAAAAA") && !std::strcmp(inv.name, "Sam") && !std::strcmp(inv.tag, "4F2A"));
+    CHECK(inv.pw && !std::strcmp(inv.via, "friends") && !inv.key[0] && inv.n_routes == 0);
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#lobby=AAAAAAAAAAAAAAAAAAAAAA", inv) && !inv.pw &&
+          !std::strcmp(inv.via, "rooms"));
+    CHECK(!invite::add_link("https://ps5upload.phantomptr.com/join/#lobby=short", inv));
+    {
+        const char *h = R"({"invite":{"link":"https://x.example/join/#lobby=BBBBBBBBBBBBBBBBBBBBBB&n=Kai"}})";
+        CHECK(invite::parse_handoff(h, std::strlen(h), inv) && !std::strcmp(inv.lobby, "BBBBBBBBBBBBBBBBBBBBBB"));
+    }
     // A second link with another key is not mixed in.
     inv = invite::Invite{};
     CHECK(invite::add_link("http://192.168.1.20:19113/join#i=abcdefgh123", inv));

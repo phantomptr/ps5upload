@@ -274,7 +274,9 @@ export interface RoomPlayer {
 
 export function readRoomPlayer(g: Record<string, unknown>): RoomPlayer {
   const m = obj(g.muted);
-  const source = readVia(g.source) ?? readVia(g.via);
+  // The engine's word for how they found the room is `came`; `via` there means lan/internet (an
+  // older engine's room word only when it is one).
+  const source = readVia(g.came) ?? readVia(g.via);
   return {
     source,
     tag: str(g.tag),
@@ -301,11 +303,13 @@ export interface RoomAsk {
 
 export function readRoomAsk(a: Record<string, unknown>): RoomAsk {
   return {
-    source: readVia(a.source) ?? readVia(a.via),
+    source: readVia(a.came) ?? readVia(a.via),
     passwordOk: typeof a.password_ok === "boolean" ? a.password_ok : null,
     tag: str(a.tag),
     rttHint: num(a.rtt_hint),
-    group: num(a.group) ?? num(a.players),
+    // Another controller of a PS5 already in: `players` names everyone from that PS5 (with the one
+    // asking); `group` is the first player's id, not a count.
+    group: Array.isArray(a.players) && a.players.length > 1 ? a.players.length : null,
   };
 }
 
@@ -436,7 +440,7 @@ export const roomApi = {
   mic: (addr: string, mic: boolean) => post("/api/join/voice", { addr, mic: mic ? "on" : "off", notice: NOTICE_VERSION }),
   ready: (addr: string) => post("/api/join/ready", { addr, start: true }),
   /** Let everyone from one PS5 in at once (a group ask). */
-  allowGroup: (addr: string, id: number) => post("/api/join/decide", { addr, id, allow: true, group: true }),
+  allowGroup: (addr: string, id: number) => post("/api/join/decide", { addr, id, allow: "group" }),
 };
 
 /** One of the host's recent players (GET /api/join/history; never in bug reports). */
@@ -461,7 +465,7 @@ export function readHistory(v: unknown): RecentPlayer[] {
       tag: typeof p.tag === "string" ? p.tag : "",
       lastUnix: num(p.last_unix) ?? num(p.at) ?? 0,
       minutes: num(p.minutes) ?? 0,
-      source: readVia(p.via) ?? readVia(p.source),
+      source: readVia(p.came) ?? readVia(p.via),
     }));
 }
 

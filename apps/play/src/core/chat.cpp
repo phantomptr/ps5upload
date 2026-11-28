@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <pthread.h>
 
 namespace play::chat
 {
@@ -317,6 +318,20 @@ void Log::add_line(const Incoming &in, std::uint64_t now, bool mine) noexcept
 
 int parse_history(const char *t, std::size_t len, Log &log, std::uint64_t now) noexcept
 {
+    // One reader at a time: every guest socket (one per player on this PS5) has its own thread.
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    struct Hold
+    {
+        pthread_mutex_t &m;
+        explicit Hold(pthread_mutex_t &x) noexcept : m(x)
+        {
+            pthread_mutex_lock(&m);
+        }
+        ~Hold()
+        {
+            pthread_mutex_unlock(&m);
+        }
+    } hold(mu);
     static json::Token toks[600];
     json::Doc d(toks, 600);
     if (!d.parse(t, len) || d.type(0) != json::Type::object)

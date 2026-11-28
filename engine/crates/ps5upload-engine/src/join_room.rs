@@ -52,6 +52,8 @@ pub(crate) const CAPS: &[&str] = &[
     "names",
     "chat",
     "voice",
+    "ready",
+    "group",
 ];
 
 /// The capabilities this engine says it has.
@@ -398,7 +400,7 @@ pub(crate) struct Secrets {
     pub key: RoomKey,
 }
 
-fn write_private(path: &std::path::Path, body: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, body: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -480,7 +482,7 @@ impl Secrets {
 
 static SECRETS: Mutex<Option<Secrets>> = Mutex::new(None);
 
-fn data_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn data_path(name: &str) -> Option<PathBuf> {
     if cfg!(test) {
         return None; // never the user's own data folder
     }
@@ -1051,6 +1053,36 @@ pub(crate) struct RoomRun {
     /// Past invites (key, code) and when they stopped, so a lapsed link hears `expired` (a wrong
     /// one `key`, a wrong code `code`). The last few only.
     pub old_invites: VecDeque<(String, String, Instant)>,
+    /// The ready check running (or just ended), and when the last one started.
+    pub ready: Option<ReadyCheck>,
+    pub ready_last: Option<Instant>,
+}
+
+/// The room's ready check (design 7.5): everyone in gets "Ready?" for [`READY_FOR`]; each answer
+/// shows as ✓ by their seat; it ends early once everyone is ready ("Everyone's ready", shown for
+/// [`READY_SHOWN`]). One at a time, at most one a [`READY_GAP`].
+#[derive(Clone, Debug)]
+pub(crate) struct ReadyCheck {
+    pub until: Instant,
+    /// The players asked (guest ids), and those who said ready.
+    pub asked: Vec<u64>,
+    pub ready: Vec<u64>,
+    /// When the last one asked said ready.
+    pub all_at: Option<Instant>,
+}
+
+pub(crate) const READY_FOR: Duration = Duration::from_secs(30);
+pub(crate) const READY_GAP: Duration = Duration::from_secs(60);
+pub(crate) const READY_SHOWN: Duration = Duration::from_secs(5);
+
+impl ReadyCheck {
+    /// Still shown: running, or everyone ready a moment ago.
+    pub(crate) fn live(&self, now: Instant) -> bool {
+        match self.all_at {
+            Some(t) => now.saturating_duration_since(t) < READY_SHOWN,
+            None => now < self.until,
+        }
+    }
 }
 
 /// Past invites remembered at most, and for how long.
@@ -1066,7 +1098,85 @@ impl RoomRun {
             blocked: Vec::new(),
             listed: Listed::Off,
             old_invites: VecDeque::new(),
+            ready: None,
+            ready_last: None,
         }
+    }
+
+    /// The host starts a ready check for `players` (guest ids in now). Err: `nobody` (no one to
+    /// ask), `running` (one is on), `slow_down` (the last one began under a minute ago).
+    pub(crate) fn ready_start(
+        &mut self,
+        players: Vec<u64>,
+        now: Instant,
+    ) -> Result<(), &'static str> {
+        if players.is_empty() {
+            return Err("nobody");
+        }
+        if self.ready.as_ref().is_some_and(|r| r.live(now)) {
+            return Err("running");
+        }
+        if self
+            .ready_last
+            .is_some_and(|t| now.saturating_duration_since(t) < READY_GAP)
+        {
+            return Err("slow_down");
+        }
+        self.ready = Some(ReadyCheck {
+            until: now + READY_FOR,
+            asked: players,
+            ready: Vec::new(),
+            all_at: None,
+        });
+        self.ready_last = Some(now);
+        Ok(())
+    }
+
+    /// Player `id` said ready (ignored outside a check, or from someone it didn't ask).
+    pub(crate) fn ready_answer(&mut self, id: u64, now: Instant) {
+        let Some(r) = self
+            .ready
+            .as_mut()
+            .filter(|r| r.live(now) && r.all_at.is_none())
+        else {
+            return;
+        };
+        if r.asked.contains(&id) && !r.ready.contains(&id) {
+            r.ready.push(id);
+        }
+        if r.asked.iter().all(|a| r.ready.contains(a)) {
+            r.all_at = Some(now);
+        }
+    }
+
+    /// Someone asked is no longer in (left, removed): not waited for.
+    pub(crate) fn ready_gone(&mut self, id: u64, now: Instant) {
+        if let Some(r) = self.ready.as_mut().filter(|r| r.all_at.is_none()) {
+            r.asked.retain(|a| *a != id);
+            if !r.asked.is_empty() && r.asked.iter().all(|a| r.ready.contains(a)) {
+                r.all_at = Some(now);
+            }
+        }
+    }
+
+    /// The check as every view shows it: `{left_s, asked: [ids], ready: [ids], all}`, or null.
+    pub(crate) fn ready_json(&self, now: Instant) -> Value {
+        let Some(r) = self.ready.as_ref().filter(|r| r.live(now)) else {
+            return Value::Null;
+        };
+        json!({
+            "left_s": r.until.saturating_duration_since(now).as_secs(),
+            "asked": r.asked,
+            "ready": r.ready,
+            "all": r.all_at.is_some(),
+        })
+    }
+
+    /// Guest `id` said ready in the check shown now.
+    pub(crate) fn is_ready(&self, id: u64, now: Instant) -> bool {
+        self.ready
+            .as_ref()
+            .is_some_and(|r| r.live(now) && r.ready.contains(&id))
     }
 
     /// Blocked from this room, or on this computer.

@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <pthread.h>
 
 namespace play::rooms
 {
@@ -458,6 +459,21 @@ bool parse_preview(const char *text, std::size_t len, Preview &p) noexcept
 
 bool parse_room_push(const char *text, std::size_t len, RoomState &st) noexcept
 {
+    // Every guest socket reads its room push on its own thread (many controllers: one socket per
+    // player), so the shared tokens are taken one reader at a time.
+    static pthread_mutex_t push_mu = PTHREAD_MUTEX_INITIALIZER;
+    struct Hold
+    {
+        pthread_mutex_t &m;
+        explicit Hold(pthread_mutex_t &x) noexcept : m(x)
+        {
+            pthread_mutex_lock(&m);
+        }
+        ~Hold()
+        {
+            pthread_mutex_unlock(&m);
+        }
+    } hold(push_mu);
     static json::Token toks[384];
     json::Doc d(toks, 384);
     if (!d.parse(text, len) || d.type(0) != json::Type::object)

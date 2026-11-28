@@ -157,25 +157,68 @@ engine differs from the design:
     its own hub connection and relays the answers; `challenge` gains `gid` (the bridge's), `ok`
     carries `token` and the host engine's DTLS `fp` (the lobby card has no fingerprint), and after
     `no` the bridge says `{"bridge": "failed", "why": "refused"}`.
-14. **Companion intents** take `room` as `{"set": {…}}` or the fields themselves; `decide` with
-    `allow: "group"` is a plain yes until groups land; `chat {quick | text, notice?}` is the host's
-    line through join_comms. The status adds `session.user` (the PS5 user in front); there is no
-    `console.owner` yet.
+14. **Companion intents** take `room` as `{"set": {…}}` or the fields themselves (`approval` may
+    carry one switch: the others are kept); `decide` takes `allow: true | false | "group" | "me"`;
+    `chat {quick | text, notice?}` is the host's line through join_comms; `ready {start: true}`.
+    The status has `session.user` (the PS5 user in front, else the session's paired user) and
+    `console.owner` (the first Remote Play user paired on this engine with a name, else the
+    stream's user).
 
-PS5Upload Play's assumptions (apps/play/docs/ROOMS.md on rooms-app) — in the engine now: knock +
-device + proto + caps in the hello, challenge + pk, sealed blob, bridge v2, companion `room` /
-`kick`+`block` / `unblock` / `mute` (join_comms) / `decide` group (as yes) / `chat`, status `room`
-and per-guest `tag`, `from_rooms`, `muted`, asks' `came` (not `via`), `tag`, `password_ok`,
-`rtt_hint`, `session.user`, discovery `you`, `joined.lobby`, the room push (players with `id`,
-`seat`, `you`). **Not yet:** `console.owner`, many controllers (`media: false`, `group`,
-`{"release": 1}`, each guest's `group`, an ask's `players`), the push's `host_link`.
+PS5Upload Play's assumptions (apps/play/docs/ROOMS.md): all in the engine now (see "Reconciled"
+below).
 
-Not done in this pass (open items): the engine-side auto-restart after a friend takes the host's
-user (needs a page-less session start in rp_stream_api); "It's me" Player 1 for the host's own
-device; the internet-direct preview channel for Friends (Details over the internet go through the
-hub's relayed preview); ready check, recent players history, the host's PS5 link round trip in
-the preview; the card's game is the host's pick or the console's running title (asked once a
-minute), the marker sends only a picked game.
+Open items: the internet-direct preview channel for Friends (Details over the internet go through
+the hub's relayed preview); the card's game is the host's pick or the console's running title
+(asked once a minute), the marker sends only a picked game.
+
+## Reconciled (rooms-gaps): one form for each, in engine, PS5Upload UI and PS5Upload Play
+
+Checked end to end by `make -C apps/play e2e-engine`: the real engine's routes in-process
+(`engine/.../src/play_cli_e2e_tests.rs`) with the app's own guest and companion code (`play-cli`).
+
+| What | The one form | Fixed on |
+|---|---|---|
+| How someone found the room | `came` (`invite`, `again`, `nearby`, `friends`, `rooms`, `group`) on guests, asks and Recent players; `via` stays `lan`/`internet` | engine (asks and guests in the app's status had none); UI read `source`, app read `via` |
+| Let a PS5's players in | `decide {id, allow: "group"}` (HTTP and the TV) | UI sent `allow: true, group: true` |
+| A PS5's group on an ask | `group`: the first player's id; `players`: names of everyone from that PS5 with the one asking (the count the UI and the app show) | UI read `group` as a count |
+| Wrong password | `{"stage": "refused", "why": "password", "tries_left"}` on the guest socket, `{"knock": "no", …, "tries_left"}` on a lobby | app read `left` |
+| Name taken | `{"stage": "refused", "why": "name_taken", "suggest", "name_taken": {"suggest"}}` | app saw a plain refusal |
+| Status + room push | one message `{"room": …, "status": …}` every second | app read only its first key (the room), never the status |
+| Room approvals from the TV | one switch at a time, merged | engine replaced all three (one switch reset the others) |
+| The host's quick message from the TV | `chat {quick, notice}` | app sent no notice (engine refuses before it) |
+| Rooms list through the engine | `/api/join/rooms?<query>`, `/api/join/rooms/status?r=`, `/api/join/rooms/{id}/preview` (the hub's own paths) | engine took `?status=` / `?preview=` |
+| Ready check | `POST /api/join/ready {addr, start}`, TV `ready {start}`; guests get `{"ready": {"left_s"}}`, answer `{"ready": true}`; views carry `ready {left_s, asked, ready, all}` and each guest `ready` | engine (new) |
+| Recent players | `GET /api/join/history` → `{players: [{id, name, tag, last_unix, minutes, came}]}`, `POST /api/join/history/forget {id} | {all}` | engine (new) |
+| Friends playing guard | `X-Confirm-Friends: 1`, `?confirm_friends=1` or `confirm_friends` in the body | already one |
+| A room handed over from the phone | `https://…/join/#lobby=<id>&n=&tag=&pw=1&via=rooms|friends`: the app joins it as that room's card | app (new) |
+
+### Gaps closed (engine)
+
+- **Many controllers on one PS5**: a hello with `group` (a player-in's resume token) and
+  `"media": false` asks as `came: "group"` (no invite or code needed, no same-device refusal),
+  never a stranger unless that first player is; `decide allow: "group"` lets every further
+  controller of that PS5 in without asking. Each counts against the room's size (`full` when it is).
+  Each socket has its own pad, status, rumble and light. `{"release": 1}` from the first player
+  frees their pad and place; their socket keeps the picture for the others and ends (`bye: left`)
+  with the last of them. Guests carry `group` in every view.
+- **"It's me"**: an ask from the host's own device (this computer, or a PS5 whose PS5Upload Play
+  is paired here) carries `own: true`; `decide allow: "me"` (only for such an ask, else 409
+  `not_own`) seats it on Player 1 when no host page drives the stream's controller, whatever "A
+  friend on the stream's controller" says, until a host page drives it again.
+- **Auto-restart after a friend takes the host's user**: 15 s and 35 s after the PS5 ended the
+  stream for that reason, with no page started it again, the engine starts it itself with no
+  page attached (the last session's size, rate, codec and paired user; keys from the store), at
+  most 3 times in 10 minutes per console; logged either way. Not seen on hardware.
+- **Ready check, Recent players** (above); **the host's PS5 link** (`host_link {rtt_ms, tier}`,
+  Remote Play's own round trip) in the room view, the room push and the preview.
+- **The helper's mesh hello** answers `"app_api": true` (payload/src/mesh.c).
+
+### PS5Upload Play side
+
+- The parsers that share token buffers (the room push, the chat history) take one reader at a
+  time: every controller's socket has its own thread.
+- The app has the `allow: "me"` and `ready` intents (`Companion::its_me`, `ready_check`); the TV
+  screens don't offer them yet (new words in 21 languages): open item.
 
 # Play Rooms: where the clients (rooms-ui) differ from the design or assume
 
@@ -189,7 +232,7 @@ those don't spell out, or where they read something two ways.
 ## Engine API the clients read
 
 - **Where a player or an ask came from.** `GET /api/join` already has `via: "lan" | "internet"` on
-  each guest (how they connect). The room's "how they found it" is read from `source` first, and
+  each guest (how they connect). The room's "how they found it" is read from `came` first, and
   from `via` only when it is a room word (`invite`, `again`, `nearby`, `friends`, `rooms`, `group`).
   `from_rooms: true` also marks a stranger.
 - **Room view** (`room` of `GET /api/join`): read as `join_room_api.rs` `room_view` writes it
@@ -204,12 +247,12 @@ those don't spell out, or where they read something two ways.
   players start muted" go to `POST /api/join/comms`. `POST /api/join/open` carries the same body as
   `room` (Create a Play Room); when it also set chat/voice, `/api/join/comms` follows the open.
 - **Ready check** (design 7.5): `POST /api/join/ready {addr, start: true}`; guests send
-  `{"ready": true}` and get `{"ready": {"left_s"}}`. Not in the engine yet: the buttons show only
+  `{"ready": true}` and get `{"ready": {"left_s"}}`. In the engine (rooms-gaps); the buttons show only
   when the room view has `ready`, and the guest prompt only when the message comes.
-- **A whole PS5 at once**: `POST /api/join/decide {addr, id, allow: true, group: true}` for an ask with
-  `group > 1` (integration P2). Assumed.
+- **A whole PS5 at once**: `POST /api/join/decide {addr, id, allow: "group"}` for an ask with
+  `players` naming more than one (integration P2).
 - **Recent players**: `GET /api/join/history` → `{players: [{id, name, tag, last_unix, minutes,
-  via}]}`, `POST /api/join/history/forget {id} | {all: true}`. Hidden when absent.
+  came}]}`, `POST /api/join/history/forget {id} | {all: true}`. Hidden when absent.
 - **Rooms list in the apps**: `GET /api/join/rooms?<hub query>`, `/api/join/rooms/status?r=…`,
   `/api/join/rooms/<id>/preview` on the engine as a proxy of the hub's `/rooms…`, with an optional
   `hub` (host[:port]) in the list answer so the app knocks on the same hub. When the engine answers
@@ -245,8 +288,8 @@ those don't spell out, or where they read something two ways.
 - **Room hand-off link**: `https://ps5upload.phantomptr.com/join/#lobby=<id>&hub=<host>&n=<host
   name>&tag=<tag>&pw=1&via=rooms`. The join page joins it like an invite (name, password if `pw`,
   waiting, playing). The same link is what "Open in PS5Upload" (`ps5upload://join?link=…`) and "Play
-  on my PS5" hand over: PS5Upload Play (agent D) needs to accept a `#lobby=` link from the phone
-  hand-off to join a room that way; until then it says it can't use the link.
+  on my PS5" hand over: PS5Upload Play joins a `#lobby=` link from the phone hand-off as that
+  room's card (rooms-gaps).
 - **Rooms page**: `site/rooms/index.html` (built from `client/src/rooms`, `npm run build:rooms`,
   checked by `scripts/check-embedded-pages.mjs`). It calls the hub straight; the hub's CORS must allow
   the website origin (it does).

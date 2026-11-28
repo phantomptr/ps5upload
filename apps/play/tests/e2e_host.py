@@ -161,7 +161,7 @@ check({"room": {"visibility": "public"}} in it and {"room": {"password": "hunter
       and {"room": {"chat": "quick"}} in it and {"room": {"voice": "ptt"}} in it, "room settings")
 check({"mute": {"player": 2, "voice": True, "chat": False}} in it and {"kick": {"player": 2, "block": "room"}} in it
       and {"unblock": {"tag": "9C11"}} in it, "mute, remove + block, unblock")
-check({"decide": {"ask": 7, "allow": "group"}} in it and {"chat": {"quick": 5}} in it, "let a PS5's group in; a quick message")
+check({"decide": {"ask": 7, "allow": "group"}} in it and {"chat": {"quick": 5, "notice": 1}} in it, "let a PS5's group in; a quick message")
 
 # 9. Easy join (docs/EASY_JOIN.md): a pass for Play again, and asking again with it.
 p, port, rep = engine("friend", "--seconds", "3")
@@ -457,7 +457,7 @@ check("phase joined" in out and "room name=Couch chaos players=3" in out, "the r
 check(r["notices"] == [1], "the accepted notice reaches the engine once")
 check(r["chats"] == [{"quick": 3}, {"text": "hello https://x.io there"}], "a quick message by id and a typed line")
 check("text now 0" in out and "note=slow" in out, "a second line within 2 s: Slow down, nothing sent")
-check(r["mics"][:1] == ["ptt_down"] and r["mics"][-1:] == ["ptt_up"], "push-to-talk edges")
+check(r["mics"][:2] == ["on", "ptt_down"] and r["mics"][-1:] == ["ptt_up"], "the mic on, then push-to-talk edges")
 check(len(r["voice_up"]) == 12 and all(v["len"] == 40 and v["level"] == 180 for v in r["voice_up"])
       and [v["seq"] for v in r["voice_up"]] == list(range(12)), "voice frames up: [6][seq][level][Opus]")
 cl = chat_line(out)

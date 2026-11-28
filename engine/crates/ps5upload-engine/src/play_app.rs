@@ -796,6 +796,20 @@ fn with_hub<R>(f: impl FnOnce(&mut Hub) -> R) -> R {
 #[cfg(test)]
 static TEST_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
+/// A PS5Upload Play pairing for `console`, made in a fresh in-memory hub (the real-engine e2e with
+/// the app's own code, join.rs `play_cli`): its token.
+#[cfg(test)]
+pub(crate) fn test_pair(console: &str) -> String {
+    *TEST_DIR.lock().unwrap() = None;
+    *HUB.lock().unwrap() = None;
+    with_hub(|h| {
+        h.store()
+            .add(console, Some("Test PS5".into()), unix_now(), None, None)
+    })
+    .unwrap()
+    .1
+}
+
 /// Where the paired apps are kept. The tests never write the user's own data folder.
 fn store_path() -> Option<PathBuf> {
     #[cfg(test)]
@@ -842,9 +856,17 @@ fn minimal_doc() -> Value {
 fn status(console: &str, secrets: bool) -> Value {
     let brief = crate::consoles_api::console_brief(console);
     let (name, settings) = brief.unwrap_or_default();
+    // The PS5 user the stream plays as (the console's user in front, else the paired user the
+    // session signed in), and who owns the console (the first paired user with a name here, else
+    // the stream's user): the TV app offers ending and loosening actions only to them.
+    let user =
+        crate::join::front_user(console).or_else(|| crate::rp_stream_api::session_user(console));
+    let owner = crate::consoles_api::owner_name(console).or_else(|| user.clone());
     let session = match crate::rp_stream_api::live_video(console) {
-        Some((codec, kbps)) => json!({"state": "playing", "codec": codec, "bitrate_kbps": kbps}),
-        None => json!({"state": "idle"}),
+        Some((codec, kbps)) => {
+            json!({"state": "playing", "codec": codec, "bitrate_kbps": kbps, "user": user})
+        }
+        None => json!({"state": "idle", "user": null}),
     };
     let app = with_hub(|h| h.reports.get(&host_key(console)).cloned()).unwrap_or_default();
     let (helper_version, app_api) = crate::mesh_api::helper_info(console);
@@ -853,7 +875,7 @@ fn status(console: &str, secrets: bool) -> Value {
             "version": env!("CARGO_PKG_VERSION"),
             "name": crate::mesh_api::device_name(),
         },
-        "console": {"addr": console, "name": name},
+        "console": {"addr": console, "name": name, "owner": owner},
         "session": session,
         "together": crate::join::app_view(console, secrets),
         // Remote Play paired with this console on this engine; the helper heard from lately.
@@ -1431,14 +1453,10 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
     match kind {
         "decide" => {
             let ask = b["ask"].as_u64().ok_or("ask")?;
-            // "group" (let all from that PS5 in): taken as a yes until groups land (each further
-            // controller still asks).
-            let allow = match &b["allow"] {
-                Value::Bool(x) => *x,
-                Value::String(x) if x == "group" => true,
-                _ => return Err("allow".into()),
-            };
-            crate::join::decide_on(console, ask, allow).map_err(str::to_string)?;
+            // true / false, "group" (let every player from that PS5 in: its further controllers
+            // get in without asking), "me" (the host's own device: Player 1).
+            let d = crate::join::decision_from(&b["allow"]).ok_or("allow")?;
+            crate::join::decide_on(console, ask, d).map_err(str::to_string)?;
             Ok(json!({}))
         }
         "kick" => {
@@ -1510,6 +1528,14 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
             let notice = b["notice"].as_u64().and_then(|n| u32::try_from(n).ok());
             crate::join_comms::host_says(console, quick, text, notice).map_err(str::to_string)?;
             Ok(json!({}))
+        }
+        // The room's ready check (everyone in gets "Ready?" for 30 s).
+        "ready" => {
+            if b["start"].as_bool() != Some(true) {
+                return Err("start".into());
+            }
+            let v = crate::join::room_api::ready_start(console).map_err(str::to_string)?;
+            Ok(json!({"ready": v}))
         }
         "unblock" => {
             let tag = b["tag"].as_str().ok_or("tag")?;

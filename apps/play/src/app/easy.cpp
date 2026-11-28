@@ -160,6 +160,24 @@ void App::start_join_how(const char *code, const JoinExtras &x, const route::Can
 
 void App::join_invite(const invite::Invite &inv) noexcept
 {
+    if (inv.lobby[0])
+    {
+        // A Play Room handed over from the phone: joined as its card in Rooms is (the notice, the
+        // password on the keyboard, a knock on its lobby through this home's PS5Upload).
+        rooms::Card k;
+        k.group = !std::strcmp(inv.via, "friends") ? rooms::Group::friends : rooms::Group::pub;
+        std::snprintf(k.room, sizeof k.room, "%s", inv.lobby);
+        std::snprintf(k.host, sizeof k.host, "%s", inv.name);
+        std::snprintf(k.name, sizeof k.name, "%s", inv.name);
+        std::snprintf(k.tag, sizeof k.tag, "%s", inv.tag);
+        k.pw = inv.pw;
+        k.proto = rooms::kProto;
+        k.cap_ps5app = true; // the link came from a page that plays rooms with this app
+        k.cap_knock = true;
+        log("app: a room handed over from the phone");
+        choose_card(k);
+        return;
+    }
     const char *who = inv.name[0] ? inv.name : tr(S::host_friend);
     // An internet invite (room and certificate) can go through this home's PS5Upload (the bridge,
     // docs/ROUTES.md §6) when nothing direct answers.
