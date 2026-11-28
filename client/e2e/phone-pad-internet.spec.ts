@@ -16,6 +16,8 @@ import { expect, test, type Page } from "@playwright/test";
 //
 // Needs cargo, so it runs only when asked: PS5UPLOAD_E2E_INTERNET=1 npx playwright test
 // phone-pad-internet (it builds the hub and the engine's test binary first).
+// PS5UPLOAD_E2E_HUB_BIN=<path> runs another hub binary (another release's: the hub
+// compatibility runs, engine/crates/ps5upload-hub/COMPAT.md).
 
 const RUN = !!process.env.PS5UPLOAD_E2E_INTERNET;
 const ENGINE_DIR = fileURLToPath(new URL("../../engine/", import.meta.url));
@@ -124,7 +126,7 @@ test.beforeAll(async () => {
 
   // The hub, letting only this page's origin in (as it lets only the website's in production).
   hubPort = await freePort();
-  const hub = spawn(`${ENGINE_DIR}target/debug/ps5upload-hub`, [], {
+  const hub = spawn(process.env.PS5UPLOAD_E2E_HUB_BIN || `${ENGINE_DIR}target/debug/ps5upload-hub`, [], {
     env: { ...process.env, HUB_HTTP_LISTEN: `127.0.0.1:${hubPort}`, HUB_ALLOWED_ORIGINS: siteOrigin },
     stdio: ["ignore", "pipe", "pipe"],
   });

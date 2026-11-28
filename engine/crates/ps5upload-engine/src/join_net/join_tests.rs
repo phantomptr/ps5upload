@@ -904,6 +904,13 @@ async fn e2e_internet_guest_fixture() {
         upnp: false,
         ..Settings::default()
     });
+    // With PS5UPLOAD_E2E_LOBBY the Play Room's lobby runs too (it never starts under test
+    // otherwise): a Public or Friends room set through `/api/join/room` lists on the hub.
+    let lobby = std::env::var_os("PS5UPLOAD_E2E_LOBBY").is_some();
+    if lobby {
+        crate::join_room::test_clear_blocks();
+        crate::join_net::lobby::TEST_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let console = "10.77.0.60";
     set_helper(console, Arc::new(FakeHelper::default()));
     set_live(console, 1);
@@ -951,6 +958,11 @@ async fn e2e_internet_guest_fixture() {
     });
     let _ = served.await;
     close_party(console).await;
+    if lobby {
+        crate::join_net::lobby::changed();
+        crate::join_net::lobby::TEST_LOBBY.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = crate::join_room::set_password(None);
+    }
     set_live(console, 0);
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }

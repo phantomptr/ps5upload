@@ -155,7 +155,8 @@ redeploy of the existing app). Steps:
 
 1. Locally: `cd engine && cargo nextest run -p ps5upload-hub`, then the load test
    (`cargo test -p ps5upload-hub --release --test load -- --ignored --nocapture`); it must pass
-   (memory, list latency, no host dropped).
+   (memory, list latency, no host dropped). Released apps against the new hub and the new apps
+   against the old one: [COMPAT.md](../COMPAT.md) (results of 2026-11-28 and how to re-run).
 2. Optional, to switch things at run time from your computer: an admin token (a Fly secret; the
    admin routes exist only with it, and only on the private metrics port):
    ```sh

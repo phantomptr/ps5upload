@@ -216,8 +216,14 @@ async fn ws(
     match tokio_tungstenite::connect_async(req).await {
         Ok((w, _)) => Some(w),
         Err(e) => {
-            if !xff.starts_with("100.") {
+            // Robots (100.x) are refused on purpose. Hosts are 10.x and knocking guests 172.16.x:
+            // a knock that cannot connect is the test machine running out of ports (macOS has
+            // ~16k and keeps closed ones 30 s), not a host the hub dropped (`hosts_dropped`
+            // counts those, and the run fails on any).
+            if xff.starts_with("10.") {
                 eprintln!("load: a host could not connect: {e}");
+            } else if !xff.starts_with("100.") {
+                eprintln!("load: a knocking guest could not connect: {e}");
             }
             None
         }
