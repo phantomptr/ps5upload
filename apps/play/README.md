@@ -2,13 +2,17 @@
 
 A native PS5 app (title `FAKE99261`) with two roles:
 
-- **On a friend's PS5 (guest):** join a Play Together session by its 6-character code, or ask to
-  join the game on a computer nearby, and play it full screen with your own controller: picture
-  (hardware HEVC/H.264 decode), sound (Opus), rumble and light bar. Hold OPTIONS + TOUCHPAD for
-  the host's PS button; hold L1 + R1 + OPTIONS + TOUCHPAD to leave.
-- **On the host's PS5 (companion):** pair once with PS5Upload (a code typed into PS5Upload ›
-  Play › Play Together › Pair PS5Upload Play), then see the session, let friends in or say no,
-  share the invite code and QR code, see who is playing, and change Play Together's switches.
+- **On a friend's PS5 (guest):** join a Play Room (a room on the network, Play again, a friend's
+  room, the public Rooms list, an invite pushed to this PS5, the phone's "Play on my PS5", or its
+  6-character code) and play it full screen with your own controller: picture (hardware HEVC/H.264
+  decode, HDR tone-mapped), sound (Opus), rumble and light bar, room chat and push-to-talk voice
+  with the DualSense mic, and several controllers as several players. Hold OPTIONS + TOUCHPAD for
+  the host's PS button; hold L1 + R1 + OPTIONS + TOUCHPAD to leave; OPTIONS + TOUCHPAD then △
+  opens the Room menu.
+- **On the host's PS5 (companion):** pairs with PS5Upload by itself when the helper runs (a
+  one-time grant), else with the TV's code typed into PS5Upload (Play › Play Room, the PS5Upload
+  Play card); then see the room, let friends in or say no, share the invite
+  code and QR code, see who is playing, and change the room's settings.
 
 The app speaks PS5Upload's 21 languages: the PS5's system language when it is one of them
 (else English), or the one picked in Settings (Hindi, Bengali and Persian, which the PS5 has no
@@ -24,6 +28,9 @@ when the helper runs, the app also uses its loopback app API (`127.0.0.1:9181`):
 its mesh (Tailscale ones through the helper's forward), this console's Remote Play readiness,
 turning Remote Play on (✕ twice) and a Remote Play pairing PIN.
 Settings and the log are in `/data/ps5upload-play/`.
+
+Play Rooms in the app (screens, chat, voice, the wire): [docs/ROOMS.md](docs/ROOMS.md); the way to
+the engine and its tiers: [docs/ROUTES.md](docs/ROUTES.md).
 
 **Easy join** ([docs/EASY_JOIN.md](docs/EASY_JOIN.md)): the home screen lists games open on this
 network ("Join Alex's game", one press) and hosts played with before ("Play again", one press, the

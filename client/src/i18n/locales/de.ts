@@ -8387,7 +8387,7 @@ helper_copies_failed_body: "Weiterhin der alte Helfer: {list}. Die PS5 startet i
 "pt_share": "Teilen",
 "pt_share_text": "Spiel mit mir auf meiner PS5",
 "pt_code_label": "Kurzcode",
-"pt_code_hint": "Freunde im selben Netzwerk können ihn unter Spielen › Bei Freunden mitspielen eingeben.",
+"pt_code_hint": "Freunde im selben Netzwerk können ihn unter Spielen › Spieleraum › Mit Code/Link beitreten eingeben.",
 "join_full_to_play": "Tippe auf Vollbild, um mit dem Bildschirm-Controller zu spielen.",
 "join_code_label": "Oder der Kurzcode",
 "join_code_unknown": "Niemand in der Nähe hostet mit diesem Code. Prüfe ihn oder füge den Link ein.",

@@ -8386,7 +8386,7 @@ helper_copies_failed_body: "Hâlâ eski yardımcı: {list}. PS5 her yeniden baş
 "pt_share": "Paylaş",
 "pt_share_text": "PS5'imdeki oyunuma katıl",
 "pt_code_label": "Kısa kod",
-"pt_code_hint": "Aynı ağdaki bir arkadaşın bunu Oyna › Bir arkadaşa katıl bölümüne yazabilir.",
+"pt_code_hint": "Aynı ağdaki bir arkadaşın bunu Oyna › Oyun Odası › Kod/bağlantı ile katıl bölümüne yazabilir.",
 "join_full_to_play": "Ekran kumandasıyla oynamak için Tam ekran'a dokun.",
 "join_code_label": "Ya da kısa kod",
 "join_code_unknown": "Yakında bu kodla oyun açan kimse yok. Kodu kontrol et ya da bağlantıyı yapıştır.",

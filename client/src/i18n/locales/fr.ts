@@ -8395,7 +8395,7 @@ helper_copies_failed_body: "Toujours l'ancien assistant : {list}. La PS5 le rela
 "pt_share": "Partager",
 "pt_share_text": "Rejoins ma partie sur ma PS5",
 "pt_code_label": "Code court",
-"pt_code_hint": "Un ami sur le même réseau peut le saisir dans Jouer › Rejoindre un ami.",
+"pt_code_hint": "Un ami sur le même réseau peut le saisir dans Jouer › Salle de jeu › Rejoindre avec un code/lien.",
 "join_full_to_play": "Touchez plein écran pour jouer avec la manette à l'écran.",
 "join_code_label": "Ou le code court",
 "join_code_unknown": "Personne à proximité n'héberge avec ce code. Vérifiez-le ou collez le lien.",

@@ -8381,7 +8381,7 @@ helper_copies_failed_body: "Vẫn là trình trợ giúp cũ: {list}. PS5 sẽ c
 "pt_share": "Chia sẻ",
 "pt_share_text": "Vào chơi game của mình trên PS5 của mình nhé",
 "pt_code_label": "Mã ngắn",
-"pt_code_hint": "Bạn bè cùng mạng có thể nhập mã trong Chơi › Vào chơi cùng bạn.",
+"pt_code_hint": "Bạn bè cùng mạng có thể nhập mã trong Chơi › Phòng chơi › Tham gia bằng mã/liên kết.",
 "join_full_to_play": "Chạm toàn màn hình để chơi bằng tay cầm trên màn hình.",
 "join_code_label": "Hoặc mã ngắn",
 "join_code_unknown": "Không ai gần đây đang tổ chức với mã đó. Hãy kiểm tra lại, hoặc dán liên kết.",

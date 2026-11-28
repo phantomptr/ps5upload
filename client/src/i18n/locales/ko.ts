@@ -8396,7 +8396,7 @@ helper_copies_failed_body: "여전히 이전 헬퍼입니다: {list}. PS5는 재
 "pt_share": "공유",
 "pt_share_text": "내 PS5 게임에 같이 참여해요",
 "pt_code_label": "짧은 코드",
-"pt_code_hint": "같은 네트워크의 친구가 플레이 › 친구 게임 참여에서 입력할 수 있어요.",
+"pt_code_hint": "같은 네트워크의 친구가 플레이 › 플레이 룸 › 코드/링크로 참여에서 입력할 수 있어요.",
 "join_full_to_play": "전체 화면을 탭하면 화면 컨트롤러로 플레이할 수 있어요.",
 "join_code_label": "또는 짧은 코드",
 "join_code_unknown": "근처에 이 코드로 호스트 중인 사람이 없어요. 코드를 확인하거나 링크를 붙여 넣으세요.",

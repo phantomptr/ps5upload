@@ -8790,7 +8790,7 @@ helper_copies_failed_body: "Still the old helper: {list}. The PS5 starts it agai
 "pt_share": "Share",
 "pt_share_text": "Join my game on my PS5",
 "pt_code_label": "Short code",
-"pt_code_hint": "A friend on the same network can type it in Play › Join a friend.",
+"pt_code_hint": "A friend on the same network can type it in Play › Play Room › Join with a code/link.",
 "join_full_to_play": "Tap full screen to play with the on-screen controller.",
 "join_code_label": "Or the short code",
 "join_code_unknown": "No one nearby is hosting with that code. Check it, or paste the link.",

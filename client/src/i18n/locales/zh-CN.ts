@@ -8339,7 +8339,7 @@ helper_copies_failed_body: "仍是旧助手：{list}。PS5 每次重启后都会
 "pt_share": "分享",
 "pt_share_text": "来我的 PS5 上加入我的游戏",
 "pt_code_label": "短代码",
-"pt_code_hint": "同一网络中的好友可以在 畅玩 › 加入好友 中输入。",
+"pt_code_hint": "同一网络中的好友可以在 畅玩 › 畅玩房间 › 用代码/链接加入 中输入。",
 "join_full_to_play": "点按全屏，即可用屏幕手柄游玩。",
 "join_code_label": "或输入短代码",
 "join_code_unknown": "附近没有人用这个代码主持游戏。请核对代码，或粘贴链接。",

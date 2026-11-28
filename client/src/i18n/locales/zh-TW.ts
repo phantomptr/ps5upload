@@ -8333,7 +8333,7 @@ helper_copies_failed_body: "仍是舊助手：{list}。PS5 每次重新啟動後
 "pt_share": "分享",
 "pt_share_text": "來我的 PS5 加入我的遊戲",
 "pt_code_label": "短代碼",
-"pt_code_hint": "同一網路中的好友可以在 暢玩 › 加入好友 中輸入。",
+"pt_code_hint": "同一網路中的好友可以在 暢玩 › 暢玩房間 › 用代碼/連結加入 中輸入。",
 "join_full_to_play": "點一下全螢幕，即可用螢幕上的控制器遊玩。",
 "join_code_label": "或輸入短代碼",
 "join_code_unknown": "附近沒有人用這個代碼主持遊戲。請核對代碼，或貼上連結。",

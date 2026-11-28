@@ -8333,7 +8333,7 @@ helper_copies_failed_body: "Sigue siendo el ayudante antiguo: {list}. La PS5 lo 
 "pt_share": "Compartir",
 "pt_share_text": "Únete a mi partida en mi PS5",
 "pt_code_label": "Código corto",
-"pt_code_hint": "Un amigo en la misma red puede escribirlo en Jugar › Unirme a un amigo.",
+"pt_code_hint": "Un amigo en la misma red puede escribirlo en Jugar › Sala de juego › Unirse con un código/enlace.",
 "join_full_to_play": "Toca pantalla completa para jugar con el mando en pantalla.",
 "join_code_label": "O el código corto",
 "join_code_unknown": "Nadie cerca está organizando una partida con ese código. Revísalo o pega el enlace.",

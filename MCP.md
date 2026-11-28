@@ -29,10 +29,10 @@ More than 120 tools, all of them thin layers over [the engine's API](API.md):
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `folder_sizes*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive, folder sizes |
 | Payloads | `payloads_*` | Catalogue, the payload sources you added (list, check for a new release, download its file), new-version checks and rollback, send (a file, or a copy already on the computer), store, autoload, Payload Manager sync. Built-in catalogue payloads are never downloaded, and only you can add a source, in the app |
 | Remote Play | `rp_*` | Start and stop a session, see the picture, press buttons, type, answer a passcode; see what the controller sends and how pairing went |
-| Friends and viewers | `together_*`, `golive_*`, `share_*` | Open Play Together and invite; go live; share an app's things with a friend |
+| Friends and viewers | `together_*`, `golive_*`, `share_*` | Open a Play Room and invite; go live; share an app's things with a friend |
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
 
-**Play Together has one invite.** `together_invite` gives one link (`share.url`) that works on your
+**A Play Room has one invite.** `together_invite` gives one link (`share.url`) that works on your
 Wi-Fi and over the internet; a friend on your Wi-Fi stays on it. Without internet, or when the invite
 service is down, it gives your Wi-Fi's link (`share.works: "wifi"`, `share.why: "offline"`). What
 changed for agents:
@@ -301,7 +301,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `share_cancel` | Stop a share and its transfers |
 | `api_request` | Anything the API can do |
 
-While friends play through Play Together, `rp_stop`, `power_control`, `games_stop`, `processes_kill`,
+While friends play in a Play Room, `rp_stop`, `power_control`, `games_stop`, `processes_kill`,
 `games_launch`, `payloads_send` (the helper) and `consoles_helper_ensure` fail with `friends_playing`
 and the friends' names. The agent should ask you; it calls again with `confirm_friends: true` only
 when you say go ahead.
@@ -327,7 +327,7 @@ catalog too. No tool reaches the console documents that hold keys (`state`, `con
 backup slots), through `/api/mesh/doc` or by the helper's file path; the other documents stay readable.
 Keys are taken out of every answer a tool gets: `POST /api/ps5/power/pair` still pairs and stores them,
 and a Mesh Drive's password hash reads as `has_password`. `/api/consoles` says only whether a console has
-keys. Stream keys for Go live show only their last four characters. A live Play Together invite (its key, code and
+keys. Stream keys for Go live show only their last four characters. A live Play Room invite (its key, code and
 links) and the phone controller link (its QR address lets a phone on your network in without your
 Allow) are taken out of the status reads, `together_status` and a `GET /api/join` or `GET
 /api/ps5/rp/pad-link` through `api_request`, even when agents may only look: those answers keep
@@ -403,7 +403,7 @@ with a time limit. `queue_add` lines work up instead, `queue_wait` follows it, a
 known gaps](API.md#the-queue) apply.
 
 **Not reachable at all.** Schedules, play time, the notification inbox, a phone as a controller, and a
-friend's side of Play Together live in the app or on that device. See
+friend's side of a Play Room live in the app or on that device. See
 [What the API can't do](API.md#what-the-api-cant-do).
 
 ## What was tested

@@ -8394,7 +8394,7 @@ helper_copies_failed_body: "Ainda é o auxiliar antigo: {list}. O PS5 o inicia d
 "pt_share": "Compartilhar",
 "pt_share_text": "Entre no meu jogo no meu PS5",
 "pt_code_label": "Código curto",
-"pt_code_hint": "Um amigo na mesma rede pode digitá-lo em Jogar › Entrar no jogo de um amigo.",
+"pt_code_hint": "Um amigo na mesma rede pode digitá-lo em Jogar › Sala de jogo › Entrar com código/link.",
 "join_full_to_play": "Toque em tela cheia para jogar com o controle na tela.",
 "join_code_label": "Ou o código curto",
 "join_code_unknown": "Ninguém por perto está hospedando com esse código. Confira ou cole o link.",

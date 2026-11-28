@@ -8616,7 +8616,7 @@ helper_copies_failed_body: "Nadal stary pomocnik: {list}. PS5 uruchamia go ponow
 "pt_share": "Udostępnij",
 "pt_share_text": "Dołącz do mojej gry na PS5",
 "pt_code_label": "Krótki kod",
-"pt_code_hint": "Znajomy w tej samej sieci może go wpisać w Graj › Dołącz do znajomego.",
+"pt_code_hint": "Znajomy w tej samej sieci może go wpisać w Graj › Pokój gry › Dołącz kodem/linkiem.",
 "join_full_to_play": "Stuknij Pełny ekran, aby grać kontrolerem ekranowym.",
 "join_code_label": "Lub krótki kod",
 "join_code_unknown": "Nikt w pobliżu nie hostuje gry z tym kodem. Sprawdź go albo wklej link.",

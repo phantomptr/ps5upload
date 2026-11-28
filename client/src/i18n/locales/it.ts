@@ -8333,7 +8333,7 @@ helper_copies_failed_body: "Ancora il vecchio helper: {list}. La PS5 lo riavvia 
 "pt_share": "Condividi",
 "pt_share_text": "Unisciti alla mia partita sulla mia PS5",
 "pt_code_label": "Codice breve",
-"pt_code_hint": "Un amico sulla stessa rete può digitarlo in Gioca › Unisciti a un amico.",
+"pt_code_hint": "Un amico sulla stessa rete può digitarlo in Gioca › Stanza di gioco › Entra con un codice/link.",
 "join_full_to_play": "Tocca schermo intero per giocare con il controller a schermo.",
 "join_code_label": "Oppure il codice breve",
 "join_code_unknown": "Nessuno qui vicino ospita una partita con quel codice. Controllalo o incolla il link.",

@@ -8671,7 +8671,7 @@ helper_copies_failed_body: "Még mindig a régi segédprogram: {list}. A PS5 min
 "pt_share": "Megosztás",
 "pt_share_text": "Csatlakozz a játékomhoz a PS5-ömön",
 "pt_code_label": "Rövid kód",
-"pt_code_hint": "Egy barát ugyanazon a hálózaton beírhatja itt: Játék › Csatlakozás egy baráthoz.",
+"pt_code_hint": "Egy barát ugyanazon a hálózaton beírhatja itt: Játék › Játékszoba › Csatlakozás kóddal/linkkel.",
 "join_full_to_play": "Koppints a Teljes képernyő gombra, hogy a képernyős kontrollerrel játssz.",
 "join_code_label": "Vagy a rövid kód",
 "join_code_unknown": "A közelben senki sem hosztol ezzel a kóddal. Ellenőrizd, vagy illeszd be a linket.",

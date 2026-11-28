@@ -1,4 +1,4 @@
-# Hosting Play Together yourself
+# Hosting the Play Rooms hub and guest pages yourself
 
 An internet invite is a link to a small **guest page** (`/join/`, `/pad/` for a phone controller,
 `/share/` for Share links). The page and the host's engine are introduced by a **hub**, a
@@ -23,7 +23,7 @@ For your own Tailscale control and relay server, see
    pages. See [The built-in hub](#the-built-in-hub).
 2. **The standalone hub** ([engine/crates/ps5upload-hub](engine/crates/ps5upload-hub/deploy/README.md))
    on any small server, with the guest pages (`site/join/`, `site/pad/`, `site/share/` of the same
-   release) on any HTTPS web host. Then point the engine at both, in Settings › Play Together ›
+   release) on any HTTPS web host. Then point the engine at both, in Settings › Play Room ›
    Advanced or with `PS5UPLOAD_HUB_URL` and `PS5UPLOAD_PAGE_BASE`. The hub only accepts browsers
    from the origins in `HUB_ALLOWED_ORIGINS`; setting it replaces the list, so name all of them:
    your pages' origin and the app's (`tauri://localhost,http://tauri.localhost,https://tauri.localhost`).
@@ -93,7 +93,7 @@ play.example.com {
 
 Point `play.example.com` at your public address and forward TCP 80 and 443 on your router to this
 server. Do not forward 19113. Friends still connect to the engine directly for the game itself, as
-with the default hub (the router port in Settings › Play Together).
+with the default hub (the router port in Settings › Play Room).
 
 With nginx instead, forward the WebSocket headers:
 
@@ -113,7 +113,7 @@ location / {
 
 - `curl https://play.example.com/health` prints `ok`.
 - `curl -i https://play.example.com/api/join` answers `404`: the engine API is not there.
-- In the app, Settings › Play Together › Advanced shows the hub and the guest page address as set
+- In the app, Settings › Play Room › Advanced shows the hub and the guest page address as set
   on the engine's server. A new invite starts with `https://play.example.com/join/`.
 
 ## Your own Tailscale server (control and relay)

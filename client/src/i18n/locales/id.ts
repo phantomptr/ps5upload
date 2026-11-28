@@ -8388,7 +8388,7 @@ helper_copies_failed_body: "Masih helper lama: {list}. PS5 menjalankannya lagi s
 "pt_share": "Bagikan",
 "pt_share_text": "Gabung ke game saya di PS5",
 "pt_code_label": "Kode singkat",
-"pt_code_hint": "Teman di jaringan yang sama bisa mengetiknya di Main › Gabung ke teman.",
+"pt_code_hint": "Teman di jaringan yang sama bisa mengetiknya di Main › Ruang Main › Gabung dengan kode/tautan.",
 "join_full_to_play": "Ketuk Layar penuh untuk main dengan kontroler di layar.",
 "join_code_label": "Atau kode singkatnya",
 "join_code_unknown": "Tidak ada yang menjadi host di dekat sini dengan kode itu. Periksa lagi, atau tempel tautannya.",
