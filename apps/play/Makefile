@@ -29,8 +29,9 @@ release:
 
 test: unit e2e
 
-unit: $(T)/test_core
+unit: $(T)/test_core $(T)/test_route
 	$(T)/test_core
+	$(T)/test_route
 	$(PYTHON) -I tools/i18n.py check
 
 e2e: $(T)/play-cli
@@ -39,6 +40,11 @@ e2e: $(T)/play-cli
 $(T)/test_core: tests/test_core.cpp $(CORE) src/ui/i18n.cpp src/ui/strings.cpp $(wildcard src/core/*.hpp src/ui/*.hpp)
 	@mkdir -p $(T)
 	$(HOST_CXX) $(HOST_FLAGS) $(SAN) -o $@ tests/test_core.cpp $(CORE) src/ui/i18n.cpp src/ui/strings.cpp
+
+# The way to the engine (src/net/route.cpp): tiers, meters, switch rules, the backups' budget.
+$(T)/test_route: tests/test_route.cpp src/net/route.cpp src/net/route.hpp
+	@mkdir -p $(T)
+	$(HOST_CXX) $(HOST_FLAGS) $(SAN) -o $@ tests/test_route.cpp src/net/route.cpp
 
 $(T)/play-cli: tests/play_cli.cpp $(CORE) $(NET) $(wildcard src/*/*.hpp)
 	@mkdir -p $(T)
