@@ -8483,6 +8483,7 @@ helper_copies_failed_body: "Még mindig a régi segédprogram: {list}. A PS5 min
 "join_block_note": "{host} kikapcsolta a PS és Create gombot a barátoknak.",
 "join_guide_title": "Még egy lépés a tévén",
 "join_guide_body": "Nyomd meg egyszer a PS gombot a kontrollereden. A tévé megkérdezi: „Ki használja ezt a kontrollert?”. Válaszd a Gyors játékot vagy a saját felhasználódat. A házigazdának semmit sem kell tennie.",
+"join_guide_stuck": "Semmi sem mozdul azon a képernyőn? Kérd meg a házigazdát, hogy küldjön hibajelentést a PS5Uploadból: abból kiderül, hogy a PS5-je fogadja-e a kontrolleredet.",
 "join_guide_menus": "A PS5 kezdőképernyőjén csak a házigazda kezeli a menüket; a te kontrollered a játékokban működik.",
 "join_guide_ok": "Értem",
 "join_reconnecting": "Újracsatlakozás…",

@@ -8145,6 +8145,7 @@ helper_copies_failed_body: "Ancora il vecchio helper: {list}. La PS5 lo riavvia 
 "join_guide_title": "Ancora un passo sulla TV",
 "join_guide_body": "Premi PS una volta sul controller. La TV chiede \"Chi sta usando questo controller?\". Scegli Gioco rapido o il tuo utente. L'host non deve fare nulla.",
 "join_guide_menus": "Nella schermata iniziale della PS5 solo chi ospita controlla i menu; il tuo controller gioca dentro i giochi.",
+"join_guide_stuck": "Non si muove niente in quella schermata? Chiedi a chi ospita di inviare una segnalazione di bug da PS5Upload: mostra se la sua PS5 accetta il tuo controller.",
 "join_guide_ok": "Ho capito",
 "join_reconnecting": "Riconnessione…",
 "join_reconnecting_left": "Il tuo posto resta riservato per {time}.",

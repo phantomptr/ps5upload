@@ -8207,6 +8207,7 @@ helper_copies_failed_body: "Toujours l'ancien assistant : {list}. La PS5 le rela
 "join_block_note": "{host} a désactivé PS et Create pour les amis.",
 "join_guide_title": "Encore une étape sur la télé",
 "join_guide_body": "Appuyez une fois sur PS sur votre manette. La télé demande « Qui utilise cette manette ? ». Choisissez Jeu rapide ou votre propre utilisateur. L'hôte n'a rien à faire.",
+"join_guide_stuck": "Rien ne bouge sur cet écran ? Demandez à l'hôte d'envoyer un rapport de bug depuis PS5Upload : il montre si sa PS5 accepte votre manette.",
 "join_guide_menus": "Sur l'écran d'accueil de la PS5, seul l'hôte contrôle les menus ; votre manette joue dans les jeux.",
 "join_guide_ok": "Compris",
 "join_reconnecting": "Reconnexion…",

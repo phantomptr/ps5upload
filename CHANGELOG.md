@@ -9,6 +9,9 @@ What's new in ps5upload, written for humans.
 **PS5Upload Minion**
 - **Save backup times show the PS5's own time (#978).** On some consoles the page still showed backup times in UTC (3 hours ahead in Recife). Minion now reads the time zone the way the PS5's own clock does, and falls back to the old way when it can't. If times still look wrong, **Settings › Time zone** lets you pick your UTC offset by hand. Needs the new helper.
 
+**Play Together**
+- **When a friend's controller does nothing on "Who's using this controller?"** (reported on an early-firmware PS5), the helper log now says whether the PS5 took or refused that controller's input, so a bug report from the host shows where it stops. The friend's guide says to ask the host for one.
+
 ## 12.6.44
 
 **TV mode (#976)**

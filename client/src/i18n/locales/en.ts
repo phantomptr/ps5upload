@@ -8602,6 +8602,7 @@ helper_copies_failed_body: "Still the old helper: {list}. The PS5 starts it agai
 "join_block_note": "{host} turned off PS and Create for friends.",
 "join_guide_title": "One more step on the TV",
 "join_guide_body": "On your controller, press PS once. The TV asks \"Who's using this controller?\". Pick Quick Play or your own user. The host doesn't need to do anything.",
+"join_guide_stuck": "Nothing moves on that screen? Ask the host to send a bug report from PS5Upload: it shows whether their PS5 takes your controller.",
 "join_guide_menus": "On the PS5's home screen only the host controls the menus; your controller plays inside games.",
 "join_guide_ok": "Got it",
 "join_reconnecting": "Reconnecting…",

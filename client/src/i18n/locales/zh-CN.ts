@@ -8151,6 +8151,7 @@ helper_copies_failed_body: "仍是旧助手：{list}。PS5 每次重启后都会
 "join_guide_title": "电视上还差一步",
 "join_guide_body": "在手柄上按一次 PS 键。电视会询问“谁在使用这个手柄？”。选择“快速游戏”或你自己的用户。主机玩家无需任何操作。",
 "join_guide_menus": "在 PS5 主屏幕上只有房主能操作菜单；你的手柄在游戏里使用。",
+"join_guide_stuck": "那个画面上什么都动不了？请让房主从 PS5Upload 发送一份错误报告：它能显示房主的 PS5 是否接收了你的手柄。",
 "join_guide_ok": "知道了",
 "join_reconnecting": "正在重新连接…",
 "join_reconnecting_left": "你的位置会保留 {time}。",

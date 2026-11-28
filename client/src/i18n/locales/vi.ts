@@ -8193,6 +8193,7 @@ helper_copies_failed_body: "Vẫn là trình trợ giúp cũ: {list}. PS5 sẽ c
 "join_block_note": "{host} đã tắt PS và Create với bạn bè.",
 "join_guide_title": "Thêm một bước trên TV",
 "join_guide_body": "Bấm PS một lần trên tay cầm. TV sẽ hỏi \"Ai đang dùng tay cầm này?\". Chọn Chơi nhanh hoặc người dùng của bạn. Chủ phòng không cần làm gì.",
+"join_guide_stuck": "Màn hình đó không nhúc nhích gì? Hãy nhờ chủ phòng gửi báo cáo lỗi từ PS5Upload: báo cáo cho biết PS5 của họ có nhận tay cầm của bạn không.",
 "join_guide_menus": "Trên màn hình chính PS5 chỉ chủ phòng điều khiển menu; tay cầm của bạn chơi bên trong trò chơi.",
 "join_guide_ok": "Đã hiểu",
 "join_reconnecting": "Đang kết nối lại…",

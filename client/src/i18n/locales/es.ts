@@ -8145,6 +8145,7 @@ helper_copies_failed_body: "Sigue siendo el ayudante antiguo: {list}. La PS5 lo 
 "join_guide_title": "Un paso más en la tele",
 "join_guide_body": "Pulsa PS una vez en tu mando. La tele pregunta «¿Quién usa este mando?». Elige Juego rápido o tu propio usuario. El anfitrión no tiene que hacer nada.",
 "join_guide_menus": "En la pantalla de inicio de la PS5 solo el anfitrión controla los menús; tu mando juega dentro de los juegos.",
+"join_guide_stuck": "¿No se mueve nada en esa pantalla? Pide al anfitrión que envíe un informe de error desde PS5Upload: muestra si su PS5 acepta tu mando.",
 "join_guide_ok": "Entendido",
 "join_reconnecting": "Reconectando…",
 "join_reconnecting_left": "Tu sitio se guarda durante {time}.",

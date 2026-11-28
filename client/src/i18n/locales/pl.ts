@@ -8428,6 +8428,7 @@ helper_copies_failed_body: "Nadal stary pomocnik: {list}. PS5 uruchamia go ponow
 "join_block_note": "{host} wyłączył PS i Create dla znajomych.",
 "join_guide_title": "Jeszcze jeden krok na telewizorze",
 "join_guide_body": "Naciśnij raz PS na kontrolerze. Telewizor zapyta „Kto używa tego kontrolera?”. Wybierz Szybką grę albo swojego użytkownika. Gospodarz nie musi nic robić.",
+"join_guide_stuck": "Nic się nie rusza na tym ekranie? Poproś gospodarza o wysłanie raportu o błędzie z PS5Upload: pokaże, czy jego PS5 przyjmuje twój kontroler.",
 "join_guide_menus": "Na ekranie głównym PS5 menu steruje tylko gospodarz; twój kontroler działa w grach.",
 "join_guide_ok": "Rozumiem",
 "join_reconnecting": "Ponowne łączenie…",

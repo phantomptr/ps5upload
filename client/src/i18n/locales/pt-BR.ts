@@ -8206,6 +8206,7 @@ helper_copies_failed_body: "Ainda é o auxiliar antigo: {list}. O PS5 o inicia d
 "join_block_note": "{host} desativou PS e Create para amigos.",
 "join_guide_title": "Mais um passo na TV",
 "join_guide_body": "Aperte PS uma vez no seu controle. A TV pergunta \"Quem está usando este controle?\". Escolha Jogo rápido ou o seu próprio usuário. O anfitrião não precisa fazer nada.",
+"join_guide_stuck": "Nada se mexe nessa tela? Peça ao anfitrião para enviar um relatório de erro pelo PS5Upload: ele mostra se o PS5 dele aceita o seu controle.",
 "join_guide_menus": "Na tela inicial do PS5 só o anfitrião controla os menus; seu controle joga dentro dos jogos.",
 "join_guide_ok": "Entendi",
 "join_reconnecting": "Reconectando…",

@@ -8145,6 +8145,7 @@ helper_copies_failed_body: "仍是舊助手：{list}。PS5 每次重新啟動後
 "join_guide_title": "電視上還差一步",
 "join_guide_body": "在控制器上按一次 PS 按鈕。電視會詢問「誰在使用這支控制器？」。選擇「快速遊玩」或你自己的使用者。主持人不需要任何操作。",
 "join_guide_menus": "在 PS5 主畫面上只有房主能操作選單；你的控制器在遊戲裡使用。",
+"join_guide_stuck": "那個畫面上什麼都動不了？請房主從 PS5Upload 傳送一份錯誤報告：它能顯示房主的 PS5 是否接收了你的控制器。",
 "join_guide_ok": "知道了",
 "join_reconnecting": "正在重新連線…",
 "join_reconnecting_left": "你的位置會保留 {time}。",

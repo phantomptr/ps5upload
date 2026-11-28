@@ -8199,6 +8199,7 @@ helper_copies_failed_body: "Weiterhin der alte Helfer: {list}. Die PS5 startet i
 "join_block_note": "{host} hat PS und Create für Freunde ausgeschaltet.",
 "join_guide_title": "Noch ein Schritt am Fernseher",
 "join_guide_body": "Drücke einmal PS auf deinem Controller. Der Fernseher fragt „Wer benutzt diesen Controller?“. Wähle „Schnellspiel“ oder deinen eigenen Benutzer. Der Gastgeber muss nichts tun.",
+"join_guide_stuck": "Auf diesem Bildschirm bewegt sich nichts? Bitte den Host, in PS5Upload einen Fehlerbericht zu senden: Er zeigt, ob seine PS5 deinen Controller annimmt.",
 "join_guide_menus": "Auf dem Startbildschirm der PS5 steuert nur der Gastgeber die Menüs; dein Controller spielt in den Spielen.",
 "join_guide_ok": "Verstanden",
 "join_reconnecting": "Verbinde neu…",

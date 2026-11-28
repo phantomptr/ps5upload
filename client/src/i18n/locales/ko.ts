@@ -8208,6 +8208,7 @@ helper_copies_failed_body: "여전히 이전 헬퍼입니다: {list}. PS5는 재
 "join_block_note": "{host} 님이 친구의 PS 및 Create 버튼을 막아 두었어요.",
 "join_guide_title": "TV에서 한 단계만 더",
 "join_guide_body": "컨트롤러의 PS 버튼을 한 번 누르세요. TV에 \"이 컨트롤러를 누가 사용하나요?\"가 나타나요. 빠른 플레이나 내 사용자를 선택하세요. 호스트는 아무것도 하지 않아도 돼요.",
+"join_guide_stuck": "그 화면에서 아무것도 움직이지 않나요? 호스트에게 PS5Upload에서 버그 리포트를 보내 달라고 하세요. 호스트의 PS5가 내 컨트롤러를 받아들이는지 알 수 있어요.",
 "join_guide_menus": "PS5 홈 화면에서는 호스트만 메뉴를 조작할 수 있어요. 내 컨트롤러는 게임 안에서 플레이합니다.",
 "join_guide_ok": "알겠어요",
 "join_reconnecting": "다시 연결 중…",

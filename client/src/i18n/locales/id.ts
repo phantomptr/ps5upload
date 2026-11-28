@@ -8200,6 +8200,7 @@ helper_copies_failed_body: "Masih helper lama: {list}. PS5 menjalankannya lagi s
 "join_block_note": "{host} mematikan PS dan Create untuk teman.",
 "join_guide_title": "Satu langkah lagi di TV",
 "join_guide_body": "Tekan PS sekali di kontroler Anda. TV bertanya \"Siapa yang memakai kontroler ini?\". Pilih Main Cepat atau pengguna Anda sendiri. Tuan rumah tidak perlu melakukan apa pun.",
+"join_guide_stuck": "Tidak ada yang bergerak di layar itu? Minta host mengirim laporan bug dari PS5Upload: laporan itu menunjukkan apakah PS5-nya menerima kontroler Anda.",
 "join_guide_menus": "Di layar beranda PS5 hanya host yang mengendalikan menu; kontroler Anda berfungsi di dalam game.",
 "join_guide_ok": "Mengerti",
 "join_reconnecting": "Menyambung ulang…",

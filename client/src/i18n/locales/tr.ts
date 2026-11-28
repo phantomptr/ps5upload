@@ -8198,6 +8198,7 @@ helper_copies_failed_body: "Hâlâ eski yardımcı: {list}. PS5 her yeniden baş
 "join_block_note": "{host}, arkadaşlar için PS ve Create tuşlarını kapattı.",
 "join_guide_title": "Televizyonda bir adım daha",
 "join_guide_body": "Kumandandaki PS tuşuna bir kez bas. Televizyon \"Bu kumandayı kim kullanıyor?\" diye sorar. Hızlı Oyna'yı ya da kendi kullanıcını seç. Ev sahibinin bir şey yapması gerekmez.",
+"join_guide_stuck": "O ekranda hiçbir şey kıpırdamıyor mu? Ev sahibinden PS5Upload'dan bir hata raporu göndermesini iste: PS5'inin kumandanı alıp almadığını gösterir.",
 "join_guide_menus": "PS5 ana ekranında menüleri yalnızca ev sahibi kontrol eder; senin kumandan oyunların içinde çalışır.",
 "join_guide_ok": "Anladım",
 "join_reconnecting": "Yeniden bağlanıyor…",
