@@ -96,6 +96,7 @@ int parse_mesh(const char *text, std::size_t len, Engine *out, int cap) noexcept
         const double p = d.num(d.get(e, "port"), 0);
         x.port = p > 0 && p < 65536 ? static_cast<std::uint16_t>(p) : 0;
         x.preferred = preferred;
+        str(d, d.get(e, "id"), x.id, sizeof x.id);
         // Consoles are not engines; an entry without an address can't be dialled.
         if (!x.addr[0] || !std::strcmp(x.kind, "ps5") || !std::strcmp(x.kind, "console"))
             return;
@@ -109,6 +110,65 @@ int parse_mesh(const char *text, std::size_t len, Engine *out, int cap) noexcept
     for (std::uint32_t i = 0; i < d.count(online); ++i)
         take(d.item(online, i), false);
     return n;
+}
+
+int parse_grants(const char *text, std::size_t len, Grant *out, int cap) noexcept
+{
+    json::Token t[256];
+    json::Doc d(t, 256);
+    if (!d.parse(text, len) || d.type(0) != json::Type::object)
+        return 0;
+    const int g = d.get(0, "grants");
+    int n = 0;
+    for (std::uint32_t i = 0; i < d.count(g) && n < cap; ++i)
+    {
+        const int e = d.item(g, i);
+        Grant x;
+        str(d, d.get(e, "engine_id"), x.engine_id, sizeof x.engine_id);
+        str(d, d.get(e, "name"), x.name, sizeof x.name);
+        str(d, d.get(e, "kind"), x.kind, sizeof x.kind);
+        str(d, d.get(e, "addr"), x.addr, sizeof x.addr);
+        str(d, d.get(e, "app_ws"), x.app_ws, sizeof x.app_ws);
+        str(d, d.get(e, "grant"), x.grant, sizeof x.grant);
+        const double p = d.num(d.get(e, "port"), 0);
+        x.port = p > 0 && p < 65536 ? static_cast<std::uint16_t>(p) : 0;
+        x.expires_s = static_cast<int>(d.num(d.get(e, "expires_s"), 0));
+        if (x.grant[0] && x.addr[0] && x.port)
+            out[n++] = x;
+    }
+    return n;
+}
+
+int api_version() noexcept
+{
+    char buf[256];
+    const int st = call("GET", "/v1/version", nullptr, buf, sizeof buf);
+    if (st != 200)
+        return st < 0 ? -1 : 0;
+    json::Token t[16];
+    json::Doc d(t, 16);
+    return d.parse(buf, std::strlen(buf)) ? static_cast<int>(d.num(d.get(0, "api"), 0)) : 0;
+}
+
+int grants(Grant *out, int cap) noexcept
+{
+    static char buf[4096];
+    // one-time: each grant is gone from the helper once read
+    return call("GET", "/v1/play/grants", nullptr, buf, sizeof buf) == 200 ? parse_grants(buf, std::strlen(buf), out, cap) : 0;
+}
+
+bool intent(char *out, std::size_t cap) noexcept
+{
+    char buf[256];
+    out[0] = 0;
+    if (call("GET", "/v1/intent", nullptr, buf, sizeof buf) != 200)
+        return false;
+    json::Token t[16];
+    json::Doc d(t, 16);
+    if (!d.parse(buf, std::strlen(buf)))
+        return false;
+    str(d, d.get(0, "intent"), out, cap);
+    return out[0] != 0;
 }
 
 bool rp(Rp &out) noexcept

@@ -347,4 +347,206 @@ HubLink::Got HubLink::next(unsigned timeout_ms) noexcept
         bytes_in += in_len_;
     }
 }
+
+// ---- short GETs (the rooms list, a friend's room, a preview) ----------------------------------
+
+namespace
+{
+// "content-length: 12" style header value (case-insensitive name) in head; -1 when absent.
+long header_num(const char *head, const char *name) noexcept
+{
+    const std::size_t nl = std::strlen(name);
+    for (const char *p = head; *p; ++p)
+    {
+        if (p != head && p[-1] != '\n')
+            continue;
+        bool same = true;
+        for (std::size_t i = 0; i < nl && same; ++i)
+        {
+            char c = p[i];
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c - 'A' + 'a');
+            same = c == name[i];
+        }
+        if (same && p[nl] == ':')
+            return std::strtol(p + nl + 1, nullptr, 10);
+    }
+    return -1;
+}
+
+bool header_has(const char *head, const char *needle) noexcept
+{
+    const std::size_t nl = std::strlen(needle);
+    for (const char *p = head; *p; ++p)
+    {
+        std::size_t i = 0;
+        while (i < nl && p[i])
+        {
+            char c = p[i];
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c - 'A' + 'a');
+            if (c != needle[i])
+                break;
+            ++i;
+        }
+        if (i == nl)
+            return true;
+    }
+    return false;
+}
+} // namespace
+
+int HubLink::get(const char *url, char *out, std::size_t cap, unsigned timeout_ms, int *retry_after_s) noexcept
+{
+    close();
+    if (retry_after_s)
+        *retry_after_s = 0;
+    if (cap < 64)
+        return -1;
+    out[0] = 0;
+    // https:// and http:// as wss:// and ws:// for the parts
+    char wsurl[320];
+    if (!std::strncmp(url, "https://", 8))
+        std::snprintf(wsurl, sizeof wsurl, "wss://%s", url + 8);
+    else if (!std::strncmp(url, "http://", 7))
+        std::snprintf(wsurl, sizeof wsurl, "ws://%s", url + 7);
+    else
+    {
+        err_ = "url";
+        return -1;
+    }
+    char host[96], path[256];
+    std::uint16_t port = 0;
+    if (!split_ws_url(wsurl, &tls_on_, host, sizeof host, &port, path, sizeof path))
+    {
+        err_ = "url";
+        return -1;
+    }
+    std::uint32_t ip = 0;
+    if (!resolve_name(host, &ip))
+    {
+        err_ = dns_error();
+        return -1;
+    }
+    const int fd = dial(ip, port, timeout_ms, &err_);
+    if (fd < 0)
+        return -1;
+    fd_ = fd;
+    if (tls_on_ && !tls_.start(fd_, host, timeout_ms))
+    {
+        err_ = tls_.error();
+        close();
+        return -1;
+    }
+    char req[512];
+    const bool default_port = (tls_on_ && port == 443) || (!tls_on_ && port == 80);
+    char hosthdr[112];
+    if (default_port)
+        std::snprintf(hosthdr, sizeof hosthdr, "%s", host);
+    else
+        std::snprintf(hosthdr, sizeof hosthdr, "%s:%u", host, static_cast<unsigned>(port));
+    const int rl = std::snprintf(req, sizeof req,
+                                 "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PS5UploadPlay\r\n"
+                                 "Accept: application/json\r\nConnection: close\r\n\r\n",
+                                 path, hosthdr);
+    if (rl <= 0 || static_cast<std::size_t>(rl) >= sizeof req || !raw_write(req, static_cast<std::size_t>(rl)))
+    {
+        err_ = "send";
+        close();
+        return -1;
+    }
+    bytes_out += static_cast<std::uint64_t>(rl);
+    // the whole answer (head and body) into out
+    std::size_t have = 0;
+    long body_at = -1, want = -1;
+    bool chunked = false;
+    int status = -1;
+    const std::uint64_t until = now_us() + timeout_ms * 1000ull;
+    for (;;)
+    {
+        if (body_at >= 0 && want >= 0 && have >= static_cast<std::size_t>(body_at + want))
+            break;
+        const std::uint64_t now = now_us();
+        if (now >= until)
+        {
+            err_ = "timeout";
+            close();
+            return -1;
+        }
+        if (have + 1 >= cap)
+        {
+            err_ = "too_big";
+            close();
+            return -1;
+        }
+        const long n = raw_read(out + have, cap - 1 - have, static_cast<unsigned>((until - now) / 1000 + 1));
+        if (n < 0)
+            break; // closed: the answer ends here (Connection: close)
+        have += static_cast<std::size_t>(n);
+        bytes_in += static_cast<std::uint64_t>(n);
+        out[have] = 0;
+        if (body_at < 0)
+        {
+            const char *e = std::strstr(out, "\r\n\r\n");
+            if (!e)
+                continue;
+            body_at = e + 4 - out;
+            out[body_at - 2] = 0; // the head as its own string for the header lookups
+            if (std::sscanf(out, "HTTP/1.%*d %d", &status) != 1)
+                status = -1;
+            want = header_num(out, "content-length");
+            chunked = header_has(out, "transfer-encoding: chunked");
+            if (retry_after_s)
+            {
+                const long ra = header_num(out, "retry-after");
+                *retry_after_s = ra > 0 ? static_cast<int>(ra > 3600 ? 3600 : ra) : 0;
+            }
+            out[body_at - 2] = '\r';
+        }
+    }
+    close();
+    if (body_at < 0 || status < 0)
+    {
+        err_ = "answer";
+        return -1;
+    }
+    std::size_t blen = have - static_cast<std::size_t>(body_at);
+    std::memmove(out, out + body_at, blen);
+    out[blen] = 0;
+    if (chunked)
+    {
+        // de-chunk in place
+        std::size_t r = 0, w = 0;
+        for (;;)
+        {
+            char *end = nullptr;
+            const unsigned long sz = std::strtoul(out + r, &end, 16);
+            const char *nl = std::strstr(out + r, "\r\n");
+            if (!nl || sz == 0)
+                break;
+            r = static_cast<std::size_t>(nl - out) + 2;
+            if (r + sz > blen)
+                break;
+            std::memmove(out + w, out + r, sz);
+            w += sz;
+            r += sz + 2;
+        }
+        blen = w;
+        out[blen] = 0;
+    }
+    return status;
+}
+
+bool http_base_of(const char *hub_ws_url, char *out, std::size_t cap) noexcept
+{
+    bool tls = false;
+    char host[96], path[96];
+    std::uint16_t port = 0;
+    if (!split_ws_url(hub_ws_url, &tls, host, sizeof host, &port, path, sizeof path))
+        return false;
+    const bool def = (tls && port == 443) || (!tls && port == 80);
+    const int n = def ? std::snprintf(out, cap, "%s://%s", tls ? "https" : "http", host)
+                      : std::snprintf(out, cap, "%s://%s:%u", tls ? "https" : "http", host, static_cast<unsigned>(port));
+    return n > 0 && static_cast<std::size_t>(n) < cap;
+}
 } // namespace play::net

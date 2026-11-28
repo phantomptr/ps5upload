@@ -15,6 +15,8 @@ namespace play::net
 {
 void init() noexcept;
 std::uint64_t now_us() noexcept;
+// The console's clock (seconds since 1970), for what is kept across runs.
+std::uint64_t wall_seconds() noexcept;
 void sleep_ms(unsigned ms) noexcept;
 void random_bytes(std::uint8_t *out, std::size_t n) noexcept;
 

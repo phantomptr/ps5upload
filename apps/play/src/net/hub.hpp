@@ -49,6 +49,11 @@ class HubLink
     {
         return err_;
     }
+    // A short GET (https:// through TLS, or http:// for tests) on this link's buffers, closing
+    // any socket first: the answer's body into out (terminated), its status returned (-1: no
+    // answer). retry_after_s: a 429's Retry-After (0 none). The rooms list, a friend's room and
+    // a preview (PROTOCOL.md "Rooms"); the waiting room stays the only long-lived hub socket.
+    int get(const char *url, char *out, std::size_t cap, unsigned timeout_ms, int *retry_after_s = nullptr) noexcept;
     // Bytes and messages both ways since open (the hub's load, for the log).
     std::uint64_t bytes_in = 0, bytes_out = 0;
     unsigned msgs_in = 0, msgs_out = 0;
@@ -71,6 +76,8 @@ class HubLink
     const char *err_ = "";
 };
 
+// "wss://hub.example/ws" -> "https://hub.example" (ws:// -> http://, the port kept).
+bool http_base_of(const char *hub_ws_url, char *out, std::size_t cap) noexcept;
 // The parts of a hub URL: scheme, host, port, path. False when it is not ws:// or wss://.
 bool split_ws_url(const char *url, bool *tls, char *host, std::size_t host_cap, std::uint16_t *port, char *path,
                   std::size_t path_cap) noexcept;

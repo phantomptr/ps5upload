@@ -145,7 +145,11 @@ void App::start_join_how(const char *code, const JoinExtras &x, const route::Can
             bridge = true;
         }
     guest_->set_routes(ways, n_ways);
-    guest_->start(addr_, port_, code_, platform::user_name(), version_);
+    // the name the host sees ("Pick another name" changes it for this join), and this PS5's tag
+    if (!last_extras_.device[0])
+        std::snprintf(last_extras_.device, sizeof last_extras_.device, "%s", device_);
+    guest_->set_extras(last_extras_);
+    guest_->start(addr_, port_, code_, join_name_[0] ? join_name_ : platform::user_name(), version_);
     last_phase_ = -1;
     if (screen_ != Screen::joining)
         go(Screen::joining);
@@ -270,6 +274,28 @@ int App::easy_rows(EasyRow *out, int cap) noexcept
 {
     int n = 0;
     const std::uint64_t now = net::now_us();
+    // Back to the game this PS5 was in (the host's PS5 restarted, or this app was closed).
+    if (resume_.token[0] && !guest_->running() && net::wall_seconds() - resume_.at < 300 && n < cap)
+    {
+        EasyRow &r = out[n++];
+        r = EasyRow{};
+        r.kind = EasyRow::resume;
+        std::snprintf(r.name, sizeof r.name, "%s", resume_.name[0] ? resume_.name : tr(S::host_friend));
+        std::snprintf(r.addr, sizeof r.addr, "%s", resume_.addr);
+        r.port = resume_.port;
+    }
+    // A friend's room is open (Rooms › Your friends' rooms): one press.
+    for (int i = 0; i < rv_.n_friends && n < cap; ++i)
+    {
+        if (rv_.friends[i].locked || rooms::full(rv_.friends[i]))
+            continue;
+        EasyRow &r = out[n++];
+        r = EasyRow{};
+        r.kind = EasyRow::room;
+        r.card = rv_.friends[i];
+        r.card.group = rooms::Group::friends;
+        std::snprintf(r.name, sizeof r.name, "%s", r.card.host[0] ? r.card.host : tr(S::host_friend));
+    }
     if (has_invite_ && now < invite_until_ && n < cap)
     {
         EasyRow &r = out[n++];
@@ -340,6 +366,26 @@ bool App::easy_choose(const EasyRow &r) noexcept
         if (r.friend_)
             join_again(*r.friend_);
         return true;
+    case EasyRow::room:
+        choose_card(r.card);
+        return true;
+    case EasyRow::resume:
+    {
+        std::snprintf(addr_, sizeof addr_, "%s", resume_.addr);
+        port_ = resume_.port;
+        std::snprintf(engine_name_, sizeof engine_name_, "%s", resume_.name);
+        target_ = JoinTarget{};
+        std::snprintf(target_.addr, sizeof target_.addr, "%s", resume_.addr);
+        target_.port = resume_.port;
+        std::snprintf(target_.name, sizeof target_.name, "%s", resume_.name);
+        JoinExtras x = default_extras();
+        std::snprintf(x.resume, sizeof x.resume, "%s", resume_.token);
+        std::snprintf(x.path, sizeof x.path, "%s", resume_.path);
+        resume_ = Resume{};
+        for_host_ = false;
+        start_join_how("", x);
+        return true;
+    }
     }
     return false;
 }
@@ -409,12 +455,27 @@ void App::easy_frame(std::uint64_t now) noexcept
     // The host's engine gave a pass ("joined"): keep it for Play again. A pass that stopped
     // working is forgotten.
     const GuestView gv = guest_view();
+    // the round trip of this game, kept with the host (a card's "last time N ms"), once a join
+    if (gv.phase == GuestView::joined && gv.route_rtt_ms >= 0 && !rtt_saved_ && target_.addr[0] &&
+        net::now_us() - joined_at_ > 20000000)
+    {
+        rtt_saved_ = true;
+        if (Friend *f = friends_.find(target_.addr, target_.port))
+        {
+            f->add_rtt(gv.route_rtt_ms);
+            save_friends();
+        }
+    }
+    if (gv.phase != GuestView::joined && gv.phase != GuestView::reconnecting)
+        rtt_saved_ = false;
     if (gv.phase == GuestView::joined && gv.friend_pass[0] && !friend_saved_ && target_.addr[0])
     {
         friend_saved_ = true;
-        if (friends_.remember(target_.addr, target_.port, target_.tailnet, target_.path,
-                              target_.name[0] ? target_.name : gv.host, gv.friend_pass))
+        if (Friend *f = friends_.remember(target_.addr, target_.port, target_.tailnet, target_.path,
+                                          target_.name[0] ? target_.name : gv.host, gv.friend_pass))
         {
+            if (gv.lobby[0])
+                std::snprintf(f->lobby, sizeof f->lobby, "%s", gv.lobby);
             save_friends();
             log("app: remembered this host for Play again");
         }
@@ -488,9 +549,15 @@ void App::draw_easy_qr(Canvas &c) noexcept
 void App::draw_easy_row(Canvas &c, int x, int y, int w, int h, bool sel, const EasyRow &r) noexcept
 {
     char title[160];
-    const S t = r.kind == EasyRow::invite ? S::home_invite : r.kind == EasyRow::nearby ? S::home_nearby : S::home_again;
+    const S t = r.kind == EasyRow::invite   ? S::home_invite
+                : r.kind == EasyRow::nearby ? S::home_nearby
+                : r.kind == EasyRow::room   ? S::home_room_open
+                : r.kind == EasyRow::resume ? S::home_resume
+                                            : S::home_again;
     const S s = r.kind == EasyRow::invite   ? S::home_invite_sub
                 : r.kind == EasyRow::nearby ? S::home_nearby_sub
+                : r.kind == EasyRow::room   ? S::home_room_open_sub
+                : r.kind == EasyRow::resume ? S::home_resume_sub
                                             : S::home_again_sub;
     std::snprintf(title, sizeof title, tr(t), r.name);
     draw_row(c, x, y, w, h, sel, title, tr(s));

@@ -30,6 +30,7 @@ extern "C"
     int sceUserServiceInitialize(const void *params);
     int sceUserServiceGetInitialUser(std::int32_t *user);
     int sceUserServiceGetUserName(std::int32_t user, char *name, std::size_t size);
+    int sceUserServiceGetLoginUserIdList(void *list);
     // video out
     int sceVideoOutOpen(std::int32_t user, std::int32_t bus, std::int32_t index, const void *param);
     int sceVideoOutSetFlipRate(std::int32_t handle, std::int32_t rate);
@@ -45,11 +46,13 @@ extern "C"
     int scePadResetLightBar(std::int32_t handle);
     int scePadSetMotionSensorState(std::int32_t handle, bool enable);
     int scePadGetControllerInformation(std::int32_t handle, void *info);
+    int scePadClose(std::int32_t handle);
     // audio
     int sceAudioOutInit();
     int sceAudioOutOpen(std::int32_t user, std::int32_t type, std::int32_t index, std::uint32_t len,
                         std::uint32_t freq, std::uint32_t param);
     int sceAudioOutOutput(std::int32_t handle, const void *buffer);
+    int sceAudioOutGetPortState(std::int32_t handle, void *state);
 }
 
 // ---- video out (PS5Term) --------------------------------------------------------------------

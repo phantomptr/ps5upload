@@ -119,8 +119,8 @@ std::size_t Friends::write(char *out, std::size_t cap) const noexcept
         n += l;
         out[n] = 0;
     };
-    add("# PS5Upload Play: hosts to play again with (addr|port|tailnet|seen|path|pass|name), and the last\n"
-        "# internet invite played with each (link=addr|port|room|fp|key)\n");
+    add("# PS5Upload Play: hosts to play again with (addr|port|tailnet|seen|path|pass|name), the last\n"
+        "# internet invite played with each (link=addr|port|room|fp|key), and rooms (room=addr|port|lobby|id|rtts)\n");
     char line[400];
     for (const auto &f : list)
         if (f.addr[0])
@@ -132,6 +132,12 @@ std::size_t Friends::write(char *out, std::size_t cap) const noexcept
             {
                 std::snprintf(line, sizeof line, "link=%s|%u|%s|%s|%s\n", f.addr, static_cast<unsigned>(f.port), f.room,
                               f.fp, f.key);
+                add(line);
+            }
+            if (f.lobby[0] || f.id[0] || f.rtts[0] >= 0)
+            {
+                std::snprintf(line, sizeof line, "room=%s|%u|%s|%s|%d,%d,%d\n", f.addr, static_cast<unsigned>(f.port),
+                              f.lobby, f.id, f.rtts[0], f.rtts[1], f.rtts[2]);
                 add(line);
             }
         }
@@ -152,6 +158,41 @@ void Friends::parse(const char *text, std::size_t len) noexcept
         char line[400];
         copy(line, sizeof line, text + i, e - i);
         i = e + 1;
+        if (!std::strncmp(line, "room=", 5))
+        {
+            // addr|port|lobby|id|rtt,rtt,rtt for a friend read above
+            char a[64] = {}, lob[24] = {}, id[72] = {};
+            unsigned port = 0;
+            int r0 = -1, r1 = -1, r2 = -1;
+            const int got = std::sscanf(line + 5, "%63[^|]|%u|%23[^|]|%71[^|]|%d,%d,%d", a, &port, lob, id, &r0, &r1, &r2);
+            if (got < 2)
+            {
+                // empty lobby or id fields: read them one by one
+                continue;
+            }
+            Friend *f = port > 0 && port < 65536 ? find(a, static_cast<std::uint16_t>(port)) : nullptr;
+            if (!f)
+                continue;
+            // the fields may be empty: split by hand
+            const char *p = line + 5;
+            const char *fld[5] = {};
+            std::size_t fl[5] = {};
+            int k = 0;
+            for (; k < 5 && p; ++k)
+            {
+                fld[k] = p;
+                const char *bar = k < 4 ? std::strchr(p, '|') : nullptr;
+                fl[k] = bar ? static_cast<std::size_t>(bar - p) : std::strlen(p);
+                p = bar ? bar + 1 : nullptr;
+            }
+            if (k < 5 || !fld[4])
+                continue;
+            copy(f->lobby, sizeof f->lobby, fld[2], fl[2]);
+            copy(f->id, sizeof f->id, fld[3], fl[3]);
+            f->rtts[0] = f->rtts[1] = f->rtts[2] = -1;
+            std::sscanf(fld[4], "%d,%d,%d", &f->rtts[0], &f->rtts[1], &f->rtts[2]);
+            continue;
+        }
         if (!std::strncmp(line, "link=", 5))
         {
             // addr|port|room|fp|key, for a friend read above
@@ -211,5 +252,42 @@ void Friends::parse(const char *text, std::size_t len) noexcept
         if (x.seen > clock)
             clock = x.seen;
     }
+}
+Friend *Friends::find_id(const char *id) noexcept
+{
+    if (!id || !*id)
+        return nullptr;
+    for (auto &f : list)
+        if (f.addr[0] && !std::strcmp(f.id, id))
+            return &f;
+    return nullptr;
+}
+
+int Friend::last_rtt() const noexcept
+{
+    int v[3], n = 0;
+    for (int r : rtts)
+        if (r >= 0)
+            v[n++] = r;
+    if (!n)
+        return -1;
+    // the median of up to three
+    for (int i = 1; i < n; ++i)
+        for (int k = i; k > 0 && v[k] < v[k - 1]; --k)
+        {
+            const int t = v[k];
+            v[k] = v[k - 1];
+            v[k - 1] = t;
+        }
+    return v[n / 2];
+}
+
+void Friend::add_rtt(int ms) noexcept
+{
+    if (ms < 0)
+        return;
+    rtts[2] = rtts[1];
+    rtts[1] = rtts[0];
+    rtts[0] = ms;
 }
 } // namespace play

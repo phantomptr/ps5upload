@@ -130,6 +130,16 @@ std::size_t hello_ex(char *out, std::size_t cap, const char *code, const char *r
         w.raw("\"remember\":true,");
     if (x.inbox_room && *x.inbox_room && x.inbox_hub && *x.inbox_hub)
         w.raw("\"inbox\":{\"room\":").str(x.inbox_room).raw(",\"hub\":").str(x.inbox_hub).raw("},");
+    if (x.device && *x.device)
+        w.raw("\"device\":").str(x.device).raw(",");
+    if (x.knock_via && *x.knock_via && (!resume || !*resume))
+        w.raw("\"knock\":{\"via\":").str(x.knock_via).raw("},");
+    if (x.no_media)
+        w.raw("\"media\":false,");
+    if (x.group && *x.group)
+        w.raw("\"group\":").str(x.group).raw(",");
+    if (x.rooms)
+        w.raw("\"proto\":2,\"caps\":[").raw(kRoomFeatures).raw("],");
     w.raw("\"client\":{\"kind\":\"ps5\",\"app\":\"play\",\"v\":").str(caps.version);
     w.raw(",\"caps\":{\"hevc\":").boolean(caps.hevc);
     w.raw(",\"main10\":").boolean(caps.main10);
@@ -164,6 +174,12 @@ bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
         copy(ev.friend_pass, sizeof ev.friend_pass, d, d.get(0, "friend"));
         ev.player = static_cast<int>(d.integer(d.get(0, "player")));
         ev.hevc = d.boolean(d.get(0, "hevc"));
+        copy(ev.lobby, sizeof ev.lobby, d, d.get(0, "lobby"));
+        if (ev.type == GuestEvent::refused)
+        {
+            const int left = d.get(0, "left");
+            ev.tries_left = d.type(left) == json::Type::number ? static_cast<int>(d.integer(left)) : -1;
+        }
         const int cw = d.get(0, "codec_warning");
         ev.caps_known = cw >= 0;
         copy(ev.codec_warning, sizeof ev.codec_warning, d, cw);
@@ -214,6 +230,25 @@ bool parse_guest(const char *text, std::size_t len, GuestEvent &ev) noexcept
     {
         ev.type = GuestEvent::bye;
         copy(ev.why, sizeof ev.why, d, v);
+        return true;
+    }
+    if ((v = d.get(0, "knock")) >= 0)
+    {
+        // {"knock": "challenge", "c", "pk"} | {"knock": "wait"} | {"knock": "ok"} |
+        // {"knock": "no", "why", "left"}
+        ev.type = GuestEvent::knock;
+        copy(ev.knock_state, sizeof ev.knock_state, d, v);
+        copy(ev.challenge, sizeof ev.challenge, d, d.get(0, "c"));
+        copy(ev.pk, sizeof ev.pk, d, d.get(0, "pk"));
+        copy(ev.why, sizeof ev.why, d, d.get(0, "why"));
+        const int left = d.get(0, "left");
+        ev.tries_left = d.type(left) == json::Type::number ? static_cast<int>(d.integer(left)) : -1;
+        return ev.knock_state[0] != 0;
+    }
+    if ((v = d.get(0, "name_taken")) >= 0)
+    {
+        ev.type = GuestEvent::name_taken;
+        copy(ev.suggest, sizeof ev.suggest, d, d.get(v, "suggest"));
         return true;
     }
     if (d.get(0, "watch") >= 0 || d.get(0, "picture") >= 0)
@@ -283,6 +318,14 @@ bool parse_found(const char *text, std::size_t len, Found &f) noexcept
     copy(f.id, sizeof f.id, d, d.get(0, "id"));
     const double t = d.num(d.get(0, "together"), 0);
     f.together = t > 0 && t < 100 ? static_cast<int>(t) : 0;
+    const int you = d.get(0, "you");
+    if (d.type(you) == json::Type::object)
+    {
+        f.you_known = d.boolean(d.get(you, "known"));
+        f.you_streaming = d.boolean(d.get(you, "streaming"));
+        f.you_paired = d.boolean(d.get(you, "paired"));
+        copy(f.you_name, sizeof f.you_name, d, d.get(you, "name"));
+    }
     return true;
 }
 

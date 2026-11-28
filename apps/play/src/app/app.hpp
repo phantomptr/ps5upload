@@ -1,15 +1,21 @@
 // PS5Upload Play - the app: screens, controller navigation, and the guest and host roles.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "../core/chat.hpp"
 #include "../core/friends.hpp"
 #include "../core/invite.hpp"
+#include "../core/rooms.hpp"
+#include "../core/seats.hpp"
 #include "../core/settings.hpp"
+#include "../core/textkb.hpp"
+#include "../core/voice.hpp"
 #include "../net/net.hpp"
 #include "../ui/canvas.hpp"
 #include "../ui/strings.hpp"
 #include "companion.hpp"
 #include "helper.hpp"
 #include "guest.hpp"
+#include "rooms_net.hpp"
 #include "waiting_room.hpp"
 
 #include <atomic>
@@ -32,6 +38,17 @@ class App
         playing,
         host,
         settings,
+        // Play Rooms (docs/ROOMS.md): rooms_ui.cpp, room_host.cpp
+        rooms,    // the Join list: friends' rooms, shared with you, nearby, public rooms
+        details,  // one room's Details
+        filter,   // the Join list's filter sheet
+        keyboard, // the on-screen keyboard (a password, a name, a chat line, a game)
+        notice,   // the responsibility notice (once)
+        thanks,   // Thanks & Support
+        welcome,  // the first-run guide
+        help,     // the controls
+        confirm,  // an ending or loosening action, said in words first
+        menu,     // the host's player menu / blocked list
     };
 
     App(const char *version, ui::Image bg, ui::Image logo) noexcept;
@@ -58,12 +75,45 @@ class App
         helper::Rp rp;
         helper::Pin pin;
         WaitingRoom::View room; // the home screen's phone code
+        // Play Rooms
+        RoomsNet::View rooms;
+        chat::Log chat;
+        bool overlay = false; // the in-game Room menu open
+        bool mic_on = false;
+        int notice_accepted = -1; // -1: as the settings say
     };
     void fake(Screen s, const Fake &f) noexcept
     {
         fake_ = f;
         screen_ = s;
         dirty_ = true;
+        ov_open_ = f.overlay;
+        rv_ = f.rooms;
+        mic_on_ = f.mic_on;
+        if (f.notice_accepted >= 0)
+            settings_.notice = f.notice_accepted;
+    }
+    // For screenshots: the keyboard, the confirm dialog, the welcome page, the host's tab.
+    void fake_keyboard(const char *title, const char *text, bool secret) noexcept;
+    void fake_confirm_close() noexcept;
+    // For screenshots: another controller on this PS5 (state 0 idle, 1 asking, 2 playing, 3 away).
+    void fake_seat(int user, const char *name, int state, int player) noexcept
+    {
+        seats_.pad(user, name, true, 1);
+        if (state >= 1)
+        {
+            seats_.hold(user, true, 1);
+            seats_.hold(user, true, 2000001);
+        }
+        if (state >= 2)
+            seats_.joined(user, player, "t");
+        if (state == 3)
+            seats_.pad(user, name, false, 2000002);
+    }
+    void fake_page(int welcome_page, int host_tab) noexcept
+    {
+        welcome_page_ = welcome_page;
+        host_tab_ = host_tab;
     }
     void draw(std::uint32_t *ui, std::uint32_t *layer, std::uint64_t now_us, bool *show_ui, int *top,
               int *bottom) noexcept;
@@ -117,6 +167,103 @@ class App
     static void *discovery_main(void *self) noexcept;
     void start_discovery() noexcept;
 
+    // ---- Play Rooms (docs/ROOMS.md) ----
+    // rooms_ui.cpp: the Join list, Details, filter, keyboard, notice, Thanks, welcome, help
+    struct JoinItem
+    {
+        enum Kind : std::uint8_t
+        {
+            card,
+            more,    // the next page
+            retry,   // the list didn't come: try again
+            code,    // Enter a code
+            address, // Type an address
+        } kind = card;
+        rooms::Card c;
+    };
+    int join_items(JoinItem *out, int cap) noexcept;
+    void open_rooms() noexcept;
+    void input_rooms(std::uint32_t p) noexcept;
+    void input_details(std::uint32_t p) noexcept;
+    void input_filter(std::uint32_t p) noexcept;
+    void input_keyboard(std::uint32_t p, std::uint32_t held) noexcept;
+    void input_notice(std::uint32_t p) noexcept;
+    void input_thanks(std::uint32_t p) noexcept;
+    void input_welcome(std::uint32_t p) noexcept;
+    void input_help(std::uint32_t p) noexcept;
+    void input_confirm(std::uint32_t p) noexcept;
+    void input_menu(std::uint32_t p) noexcept;
+    void draw_rooms(ui::Canvas &c) noexcept;
+    void draw_card(ui::Canvas &c, int x, int y, int w, int h, bool sel, const rooms::Card &k) noexcept;
+    void draw_details(ui::Canvas &c) noexcept;
+    void draw_details_panel(ui::Canvas &c, int x, int y, int w, const rooms::Card &k, bool full) noexcept;
+    void draw_filter(ui::Canvas &c) noexcept;
+    void draw_keyboard(ui::Canvas &c) noexcept;
+    void draw_notice(ui::Canvas &c) noexcept;
+    void draw_thanks(ui::Canvas &c) noexcept;
+    void draw_welcome(ui::Canvas &c) noexcept;
+    void draw_help(ui::Canvas &c) noexcept;
+    void draw_confirm(ui::Canvas &c) noexcept;
+    void draw_menu(ui::Canvas &c) noexcept;
+    // 4 bars for a tier (4 Excellent ... 1 Poor, 0 none); hollow = an estimate. Returns the width.
+    static int draw_bars(ui::Canvas &c, int x, int y, int bars, bool hollow) noexcept;
+    // Joining a card from the Join list: the notice, a password, then the knock.
+    void choose_card(const rooms::Card &k) noexcept;
+    void join_card(const rooms::Card &k) noexcept;
+    // The keyboard for a purpose; done_keyboard() acts on what was typed.
+    enum class Kb : std::uint8_t
+    {
+        password,
+        name,
+        chat,
+        game,
+        room_name,
+        room_pw,
+    };
+    void open_keyboard(Kb why, const char *title, const char *text, int max_chars, bool secret) noexcept;
+    void done_keyboard() noexcept;
+    // What waits for the notice to be accepted.
+    enum class Pending : std::uint8_t
+    {
+        none,
+        join_card,
+        details,
+        mic,
+        chat,
+        make_public,
+        chat_on,
+    };
+    // True when the notice is accepted (or not needed); else it is shown, `then` waits for it.
+    bool need_notice(int need, Pending then) noexcept;
+    void run_pending() noexcept;
+    void load_supporters() noexcept;
+    void load_device() noexcept;
+    void save_resume(const GuestView &v) noexcept;
+    void clear_resume() noexcept;
+    // resume.txt: a game to go back to (host restarted, or this app was closed): kept 5 minutes.
+    struct Resume
+    {
+        char addr[64] = {};
+        std::uint16_t port = 0;
+        char token[80] = {};
+        char path[80] = {};
+        char name[65] = {};
+        std::uint64_t at = 0;
+    } resume_;
+    bool load_resume() noexcept;
+    // room_host.cpp: the host's My room / Remote Play / This PS5 tabs
+    bool owner_here(const CompanionDoc &d) const noexcept;
+    void host_action_denied(const CompanionDoc &d) noexcept;
+    void open_confirm_remove(const CompanionDoc::Guest &g) noexcept;
+    void open_confirm_close(const CompanionDoc &d) noexcept;
+    // room_overlay.cpp: the in-game Room menu, chat lines over the game, voice
+    void overlay_frame(std::uint64_t now) noexcept;
+    void input_overlay(std::uint32_t p) noexcept;
+    int draw_overlay(ui::Canvas &l, const GuestView &v, std::uint64_t now) noexcept; // rows used from the top
+    int draw_chat_lines(ui::Canvas &l, const GuestView &v, std::uint64_t now) noexcept; // rows used at the bottom
+    void voice_tick(const GuestView &v) noexcept;
+    const char *quick_text(int id) const noexcept;
+
     // Drawing
     void draw_frame(ui::Canvas &c, const char *title) noexcept;
     void draw_hints(ui::Canvas &c, const int *glyphs, const ui::S *labels, int n, int y = 990) noexcept;
@@ -155,6 +302,19 @@ class App
             sw_awake,
             rp_enable,
             rp_pin,
+            // Play Rooms
+            room_vis,
+            room_pw,
+            room_ap_friends,
+            room_ap_password,
+            room_chat,
+            room_voice,
+            room_start_muted,
+            room_lock,
+            room_blocked,
+            room_mute_all,
+            room_name,
+            tab_hint, // a line saying the room is closed / easier in PS5Upload
         } kind;
         long long id;
         int player;
@@ -171,6 +331,93 @@ class App
     int depth_ = 0;
     int sel_ = 0;
     bool for_host_ = false; // the pick screen chooses the host's computer
+    // Play Rooms state
+    RoomsNet *rooms_net_ = nullptr;
+    RoomsNet::View rv_;
+    std::uint32_t rv_rev_ = 0;
+    rooms::Sort sort_ = rooms::Sort::best;
+    rooms::Filter filter_;
+    char focus_key_[72] = {};
+    std::uint64_t focus_since_ = 0;
+    textkb::Keyboard kb_;
+    Kb kb_for_ = Kb::password;
+    char kb_title_[200] = {};
+    std::uint64_t kb_typed_us_ = 0;
+    Pending pending_ = Pending::none;
+    rooms::Card pending_card_;
+    rooms::Card join_card_; // the card being joined (for Try again and the password)
+    bool join_from_card_ = false;
+    struct Confirm
+    {
+        enum Act : std::uint8_t
+        {
+            close_room,
+            remove,
+            make_public,
+            remove_pw,
+        } act = close_room;
+        int player = 0;
+        char title[600] = {};
+        bool from_rooms = false;
+        bool block_room = false, block_always = false;
+        int sel = 0;
+    } confirm_;
+    int menu_player_ = 0;
+    long long menu_guest_ = 0;
+    bool menu_blocked_ = false; // the menu lists the blocked people
+    int host_tab_ = 0;          // 0 My room, 1 Remote Play, 2 This PS5
+    Row::Kind host_sel_kind_ = Row::pair;
+    long long host_sel_id_ = -1;
+    int welcome_page_ = 0;
+    // in game
+    bool ov_open_ = false;
+    int ov_sel_ = 0;
+    bool mic_on_ = false;
+    voice::Ptt ptt_;
+    bool password_asked_ = false;
+    bool rtt_saved_ = false;
+    // many controllers on one PS5 (seats_app.cpp)
+    seats::Seats seats_;
+    Guest *seat_[3] = {};
+    int seat_user_[3] = {-1, -1, -1};
+    int seat_phase_[3] = {-1, -1, -1};
+    alignas(Guest) unsigned char seat_mem_[3][sizeof(Guest)];
+    char seat_toast_[160] = {};
+    std::uint64_t seat_toast_until_ = 0;
+    bool released_ = false; // the first player left; the others from this PS5 play on
+    void seats_frame(std::uint64_t now) noexcept;
+    int draw_seats_strip(ui::Canvas &c, int y) noexcept;
+    void seat_toast(ui::S what, const char *name) noexcept;
+    bool notice_sent_ = false;        // {"notice": n} went on this join
+    std::uint32_t refused_seen_ = 0;  // the last comms refusal shown
+    std::uint64_t ov_note_until_ = 0; // a refusal's words over the game
+    bool talk_held_ = false; // Create held (push-to-talk), from this frame's chords
+    chat::Log ov_chat_;
+    std::uint32_t ov_chat_rev_ = 0;
+    char device_[32] = {};
+    voice::Mixer mixer_;     // each person's volume and mute (this PS5 only)
+    std::uint32_t resume_saved_ = 0; // the joined token kept on disk (its first 4 bytes)
+    char join_name_[48] = {};
+    // the host's computer: its engine id (pairings are kept by it), its own address (not a
+    // Tailscale forward on this console), a helper grant for the next hello, this app's id
+    char host_id_[72] = {};
+    char host_addr_[64] = {};
+    std::uint16_t host_port_ = 0;
+    char host_grant_[72] = {};
+    char app_id_[40] = {};
+    // Host from this PS5: the right computer by itself (a helper grant, the engine streaming this
+    // PS5, a paired one, the only one that knows it); false: the person picks.
+    bool host_auto() noexcept;
+    // GET /api/support on a PS5Upload found nearby: its supporter list kept for Thanks (once a run).
+    void refresh_support(const char *addr, std::uint16_t port) noexcept;
+    std::atomic<bool> support_checked_{false};
+    // Where Minion asked this app to open (helper /v1/intent), read once at start.
+    void take_intent() noexcept; // the name a join uses ("" = the PS5 user's); "Pick another name" sets it
+    // Thanks & Support: names from the bundled list (or the engine's newer one)
+    char supporters_[4096] = {};
+    const char *names_[160] = {};
+    int n_names_ = 0, n_anonymous_ = 0, thanks_page_ = 0;
+    char kofi_[96] = {}, thanks_url_[96] = {};
     char addr_[64] = {};
     std::uint16_t port_ = 19113;
     char engine_name_[65] = {};
@@ -204,7 +451,10 @@ class App
             invite, // a host sent an invite (the waiting room)
             nearby, // a game open on this network
             again,  // a remembered host: "Play again"
+            room,   // a friend's room is open (Rooms › Your friends' rooms)
+            resume, // back to the game this PS5 was in (the host restarted, or the app closed)
         } kind = nearby;
+        rooms::Card card; // room
         char name[65] = {};
         char addr[64] = {};
         std::uint16_t port = 0;

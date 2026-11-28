@@ -60,7 +60,7 @@ ADDR PORT CODE`, `companion ADDR PORT --pair`, `discover`), handy against a real
 
 With a file `/data/ps5upload-play/dev` present, the app also reads one command at a time from
 `/data/ps5upload-play/cmd`: `join ADDR PORT CODE`, `nearby ADDR PORT`, `host ADDR PORT`, `pick`, `pickhost`, `pair`,
-`drop` (let the socket go, to test resuming), `leave`, `home`, `exit`.
+`drop` (let the socket go, to test resuming), `leave`, `home`, `rooms`, `thanks`, `notice`, `exit`.
 
 Measured facts from the phase 0 spike are in [docs/PHASE0.md](docs/PHASE0.md), microphone capture
 in [docs/MIC.md](docs/MIC.md); where the code

@@ -12,6 +12,7 @@
 #include "sys.hpp"
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <pthread.h>
 
@@ -30,6 +31,153 @@ std::atomic<Guest *> guest{nullptr};
 std::atomic<std::uint32_t> want_rumble{0}, want_light{0};
 std::atomic<unsigned> rumble_serial{0}, light_serial{0};
 platform::Chords chord_view;
+std::atomic<bool> menu_has_pad{false}, ptt_create{false};
+int primary_user = -1;
+
+proto::PadState to_state(const PadSample &s, std::uint32_t buttons) noexcept;
+
+// The other signed-in users' controllers (one place each), read on the pad thread.
+struct ExtraPad
+{
+    int user = -1;
+    int handle = -1;
+    char name[40] = {};
+    bool connected = false, cross = false, front = true;
+    Chords chords;
+    proto::PadState last;
+    std::uint64_t last_send = 0;
+    bool neutral_sent = false, leave = false;
+    std::atomic<Guest *> guest{nullptr};
+    std::atomic<std::uint32_t> want_rumble{0}, want_light{0};
+    std::atomic<unsigned> rumble_serial{0}, light_serial{0};
+    unsigned seen_rumble = 0, seen_light = 0;
+};
+ExtraPad extra[kExtra];
+std::uint64_t next_users = 0;
+
+// Signed-in users (sceUserServiceGetLoginUserIdList): a pad opened for each one not yet open.
+void refresh_users() noexcept
+{
+    // SceUserServiceLoginUserIdList: 4 ids on the PS4; room for more in case the PS5's is larger
+    // (a short buffer would be written past).
+    struct
+    {
+        std::int32_t id[64];
+    } list{};
+    for (auto &x : list.id)
+        x = -1;
+    if (sceUserServiceGetLoginUserIdList(&list) != 0)
+        return;
+    for (int k = 0; k < 4; ++k)
+    {
+        const std::int32_t u = list.id[k];
+        if (u < 0 || u == primary_user)
+            continue;
+        bool have = false;
+        for (const auto &e : extra)
+            have = have || e.user == u;
+        if (have)
+            continue;
+        for (auto &e : extra)
+        {
+            if (e.user >= 0)
+                continue;
+            const int h = scePadOpen(u, 0, 0, nullptr);
+            log("pad: another user %#x signed in: open %#x", static_cast<unsigned>(u), h);
+            if (h < 0)
+                break;
+            e.user = u;
+            e.handle = h;
+            if (sceUserServiceGetUserName(u, e.name, sizeof e.name) != 0)
+                e.name[0] = 0;
+            scePadSetVibrationMode(h, 2);
+            break;
+        }
+    }
+    // a user who signed out: the place is let go (the app sees it gone)
+    for (auto &e : extra)
+    {
+        if (e.user < 0)
+            continue;
+        bool still = false;
+        for (int k = 0; k < 4; ++k)
+            still = still || list.id[k] == e.user;
+        if (!still)
+        {
+            log("pad: user %#x signed out", static_cast<unsigned>(e.user));
+            if (e.handle >= 0)
+                scePadClose(e.handle);
+            pthread_mutex_lock(&lock);
+            e.user = -1;
+            e.handle = -1;
+            e.connected = e.cross = false;
+            pthread_mutex_unlock(&lock);
+        }
+    }
+}
+
+void read_extra(ExtraPad &e, std::uint64_t now) noexcept
+{
+    PadSample s[16];
+    const int n = e.handle >= 0 ? scePadRead(e.handle, s, 16) : 0;
+    if (n <= 0)
+        return;
+    const PadSample &cur = s[n - 1];
+    const bool front = !(cur.buttons & pb::kIntercepted);
+    pthread_mutex_lock(&lock);
+    e.connected = cur.connected != 0;
+    e.front = front;
+    e.cross = front && (cur.buttons & pb::kCross);
+    pthread_mutex_unlock(&lock);
+    // its rumble and light from the host
+    const unsigned rs = e.rumble_serial.load();
+    if (rs != e.seen_rumble)
+    {
+        e.seen_rumble = rs;
+        const std::uint32_t v = e.want_rumble.load();
+        const std::uint8_t m[2] = {static_cast<std::uint8_t>(v >> 8), static_cast<std::uint8_t>(v)};
+        scePadSetVibration(e.handle, m);
+    }
+    const unsigned ls = e.light_serial.load();
+    if (ls != e.seen_light)
+    {
+        e.seen_light = ls;
+        const std::uint32_t v = e.want_light.load();
+        if (v & 0x1000000u)
+        {
+            const std::uint8_t c[4] = {static_cast<std::uint8_t>(v >> 16), static_cast<std::uint8_t>(v >> 8),
+                                       static_cast<std::uint8_t>(v), 0};
+            scePadSetLightBar(e.handle, c);
+        }
+        else
+            scePadResetLightBar(e.handle);
+    }
+    Guest *g = e.guest.load();
+    if (!g)
+        return;
+    if (!front || !e.connected || menu_has_pad.load())
+    {
+        if (!e.neutral_sent && g->send_pad(proto::PadState{}))
+            e.neutral_sent = true;
+        e.last = proto::PadState{};
+        return;
+    }
+    e.neutral_sent = false;
+    const auto out = e.chords.update(cur.buttons & ~pb::kIntercepted, now);
+    if (out.leave)
+    {
+        pthread_mutex_lock(&lock);
+        e.leave = true;
+        pthread_mutex_unlock(&lock);
+    }
+    const proto::PadState st = to_state(cur, out.buttons);
+    if (!proto::same_input(st, e.last) || now - e.last_send >= 100000)
+    {
+        g->send_pad(st);
+        e.last = st;
+        e.last_send = now;
+    }
+}
 std::atomic<unsigned> frames_sent{0};
 
 std::uint32_t sticks_as_dpad(const PadSample &s) noexcept
@@ -85,6 +233,7 @@ void *thread_main(void *) noexcept
     cur.lx = cur.ly = cur.rx = cur.ry = 128;
     for (;;)
     {
+        beat(Beat::pad, 0);
         const int n = handle >= 0 ? scePadRead(handle, s, 16) : 0;
         const std::uint64_t now = net::now_us();
         std::uint32_t went_down = 0;
@@ -144,14 +293,20 @@ void *thread_main(void *) noexcept
         Guest *g = guest.load();
         if (g)
         {
-            if (!front)
+            chords.set_ptt_on_create(ptt_create.load());
+            if (!front || menu_has_pad.load())
             {
                 // The system has the pad: the host sees "nothing pressed" once.
                 if (!sent_neutral && g->send_pad(proto::PadState{}))
                     sent_neutral = true;
                 last_sent = proto::PadState{};
+                // the chords still work in the Room menu (△ closes it from the chord too)
+                const auto out = front ? chords.update(cur.buttons & ~pb::kIntercepted, now) : Chords::Out{};
                 pthread_mutex_lock(&lock);
                 chord_view.ps = chord_view.leave = 0;
+                chord_view.room_menu = chord_view.room_menu || out.room_menu;
+                chord_view.leave_now = chord_view.leave_now || out.leave;
+                chord_view.talk = false;
                 pthread_mutex_unlock(&lock);
             }
             else
@@ -163,6 +318,8 @@ void *thread_main(void *) noexcept
                 chord_view.leave = out.leave_progress;
                 chord_view.ps_sent = chord_view.ps_sent || out.ps_sent;
                 chord_view.leave_now = chord_view.leave_now || out.leave;
+                chord_view.room_menu = chord_view.room_menu || out.room_menu;
+                chord_view.talk = out.talk;
                 pthread_mutex_unlock(&lock);
                 const proto::PadState st = to_state(cur, out.buttons);
                 const bool changed = !proto::same_input(st, last_sent);
@@ -177,6 +334,18 @@ void *thread_main(void *) noexcept
                 }
             }
         }
+        // the other signed-in users' controllers (many controllers on one PS5)
+        if (now >= next_users)
+        {
+            next_users = now + 1000000;
+            beat(Beat::pad, 1);
+            refresh_users();
+            beat(Beat::pad, 2);
+        }
+        for (auto &e : extra)
+            if (e.user >= 0)
+                read_extra(e, now);
+        beat(Beat::pad, 3);
         sceKernelUsleep(4000);
     }
     return nullptr;
@@ -185,6 +354,7 @@ void *thread_main(void *) noexcept
 
 bool open(int user) noexcept
 {
+    primary_user = user;
     const int rc = scePadInit();
     handle = scePadOpen(user, 0, 0, nullptr);
     log("pad: init %#x, open %#x", rc, handle);
@@ -232,8 +402,27 @@ platform::Chords chords() noexcept
     platform::Chords c = chord_view;
     chord_view.ps_sent = false;
     chord_view.leave_now = false;
+    chord_view.room_menu = false;
     pthread_mutex_unlock(&lock);
     return c;
+}
+
+platform::Chords chords_peek() noexcept
+{
+    pthread_mutex_lock(&lock);
+    platform::Chords c = chord_view;
+    pthread_mutex_unlock(&lock);
+    return c;
+}
+
+void to_menu(bool on) noexcept
+{
+    menu_has_pad.store(on);
+}
+
+void ptt_on_create(bool on) noexcept
+{
+    ptt_create.store(on);
 }
 
 void rumble(std::uint8_t left, std::uint8_t right) noexcept
@@ -262,5 +451,70 @@ unsigned sent() noexcept
 Rumbles rumbles() noexcept
 {
     return {rumble_calls.load(), rumble_nonzero.load(), rumble_rc.load()};
+}
+
+int extras(Extra *out) noexcept
+{
+    int n = 0;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < kExtra; ++i)
+    {
+        out[i] = Extra{};
+        out[i].user = extra[i].user;
+        std::snprintf(out[i].name, sizeof out[i].name, "%s", extra[i].name);
+        out[i].connected = extra[i].connected;
+        out[i].cross = extra[i].cross;
+        out[i].in_front = extra[i].front;
+        n += extra[i].user >= 0 ? 1 : 0;
+    }
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+
+void attach(int user, Guest *g) noexcept
+{
+    for (auto &e : extra)
+        if (e.user == user)
+        {
+            e.guest.store(g);
+            if (!g)
+            {
+                e.want_rumble.store(0);
+                e.rumble_serial.fetch_add(1);
+                e.want_light.store(0);
+                e.light_serial.fetch_add(1);
+            }
+        }
+}
+
+bool extra_leave(int user) noexcept
+{
+    bool l = false;
+    pthread_mutex_lock(&lock);
+    for (auto &e : extra)
+        if (e.user == user && e.leave)
+            l = true, e.leave = false;
+    pthread_mutex_unlock(&lock);
+    return l;
+}
+
+void extra_rumble(int user, std::uint8_t left, std::uint8_t right) noexcept
+{
+    for (auto &e : extra)
+        if (e.user == user)
+        {
+            e.want_rumble.store(static_cast<std::uint32_t>(left) << 8 | right);
+            e.rumble_serial.fetch_add(1);
+        }
+}
+
+void extra_light(int user, std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept
+{
+    for (auto &e : extra)
+        if (e.user == user)
+        {
+            e.want_light.store(0x1000000u | static_cast<std::uint32_t>(r) << 16 | static_cast<std::uint32_t>(g) << 8 | b);
+            e.light_serial.fetch_add(1);
+        }
 }
 } // namespace play::ps5::padio

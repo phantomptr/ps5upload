@@ -66,7 +66,19 @@ struct HelloExtras
     bool remember = false;
     const char *inbox_room = nullptr;
     const char *inbox_hub = nullptr;
+    // Play Rooms (docs/ROOMS.md): this PS5's device id (base64url of 16 bytes: the host shows 4 hex
+    // characters as its tag, keeps only a hash for blocks), the knock's path when the join came
+    // from Rooms / Friends / Nearby / Play again, and the rooms protocol and features.
+    const char *device = nullptr;
+    const char *knock_via = nullptr;
+    bool rooms = false; // say "proto": 2 and the features below
+    // Many controllers on one PS5 (integration design (d)): a seat with no picture or sound, in the
+    // group of the player already in (its resume token).
+    bool no_media = false;
+    const char *group = nullptr;
 };
+// The rooms features this app has (the design's 10.5).
+constexpr const char *kRoomFeatures = "\"rooms\",\"knock\",\"sealed\",\"chat\",\"voice\",\"group\",\"ps5app\"";
 std::size_t hello_ex(char *out, std::size_t cap, const char *code, const char *resume, const char *name,
                      const ClientCaps &caps, const HelloExtras &extras) noexcept;
 
@@ -94,6 +106,8 @@ struct GuestEvent
         rumble_light,
         bye,
         pong,
+        knock,      // {"knock": "challenge"|"wait"|"ok"|"no", ...} (a knock from Rooms, Friends, Nearby)
+        name_taken, // {"name_taken": {"suggest": "Sam (2)"}}
     } type = none;
     char why[24] = {};      // refused / waiting / bye
     char token[80] = {};    // joined
@@ -113,6 +127,14 @@ struct GuestEvent
     bool has_rumble = false, has_light = false;
     std::uint8_t rumble_lr[2] = {};
     std::uint8_t light_rgb[3] = {};
+    // joined: the host's lobby on the hub (Rooms › Your friends' rooms looks it up later)
+    char lobby[24] = {};
+    // knock
+    char knock_state[12] = {}; // challenge, wait, ok, no
+    char challenge[48] = {}; // base64url
+    char pk[100] = {};       // the room's key (when the knock needs a secret)
+    int tries_left = -1;     // a wrong password: tries left
+    char suggest[40] = {};   // name_taken
     // pong
     double pong_t = 0;
     bool has_engine_us = false;
@@ -140,9 +162,13 @@ struct Found
 {
     char name[65] = {};
     char version[24] = {};
-    char id[24] = {};
+    char id[72] = {};
     std::uint16_t port = 0;
     int together = 0; // Play Togethers open there with the host playing
+    // The engine's `you` block (integration design F2): this console is one of its own, it is
+    // streaming this console now, and this app is paired with it.
+    bool you_known = false, you_streaming = false, you_paired = false;
+    char you_name[65] = {}; // this console's name there
 };
 bool parse_found(const char *text, std::size_t len, Found &f) noexcept;
 

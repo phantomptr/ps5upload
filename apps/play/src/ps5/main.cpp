@@ -10,6 +10,7 @@
 #include "sound.hpp"
 #include "sys.hpp"
 #include "video.hpp"
+#include "voice.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -78,6 +79,10 @@ class Sinks final : public GuestSinks
     {
         return ps5::video::wants_keyframe();
     }
+    void voice(std::uint8_t speaker, std::uint16_t seq, const std::uint8_t *d, std::size_t n) override
+    {
+        ps5::voice_io::packet(speaker, seq, d, n);
+    }
     void stats(char *out, std::size_t cap) override
     {
         const auto v = ps5::video::stats();
@@ -91,6 +96,39 @@ class Sinks final : public GuestSinks
     }
 };
 Sinks sinks_instance;
+
+// A seat of its own for another controller on this PS5: no picture or sound, its rumble and light
+// to that user's controller.
+class SeatSinks final : public GuestSinks
+{
+  public:
+    int user = -1;
+    void begin(bool) override {}
+    void end() override
+    {
+        ps5::padio::extra_rumble(user, 0, 0);
+    }
+    void video_header(const std::uint8_t *, std::size_t) override {}
+    void video(const std::uint8_t *, std::size_t, std::uint64_t) override {}
+    void audio_header(const std::uint8_t *, std::size_t) override {}
+    void audio(std::uint16_t, const std::uint8_t *, std::size_t) override {}
+    void rumble(std::uint8_t l, std::uint8_t r) override
+    {
+        ps5::padio::extra_rumble(user, l, r);
+    }
+    void light(std::uint8_t r, std::uint8_t g, std::uint8_t b) override
+    {
+        ps5::padio::extra_light(user, r, g, b);
+    }
+    bool wants_keyframe() override
+    {
+        return false;
+    }
+    void stats(char *out, std::size_t cap) override
+    {
+        std::snprintf(out, cap, "\"frames\":0,\"decoder\":\"none\"");
+    }
+};
 
 std::uint8_t *load_asset(const char *path, std::size_t *len) noexcept
 {
@@ -128,10 +166,82 @@ Input input() noexcept
 void stream_pad(Guest *guest) noexcept
 {
     ps5::padio::stream_to(guest);
+    ps5::voice_io::set_guest(guest);
 }
 Chords chords() noexcept
 {
     return ps5::padio::chords();
+}
+Chords chords_peek() noexcept
+{
+    return ps5::padio::chords_peek();
+}
+void pad_to_menu(bool on) noexcept
+{
+    ps5::padio::to_menu(on);
+}
+void ptt_on_create(bool on) noexcept
+{
+    ps5::padio::ptt_on_create(on);
+}
+void voice_allow(const voice::Allow &a) noexcept
+{
+    ps5::voice_io::allow(a);
+}
+MicState mic_state() noexcept
+{
+    return ps5::voice_io::state();
+}
+void voice_volume(int speaker, int percent, bool muted) noexcept
+{
+    ps5::voice_io::volume(speaker, percent, muted);
+}
+void voice_duck(int level) noexcept
+{
+    ps5::voice_io::duck(level);
+}
+std::uint32_t voice_speaking() noexcept
+{
+    return ps5::voice_io::speaking();
+}
+int local_pads(LocalPad *out) noexcept
+{
+    ps5::padio::Extra e[ps5::padio::kExtra];
+    const int n = ps5::padio::extras(e);
+    for (int i = 0; i < kLocalPads && i < ps5::padio::kExtra; ++i)
+    {
+        out[i] = LocalPad{};
+        out[i].user = e[i].user;
+        std::snprintf(out[i].name, sizeof out[i].name, "%s", e[i].name);
+        out[i].connected = e[i].connected;
+        out[i].cross = e[i].cross;
+        out[i].in_front = e[i].in_front;
+    }
+    return n;
+}
+void attach_pad(int user, Guest *g) noexcept
+{
+    ps5::padio::attach(user, g);
+}
+bool pad_leave(int user) noexcept
+{
+    return ps5::padio::extra_leave(user);
+}
+GuestSinks &seat_sinks(int place, int user) noexcept
+{
+    static SeatSinks s[kLocalPads];
+    SeatSinks &x = s[place < 0 ? 0 : place % kLocalPads];
+    x.user = user;
+    return x;
+}
+std::uint8_t *seat_buffer(int place, std::size_t *cap) noexcept
+{
+    static std::uint8_t *b[kLocalPads] = {};
+    const int i = place < 0 ? 0 : place % kLocalPads;
+    if (!b[i])
+        b[i] = ps5::big_alloc(256 * 1024);
+    *cap = b[i] ? 256 * 1024 : 0;
+    return b[i];
 }
 bool video_showing() noexcept
 {
@@ -260,6 +370,7 @@ int main()
     if (sceUserServiceGetUserName(user_id, user_name_buf, sizeof user_name_buf) != 0)
         user_name_buf[0] = 0;
     ps5::padio::open(user_id);
+    ps5::voice_io::init(user_id); // the mic opens only when switched on in a room
     msg_buf[0] = ps5::big_alloc(kMsgCap);
     msg_buf[1] = ps5::big_alloc(kMsgCap);
     auto *ui_px = reinterpret_cast<std::uint32_t *>(ps5::big_alloc(ui::kW * ui::kH * 4));
@@ -299,11 +410,46 @@ int main()
     const bool dev_mode = stat(dev, &st) == 0;
     if (dev_mode)
         log("dev: commands are read from %s", cmd);
+    // A watchdog: when the main loop, the pad, sound or voice thread stops going round, say
+    // which and at what stage (a stuck app otherwise leaves a silent log).
+    pthread_t wd;
+    pthread_create(&wd, nullptr, [](void *) -> void * {
+        unsigned last[4] = {};
+        int quiet[4] = {};
+        static const char *names[4] = {"main", "pad", "sound", "voice"};
+        for (;;)
+        {
+            for (int k = 0; k < 4; ++k)
+                sceKernelUsleep(500000); // under a second a call (a longer one may not sleep at all)
+            for (int i = 0; i < 4; ++i)
+            {
+                int stage = 0;
+                unsigned rounds = 0;
+                beat_read(static_cast<Beat>(i), &stage, &rounds);
+                if (rounds == last[i] && rounds)
+                {
+                    if (++quiet[i] == 2)
+                    {
+                        char line[128];
+                        std::snprintf(line, sizeof line, "[watchdog] the %s thread stopped at stage %d (round %u)\n",
+                                      names[i], stage, rounds);
+                        log_raw(line);
+                    }
+                }
+                else
+                    quiet[i] = 0;
+                last[i] = rounds;
+            }
+        }
+        return nullptr;
+    }, nullptr);
     std::uint64_t next_cmd = 0, next_report = 0;
     for (;;)
     {
         const std::uint64_t now = net::now_us();
+        beat(Beat::main, 0);
         app.frame(now, ui_px, layer);
+        beat(Beat::main, 10);
         if (dev_mode && now >= next_cmd)
         {
             next_cmd = now + 500000;
@@ -314,11 +460,13 @@ int main()
                 const long r = read(fd, line, sizeof line - 1);
                 close(fd);
                 unlink(cmd);
+                log("dev: command file, %ld bytes", r);
                 if (r > 0)
                 {
                     for (long i = 0; i < r; ++i)
                         if (line[i] == '\n' || line[i] == '\r')
                             line[i] = 0;
+                    beat(Beat::main, 11);
                     app.command(line);
                 }
             }
@@ -326,6 +474,16 @@ int main()
         if (now >= next_report)
         {
             next_report = now + 10000000;
+            // a sign of life every minute (a quiet log otherwise can't tell "idle" from "stuck")
+            static unsigned reports;
+            if (reports++ % 6 == 0)
+            {
+                int st[4];
+                unsigned rd[4];
+                for (int i = 0; i < 4; ++i)
+                    beat_read(static_cast<Beat>(i), &st[i], &rd[i]);
+                log("alive: main %u, pad %u, sound %u, voice %u rounds", rd[0], rd[1], rd[2], rd[3]);
+            }
             const auto v = ps5::video::stats();
             const auto s = ps5::sound::stats();
             const auto d = ps5::display::stats();
@@ -339,6 +497,7 @@ int main()
                     d.slow, static_cast<double>(d.worst_ms), s.decoded, s.concealed, s.recovered, s.underruns,
                     s.dropped, s.late, ps5::padio::sent(), r.calls, r.nonzero, static_cast<unsigned>(r.last_rc));
         }
+        beat(Beat::main, 12);
         sceKernelUsleep(8000);
     }
 }

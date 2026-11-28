@@ -9,6 +9,7 @@
 #include "../app/log.hpp"
 #include "../core/jitter.hpp"
 #include "sys.hpp"
+#include "voice.hpp"
 
 #include <opus.h>
 
@@ -120,6 +121,7 @@ void *thread_main(void *) noexcept
     unsigned seen_blip = 0;
     for (;;)
     {
+        beat(Beat::sound, 0);
         pthread_mutex_lock(&lock);
         const bool stream = streaming;
         if (stream)
@@ -129,6 +131,25 @@ void *thread_main(void *) noexcept
             ring.pop(block, kBlock);
         }
         pthread_mutex_unlock(&lock);
+        // the room's voices over the game (which dips a little under them)
+        if (stream)
+            voice_io::mix(block, kBlock);
+        // a headset on the controller (open mic needs one: no echo cancelling here), every 2 s
+        static unsigned blocks;
+        if (++blocks % 375 == 0)
+        {
+            struct
+            {
+                std::uint16_t output;
+                std::uint8_t channel, reserved;
+                std::int16_t volume;
+                std::uint16_t reroute;
+                std::uint64_t flag, reserved2[2];
+            } st{};
+            // bit 0x40: headphones (PS4 headers; not yet seen on the console: docs/MIC.md)
+            if (sceAudioOutGetPortState(port, &st) == 0)
+                voice_io::set_headset((st.output & 0x40) != 0);
+        }
         if (!stream)
         {
             const unsigned serial = blip_serial.load();
@@ -158,6 +179,7 @@ void *thread_main(void *) noexcept
                 block[i * 2 + 1] = static_cast<std::int16_t>(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
             }
         }
+        beat(Beat::sound, 1);
         const int rc = sceAudioOutOutput(port, block);
         if (rc < 0)
         {
@@ -209,6 +231,7 @@ void stream_end() noexcept
     streaming = false;
     ring.clear();
     pthread_mutex_unlock(&lock);
+    voice_io::stream_end();
 }
 
 void stream_header(const std::uint8_t *d, std::size_t n) noexcept

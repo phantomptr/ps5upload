@@ -59,6 +59,8 @@ struct PickItem
     char name[65];
     const Host *host;
     bool tailnet;
+    char id[72];
+    bool yours; // the engine says this PS5 is one of its own (`you.known`)
 };
 
 int pick_items(const net::Answer *found, int n_found, const Settings &s, PickItem *out, int cap) noexcept
@@ -72,6 +74,8 @@ int pick_items(const net::Answer *found, int n_found, const Settings &s, PickIte
         net::ip_text(found[i].ip_be, p.addr);
         p.port = found[i].info.port;
         p.tailnet = found[i].tailnet;
+        std::snprintf(p.id, sizeof p.id, "%s", found[i].info.id);
+        p.yours = found[i].info.you_known;
         std::snprintf(p.name, sizeof p.name, "%s", found[i].info.name[0] ? found[i].info.name : p.addr);
     }
     const Host *recent[Settings::kHosts];
@@ -90,6 +94,7 @@ int pick_items(const net::Answer *found, int n_found, const Settings &s, PickIte
         p.port = recent[i]->port;
         std::snprintf(p.name, sizeof p.name, "%s", recent[i]->name[0] ? recent[i]->name : recent[i]->addr);
         p.host = recent[i];
+        std::snprintf(p.id, sizeof p.id, "%s", recent[i]->id);
     }
     PickItem &t = out[n++];
     t = PickItem{};
@@ -114,6 +119,8 @@ App::App(const char *version, ui::Image bg, ui::Image logo) noexcept : version_{
     b = platform::message_buffer(1, &cap);
     static Companion host(b, cap);
     host_ = &host;
+    static RoomsNet rooms_net;
+    rooms_net_ = &rooms_net;
 }
 
 void App::load_settings() noexcept
@@ -127,6 +134,21 @@ void App::load_settings() noexcept
     platform::sounds(settings_.sounds);
     apply_language();
     easy_init();
+    load_device();
+    char hub[160] = {};
+    std::snprintf(hub, sizeof hub, "%s/hub.txt", platform::data_dir());
+    char url[128] = {};
+    const long hl = platform::read_file(hub, url, sizeof url - 1);
+    for (long i = 0; i < hl; ++i)
+        if (url[i] == '\n' || url[i] == '\r')
+            url[i] = 0;
+    rooms_net_->init(hl > 0 ? url : WaitingRoom::kHubUrl);
+    load_resume();
+    // The first run: three short pages (Settings › How it works shows them again).
+    if (!settings_.welcome_done && !fake_.on)
+        go(Screen::welcome);
+    else
+        take_intent();
 }
 
 void App::set_language(const char *code) noexcept
@@ -182,7 +204,11 @@ void App::on_token(const char *addr, std::uint16_t port, const char *token, void
     auto *app = static_cast<App *>(ctx);
     // Called on the companion's thread; the settings are only written from here and the main
     // thread's save() reads them: a token is a short copy, and saving again is harmless.
-    Host *h = app->settings_.remember(addr, port, nullptr);
+    // kept by the engine's id when known (an address change is no re-pair); a Tailscale forward
+    // on this console is never remembered as the computer's address
+    Host *h = app->host_id_[0] ? app->settings_.remember_id(app->host_id_, app->host_addr_[0] ? app->host_addr_ : addr,
+                                                           app->host_addr_[0] ? app->host_port_ : port, nullptr)
+                               : app->settings_.remember(addr, port, nullptr);
     if (h)
         std::snprintf(h->token, sizeof h->token, "%s", token);
     app->save();
@@ -265,6 +291,7 @@ void *App::discovery_main(void *self) noexcept
             x.info.port = eng[i].port ? eng[i].port : 19113;
             std::snprintf(x.info.name, sizeof x.info.name, "%s", eng[i].name);
             std::snprintf(x.info.version, sizeof x.info.version, "%s", eng[i].version);
+            std::snprintf(x.info.id, sizeof x.info.id, "%s", eng[i].id);
             a[n++] = x;
         }
         pthread_mutex_lock(&app->disc_lock_);
@@ -273,16 +300,47 @@ void *App::discovery_main(void *self) noexcept
         app->disc_done_once_ = true;
         app->dirty_ = true;
         pthread_mutex_unlock(&app->disc_lock_);
+        // Thanks & Support: the engine's supporter list when it is newer than the app's (once a run)
+        for (int i = 0; i < n && !app->support_checked_; ++i)
+            if (!a[i].tailnet)
+            {
+                char ip[16];
+                net::ip_text(a[i].ip_be, ip);
+                app->refresh_support(ip, a[i].info.port);
+            }
         for (int i = 0; i < 30 && app->disc_run_.load(); ++i)
             net::sleep_ms(100);
     }
     return nullptr;
 }
 
+void App::refresh_support(const char *addr, std::uint16_t port) noexcept
+{
+    support_checked_ = true;
+    static char body[16384];
+    if (net::http_get(addr, port, "/api/support", body, sizeof body, 2000) != 200)
+        return; // an older engine: the app's own list stays
+    // the list itself is read when Thanks opens (load_supporters)
+    const std::size_t len = std::strlen(body);
+    if (len < 10 || std::strstr(body, "\"names\"") == nullptr)
+        return;
+    char path[160];
+    std::snprintf(path, sizeof path, "%s/supporters.json", platform::data_dir());
+    char old[64] = {};
+    const long ol = platform::read_file(path, old, sizeof old - 1);
+    if (ol > 0 && !std::strncmp(old, body, sizeof old - 1))
+        return;
+    if (platform::write_file(path, body, len))
+        log("app: the supporter list from PS5Upload at %s kept", addr);
+}
+
 void App::remember_current() noexcept
 {
-    if (Host *h = settings_.remember(addr_, port_, engine_name_[0] ? engine_name_ : nullptr))
-        (void)h;
+    const char *name = engine_name_[0] ? engine_name_ : nullptr;
+    if (host_id_[0])
+        settings_.remember_id(host_id_, host_addr_[0] ? host_addr_ : addr_, host_addr_[0] ? host_port_ : port_, name);
+    else if (std::strcmp(addr_, "127.0.0.1") != 0)
+        settings_.remember(addr_, port_, name);
     save();
 }
 
@@ -296,8 +354,11 @@ void App::start_join(const char *code) noexcept
 void App::start_host() noexcept
 {
     remember_current();
-    const Host *h = settings_.find(addr_, port_);
+    const Host *h = host_id_[0] ? settings_.find_id(host_id_) : settings_.find(addr_, port_);
     host_->stop();
+    // a one-time grant from the helper pairs without a code (used only when no token is kept)
+    host_->set_hello(h && h->token[0] ? "" : host_grant_, app_id_);
+    host_grant_[0] = 0;
     host_->start(addr_, port_, h ? h->token : "", version_, on_token, this);
     if (!helper_run_.exchange(true))
     {
@@ -429,7 +490,8 @@ void App::on_input(std::uint32_t p, std::uint32_t held, std::uint64_t now) noexc
     if (!p)
         return;
     dirty_ = true;
-    if ((p & pad::kOptions) && screen_ != Screen::playing && screen_ != Screen::settings)
+    if ((p & pad::kOptions) && screen_ != Screen::playing && screen_ != Screen::settings &&
+        screen_ != Screen::keyboard && screen_ != Screen::notice && screen_ != Screen::confirm)
     {
         platform::blip(platform::Blip::choose);
         go(Screen::settings);
@@ -443,9 +505,23 @@ void App::on_input(std::uint32_t p, std::uint32_t held, std::uint64_t now) noexc
     case Screen::code: input_code(p); break;
     case Screen::address: input_address(p); break;
     case Screen::joining: input_joining(p); break;
-    case Screen::playing: break; // the controller is the friend's game's
+    case Screen::playing:
+        // the controller is the friend's game's, except while the Room menu is open
+        if (ov_open_)
+            input_overlay(p);
+        break;
     case Screen::host: input_host(p); break;
     case Screen::settings: input_settings(p); break;
+    case Screen::rooms: input_rooms(p); break;
+    case Screen::details: input_details(p); break;
+    case Screen::filter: input_filter(p); break;
+    case Screen::keyboard: input_keyboard(p, held); break;
+    case Screen::notice: input_notice(p); break;
+    case Screen::thanks: input_thanks(p); break;
+    case Screen::welcome: input_welcome(p); break;
+    case Screen::help: input_help(p); break;
+    case Screen::confirm: input_confirm(p); break;
+    case Screen::menu: input_menu(p); break;
     }
 }
 
@@ -454,7 +530,7 @@ void App::input_home(std::uint32_t p) noexcept
     // Games nearby, an invite and Play again first (easy.cpp), then the home screen's own rows.
     EasyRow easy[kEasyRows];
     const int ne = easy_rows(easy, kEasyRows);
-    const int n = ne + 4;
+    const int n = ne + 5;
     if (p & kUp)
         sel_ = (sel_ + n - 1) % n, platform::blip(platform::Blip::move);
     if (p & kDown)
@@ -477,9 +553,14 @@ void App::input_home(std::uint32_t p) noexcept
         platform::blip(platform::Blip::choose);
         switch (sel_ - ne)
         {
-        case 0: for_host_ = false, go(Screen::pick); break;
-        case 1: for_host_ = true, go(Screen::pick); break;
+        case 0: for_host_ = false, open_rooms(); break;
+        case 1:
+            for_host_ = true;
+            if (!host_auto())
+                go(Screen::pick);
+            break;
         case 2: go(Screen::settings); break;
+        case 3: go(Screen::thanks); break;
         default:
             save();
             platform::exit_app();
@@ -529,6 +610,9 @@ void App::input_pick(std::uint32_t p) noexcept
     std::snprintf(addr_, sizeof addr_, "%s", it.addr);
     port_ = it.port;
     std::snprintf(engine_name_, sizeof engine_name_, "%s", it.kind == PickItem::found ? it.name : (it.host ? it.host->name : ""));
+    std::snprintf(host_id_, sizeof host_id_, "%s", it.id);
+    std::snprintf(host_addr_, sizeof host_addr_, "%s", it.addr);
+    host_port_ = it.port;
     // As Play again remembers it (the engine, not the helper's forward below).
     target_ = JoinTarget{};
     std::snprintf(target_.addr, sizeof target_.addr, "%s", it.addr);
@@ -700,6 +784,38 @@ void App::input_joining(std::uint32_t p) noexcept
 {
     const GuestView v = guest_view();
     const bool over = v.phase == GuestView::refused || v.phase == GuestView::ended || v.phase == GuestView::failed;
+    if (v.phase == GuestView::name_taken)
+    {
+        // "Join as Sam (2)" (✕) or another name (□)
+        if (p & pad::kCross)
+        {
+            std::snprintf(join_name_, sizeof join_name_, "%s", v.suggest);
+            platform::blip(platform::Blip::choose);
+            start_join_how(code_, last_extras_, n_last_ways_ ? last_ways_ : nullptr, n_last_ways_);
+            return;
+        }
+        if (p & pad::kSquare)
+        {
+            open_keyboard(Kb::name, tr(S::kb_title_name), join_name_[0] ? join_name_ : platform::user_name(), 24, false);
+            return;
+        }
+    }
+    if (v.phase == GuestView::password && (p & pad::kCross))
+    {
+        char t[160];
+        std::snprintf(t, sizeof t, tr(S::kb_title_pw), engine_name_[0] ? engine_name_ : v.host);
+        open_keyboard(Kb::password, t, "", 64, true);
+        return;
+    }
+    if (over && (p & pad::kSquare))
+    {
+        // Home: never a dead end
+        depth_ = 0;
+        screen_ = Screen::home;
+        sel_ = 0;
+        platform::blip(platform::Blip::back);
+        return;
+    }
     if (p & pad::kCircle)
     {
         if (!over)
@@ -716,196 +832,23 @@ void App::input_joining(std::uint32_t p) noexcept
     if ((p & pad::kCross) && over)
     {
         platform::blip(platform::Blip::choose);
+        // a wrong password: type it again
+        if (v.phase == GuestView::refused && !std::strcmp(v.why, "password") && join_from_card_)
+        {
+            char t[160];
+            std::snprintf(t, sizeof t, tr(S::kb_title_pw), join_card_.name[0] ? join_card_.name : join_card_.host);
+            pending_card_ = join_card_;
+            open_keyboard(Kb::password, t, "", 64, true);
+            return;
+        }
         // the same ways again (a handed invite's, the bridge too)
         start_join_how(code_, last_extras_, n_last_ways_ ? last_ways_ : nullptr, n_last_ways_);
     }
 }
 
-int App::host_rows(const CompanionView &v, Row *rows, int cap) const noexcept
-{
-    int n = 0;
-    auto add = [&](Row::Kind k, long long id = 0, int player = 0) {
-        if (n < cap)
-            rows[n++] = Row{k, id, player};
-    };
-    if (v.phase == CompanionView::unpaired || v.phase == CompanionView::pairing)
-    {
-        add(Row::pair);
-        return n;
-    }
-    if (v.phase != CompanionView::paired)
-        return 0;
-    const CompanionDoc &d = v.doc;
-    // Friends asking first; then this console's Remote Play, through the helper when it runs.
-    for (int i = 0; i < d.n_asks; ++i)
-        add(Row::ask, d.asks[i].id);
-    const HelperState &hs = helper_view_;
-    if (hs.present == 1 && hs.rp_known &&
-        (!hs.rp.service_on || (hs.rp.needs_user_permission && !hs.rp.user_on)))
-        add(Row::rp_enable);
-    if (hs.present == 1)
-        add(Row::rp_pin);
-    if (!d.together_open)
-        add(Row::open);
-    else
-    {
-        add(Row::new_code);
-        for (int i = 0; i < d.n_guests; ++i)
-            add(Row::guest, d.guests[i].id, d.guests[i].player);
-        add(Row::close);
-    }
-    add(Row::sw_block);
-    add(Row::sw_max);
-    add(Row::sw_seat);
-    add(Row::sw_invites);
-    add(Row::sw_awake);
-    return n;
-}
-
-void App::input_host(std::uint32_t p) noexcept
-{
-    if (p & pad::kCircle)
-        return back();
-    const CompanionView v = host_view();
-    refresh_helper_view();
-    Row rows[24];
-    const int n = host_rows(v, rows, 24);
-    if (v.phase == CompanionView::failed && (p & pad::kCross))
-    {
-        start_host();
-        return;
-    }
-    if (!n)
-        return;
-    if (p & kUp)
-        sel_ = (sel_ + n - 1) % n, platform::blip(platform::Blip::move);
-    if (p & kDown)
-        sel_ = (sel_ + 1) % n, platform::blip(platform::Blip::move);
-    sel_ = clampi(sel_, 0, n - 1);
-    const Row &r = rows[sel_];
-    const CompanionDoc &d = v.doc;
-    const bool cross = p & pad::kCross, left = p & kLeftB, right = p & kRight;
-    const bool change = cross || left || right;
-    auto ok = [](bool sent) { platform::blip(sent ? platform::Blip::choose : platform::Blip::bad); };
-    switch (r.kind)
-    {
-    case Row::pair:
-        if (cross)
-            ok(host_->pair());
-        break;
-    case Row::rp_enable:
-        if (cross)
-        {
-            // A change to the console's settings: a second press says yes.
-            const std::uint64_t now = net::now_us();
-            if (now > rp_confirm_until_)
-            {
-                rp_confirm_until_ = now + 5000000;
-                platform::blip(platform::Blip::choose);
-                break;
-            }
-            rp_confirm_until_ = 0;
-            helper::Rp rp;
-            char err[32] = {};
-            const bool done = helper::rp_enable(rp, err, sizeof err);
-            log("helper: turn on Remote Play: %s", done ? "done" : err);
-            pthread_mutex_lock(&helper_lock_);
-            if (done)
-                helper_.rp = rp, helper_.rp_known = true, helper_.error[0] = 0;
-            else
-                std::snprintf(helper_.error, sizeof helper_.error, tr(S::host_rp_enable_failed), err);
-            pthread_mutex_unlock(&helper_lock_);
-            ok(done);
-        }
-        break;
-    case Row::rp_pin:
-        if (cross)
-        {
-            helper::Pin pin;
-            char err[32] = {};
-            bool done;
-            if (!std::strcmp(helper_view_.pin.state, "waiting"))
-            {
-                done = helper::pin_cancel();
-                std::snprintf(pin.state, sizeof pin.state, "%s", "idle");
-            }
-            else
-                done = helper::pin_request(pin, err, sizeof err);
-            log("helper: Remote Play PIN %s: %s", pin.state, done ? "ok" : err);
-            pthread_mutex_lock(&helper_lock_);
-            if (done)
-                helper_.pin = pin, helper_.error[0] = 0;
-            else
-                std::snprintf(helper_.error, sizeof helper_.error, tr(S::host_rp_pin_failed), err);
-            pthread_mutex_unlock(&helper_lock_);
-            ok(done);
-        }
-        break;
-    case Row::ask:
-        if (cross)
-            ok(host_->decide(r.id, true));
-        if (p & pad::kSquare)
-            ok(host_->decide(r.id, false));
-        break;
-    case Row::open:
-        if (cross)
-            ok(host_->invite(false));
-        break;
-    case Row::new_code:
-        if (cross)
-            ok(host_->invite(true));
-        break;
-    case Row::close:
-        if (cross)
-            ok(host_->close_together());
-        break;
-    case Row::guest:
-        if (p & pad::kTriangle)
-            ok(host_->kick(r.player));
-        break;
-    case Row::sw_block:
-        if (change)
-            ok(host_->set_switch("block_system_buttons", d.block_system_buttons ? "false" : "true"));
-        break;
-    case Row::sw_max:
-        if (change)
-        {
-            int m = d.max_players + (left ? -1 : 1);
-            if (m < 1)
-                m = d.max_guests;
-            if (m > d.max_guests)
-                m = 1;
-            char b[8];
-            std::snprintf(b, sizeof b, "%d", m);
-            ok(host_->set_switch("max_players", b));
-        }
-        break;
-    case Row::sw_seat:
-        if (change)
-            ok(host_->set_switch("stream_seat", d.stream_seat ? "false" : "true"));
-        break;
-    case Row::sw_invites:
-        if (change)
-            ok(host_->set_switch("invites", std::strcmp(d.invites, "wifi") ? "\"wifi\"" : "\"anywhere\""));
-        break;
-    case Row::sw_awake:
-        if (change)
-        {
-            static const char *modes[] = {"off", "transfers", "always"};
-            int at = 0;
-            for (int i = 0; i < 3; ++i)
-                if (!std::strcmp(d.keep_awake, modes[i]))
-                    at = i;
-            at = (at + (left ? 2 : 1)) % 3;
-            ok(host_->keep_awake(modes[at]));
-        }
-        break;
-    }
-}
-
 void App::input_settings(std::uint32_t p) noexcept
 {
-    constexpr int kRows = 6;
+    constexpr int kRows = 10;
     if (p & (pad::kCircle | pad::kOptions))
     {
         save();
@@ -945,6 +888,28 @@ void App::input_settings(std::uint32_t p) noexcept
             note_until_ = net::now_us() + 3000000;
         }
         break;
+    case 6:
+        if (cross)
+            go(Screen::thanks);
+        return;
+    case 7:
+        if (cross)
+        {
+            welcome_page_ = 0;
+            go(Screen::welcome);
+        }
+        return;
+    case 8:
+        if (cross)
+            go(Screen::help);
+        return;
+    case 9:
+        if (cross)
+        {
+            pending_ = Pending::none;
+            go(Screen::notice);
+        }
+        return;
     }
     platform::music(settings_.music && !streaming_, settings_.music_volume);
     platform::sounds(settings_.sounds);
@@ -994,6 +959,17 @@ void App::command(const char *line) noexcept
     }
     else if (!std::strcmp(verb, "pair"))
         host_->pair();
+    else if (!std::strcmp(verb, "rooms") || !std::strcmp(verb, "thanks") || !std::strcmp(verb, "notice"))
+    {
+        // the Join list, Thanks & Support, the notice (dev checks on the console)
+        stop_host();
+        depth_ = 0;
+        screen_ = Screen::home;
+        if (!std::strcmp(verb, "rooms"))
+            open_rooms();
+        else
+            go(!std::strcmp(verb, "thanks") ? Screen::thanks : Screen::notice);
+    }
     else if (!std::strcmp(verb, "pick") || !std::strcmp(verb, "pickhost"))
     {
         stop_host();
@@ -1030,7 +1006,9 @@ void App::command(const char *line) noexcept
 
 void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) noexcept
 {
+    beat(Beat::main, 1);
     const platform::Input in = platform::input();
+    beat(Beat::main, 2);
     // Back in front after the home screen or the control center: sockets may be gone.
     if (in.in_front && !was_front_)
     {
@@ -1040,7 +1018,9 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
     was_front_ = in.in_front;
     if (in.in_front)
         on_input(in.pressed, in.held, now);
+    beat(Beat::main, 3);
     easy_frame(now);
+    beat(Beat::main, 4);
 
     // The guest's progress moves the screens.
     const GuestView gv = guest_view();
@@ -1077,12 +1057,109 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
         const platform::Chords ch = platform::chords();
         if (ch.leave_now)
         {
-            log("app: leave chord");
-            leave_game();
+            // others from this PS5 still play: only this player's place goes (release)
+            if (seats_.playing() > 0 && !released_ && guest_->release())
+            {
+                log("app: leave chord: released (others from this PS5 play on)");
+                released_ = true;
+            }
+            else
+            {
+                log("app: leave chord");
+                leave_game();
+            }
         }
         if (ch.ps_sent)
             ps_note_until_ = now + 2500000;
+        // OPTIONS + TOUCHPAD, then △: the Room menu (docs/ROOMS.md)
+        if (ch.room_menu && screen_ == Screen::playing)
+        {
+            ov_open_ = !ov_open_;
+            ov_sel_ = 0;
+            if (ov_open_)
+            {
+                guest_->chat_read();
+                platform::blip(platform::Blip::choose);
+            }
+            dirty_ = true;
+        }
+        talk_held_ = ch.talk;
+        overlay_frame(now);
     }
+    else
+    {
+        ov_open_ = false;
+        notice_sent_ = false;
+        if (mic_on_)
+        {
+            mic_on_ = false; // off on every join (the design's 7A.2)
+            mixer_.clear();
+        }
+        platform::ptt_on_create(false);
+        voice::Allow off;
+        platform::voice_allow(off);
+    }
+    beat(Beat::main, 5);
+    seats_frame(now);
+    beat(Beat::main, 6);
+    // The game gets "nothing pressed" while the Room menu or any other screen is up.
+    platform::pad_to_menu(streaming_ && (ov_open_ || screen_ != Screen::playing));
+    // The resume token kept on disk (back after the host restarts or the app closes).
+    if (gv.phase == GuestView::joined && gv.token[0])
+    {
+        const std::uint32_t mark = static_cast<std::uint32_t>(gv.token[0]) << 24 | static_cast<std::uint32_t>(gv.token[1]) << 16 |
+                                   static_cast<std::uint32_t>(std::strlen(gv.token));
+        if (mark != resume_saved_)
+        {
+            resume_saved_ = mark;
+            save_resume(gv);
+        }
+    }
+    else if (resume_saved_ && (gv.phase == GuestView::ended || gv.phase == GuestView::refused))
+    {
+        resume_saved_ = 0;
+        clear_resume();
+        resume_ = Resume{};
+    }
+    // The password the room asked for: the keyboard comes up by itself.
+    if (gv.phase == GuestView::password && screen_ == Screen::joining && static_cast<int>(gv.phase) == last_phase_ &&
+        !password_asked_)
+    {
+        password_asked_ = true;
+        char t[160];
+        std::snprintf(t, sizeof t, tr(S::kb_title_pw), engine_name_[0] ? engine_name_ : gv.host);
+        open_keyboard(Kb::password, t, "", 64, true);
+    }
+    if (gv.phase != GuestView::password)
+        password_asked_ = false;
+    beat(Beat::main, 7);
+    // The Join list's network side: while the list (or its sheets) are up, and on the home
+    // screen for "<friend>'s room is open" at the hub's pace.
+    if (!fake_.on)
+    {
+        const bool rooms_screen = screen_ == Screen::rooms || screen_ == Screen::details || screen_ == Screen::filter ||
+                                  (screen_ == Screen::keyboard && kb_for_ == Kb::game);
+        int nl = 0;
+        const char *lob[8], *names[8];
+        for (const auto &f : friends_.list)
+            if (f.addr[0] && f.lobby[0] && nl < 8)
+                lob[nl] = f.lobby, names[nl++] = f.name;
+        const bool want = rooms_screen || (screen_ == Screen::home && nl > 0 && !streaming_);
+        if (want && !rooms_net_->running())
+            rooms_net_->start();
+        else if (!want && rooms_net_->running())
+            rooms_net_->stop();
+        if (want)
+            rooms_net_->set_friends(lob, names, nl);
+        if (rooms_net_->rev() != rv_rev_)
+        {
+            rv_rev_ = rooms_net_->rev();
+            rv_ = rooms_net_->view();
+            dirty_ = true;
+        }
+    }
+    else
+        rv_ = fake_.rooms;
     // Keep the console awake while playing or hosting (every 10 s).
     if ((streaming_ || screen_ == Screen::host) && now - last_tick_ >= 10000000)
     {
@@ -1097,12 +1174,14 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
     }
     // Animated or live screens redraw a few times a second; the rest only when something changed.
     const bool live_screen = screen_ == Screen::joining || screen_ == Screen::playing || screen_ == Screen::host ||
-                             screen_ == Screen::pick;
+                             screen_ == Screen::pick || screen_ == Screen::rooms || screen_ == Screen::keyboard;
     if (!dirty_ && !(live_screen && now - last_draw_ > 250000))
         return;
     bool show_ui = true;
     int top = 0, bottom = 0;
+    beat(Beat::main, 8);
     draw(ui_px, layer, now, &show_ui, &top, &bottom);
+    beat(Beat::main, 9);
     last_draw_ = now;
     dirty_ = false;
     if (screen_ == Screen::playing)
@@ -1127,6 +1206,16 @@ void App::draw(std::uint32_t *ui_px, std::uint32_t *layer, std::uint64_t now, bo
     case Screen::joining: draw_joining(c, guest_view()); break;
     case Screen::host: draw_host(c, host_view()); break;
     case Screen::settings: draw_settings(c); break;
+    case Screen::rooms: draw_rooms(c); break;
+    case Screen::details: draw_details(c); break;
+    case Screen::filter: draw_filter(c); break;
+    case Screen::keyboard: draw_keyboard(c); break;
+    case Screen::notice: draw_notice(c); break;
+    case Screen::thanks: draw_thanks(c); break;
+    case Screen::welcome: draw_welcome(c); break;
+    case Screen::help: draw_help(c); break;
+    case Screen::confirm: draw_confirm(c); break;
+    case Screen::menu: draw_menu(c); break;
     case Screen::playing:
     {
         const GuestView v = guest_view();
@@ -1206,17 +1295,37 @@ void App::draw_home(Canvas &c) noexcept
     c.text(Font::body, kLeft + 4, 220, tr(S::tagline), col::muted, 1060);
     EasyRow easy[kEasyRows];
     const int ne = easy_rows(easy, kEasyRows);
-    sel_ = clampi(sel_, 0, ne + 3);
+    sel_ = clampi(sel_, 0, ne + 4);
     // More rows: a little tighter.
-    const int top = ne ? 300 : 340, step = ne ? 108 : 140, h = ne ? 96 : 116;
+    const int top = ne ? 290 : 310, step = ne ? 98 : 116, h = ne ? 88 : 100;
     for (int i = 0; i < ne; ++i)
         draw_easy_row(c, kLeft, top + i * step, 1060, h, sel_ == i, easy[i]);
-    const S titles[] = {S::home_join, S::home_host, S::home_settings, S::home_exit};
-    const S subs[] = {S::home_join_sub, S::home_host_sub, S::home_settings_sub, S::app_name};
-    for (int i = 0; i < 4; ++i)
-        draw_row(c, kLeft, top + (ne + i) * step, 1060, h, sel_ == ne + i, tr(titles[i]), i < 3 ? tr(subs[i]) : nullptr);
-    if (!ne)
-        c.text(Font::small, kLeft, 920, version_, col::muted);
+    const S titles[] = {S::home_join, S::home_host, S::home_settings, S::home_thanks, S::home_exit};
+    const S subs[] = {S::home_join_sub, S::home_host_sub, S::home_settings_sub, S::home_thanks_sub, S::app_name};
+    for (int i = 0; i < 5; ++i)
+        draw_row(c, kLeft, top + (ne + i) * step, 1060, h, sel_ == ne + i, tr(titles[i]), i < 4 ? tr(subs[i]) : nullptr);
+    // the footer: which PS5Upload this PS5 knows, the helper, the version
+    {
+        char foot[200];
+        const Host *recent[1];
+        const bool known = settings_.recent(recent, 1) > 0;
+        int nf = 0;
+        pthread_mutex_lock(&disc_lock_);
+        nf = fake_.on ? fake_.found : n_found_;
+        char first[65] = {};
+        if (nf)
+            std::snprintf(first, sizeof first, "%s", fake_.on ? fake_.answers[0].info.name : found_[0].info.name);
+        pthread_mutex_unlock(&disc_lock_);
+        int o = 0;
+        if (nf && first[0])
+            o = std::snprintf(foot, sizeof foot, tr(S::foot_engine), first);
+        else if (known && recent[0]->name[0])
+            o = std::snprintf(foot, sizeof foot, tr(S::foot_engine), recent[0]->name);
+        else
+            o = std::snprintf(foot, sizeof foot, "%s", tr(S::foot_looking));
+        std::snprintf(foot + o, sizeof foot - static_cast<std::size_t>(o), " · %s", version_);
+        c.text(Font::small, kLeft, 960 - 40, foot, col::muted, 1100);
+    }
     const bool again = room_paused_ || (fake_.on ? fake_.room.expired : room_.view().expired);
     const int g[] = {G_CROSS, G_OPTIONS, G_TRIANGLE};
     const S l[] = {S::hint_choose, S::hint_settings, S::hint_phone};
@@ -1376,7 +1485,9 @@ const char *App::guest_message(const GuestView &v, char *buf, std::size_t cap) c
         {"not_playing", S::why_not_playing}, {"old_helper", S::why_old_helper},
         {"unreachable", S::why_unreachable_ps5}, {"slow_down", S::why_slow_down},
         {"seat_taken", S::why_seat_taken}, {"hello", S::why_hello},
-        {"friend", S::why_friend},
+        {"friend", S::why_friend},     {"password", S::why_password_plain}, {"locked_out", S::why_locked_out},
+        {"locked", S::why_locked},     {"host_away", S::why_host_away},     {"not_listed", S::why_not_listed},
+        {"old", S::why_old},           {"no", S::why_denied},
     };
     static const Why ended[] = {
         {"left", S::end_left},           {"kicked", S::end_kicked},     {"closed", S::end_closed},
@@ -1395,16 +1506,33 @@ const char *App::guest_message(const GuestView &v, char *buf, std::size_t cap) c
     case GuestView::joined: return tr(S::st_picture);
     case GuestView::reconnecting: return tr(S::st_reconnecting);
     case GuestView::refused:
+        if (!std::strcmp(v.why, "password") && v.tries_left >= 0)
+        {
+            std::snprintf(buf, cap, tr(S::why_password), v.tries_left);
+            return buf;
+        }
         for (const auto &w : refused)
             if (!std::strcmp(w.why, v.why))
                 return tr(w.s);
         std::snprintf(buf, cap, tr(S::why_other), v.why);
         return buf;
     case GuestView::ended:
+        if (!std::strcmp(v.why, "removed"))
+        {
+            std::snprintf(buf, cap, tr(S::end_removed), v.host[0] ? v.host : tr(S::host_friend));
+            return buf;
+        }
+        if (!std::strcmp(v.why, "closed") && v.room.known)
+        {
+            std::snprintf(buf, cap, tr(S::end_room_closed), v.host[0] ? v.host : tr(S::host_friend));
+            return buf;
+        }
         for (const auto &w : ended)
             if (!std::strcmp(w.why, v.why))
                 return tr(w.s);
         return tr(S::end_lost);
+    case GuestView::name_taken:
+    case GuestView::password: return "";
     case GuestView::failed:
         if (!std::strncmp(v.why, "bridge_", 7))
         {
@@ -1449,6 +1577,26 @@ void App::draw_joining(Canvas &c, const GuestView &v) noexcept
     const char *msg = guest_message(v, buf, sizeof buf);
     const bool over = v.phase == GuestView::refused || v.phase == GuestView::ended || v.phase == GuestView::failed;
     const bool good_end = v.phase == GuestView::ended && !std::strcmp(v.why, "left");
+    if (v.phase == GuestView::name_taken)
+    {
+        char t[200], j[120];
+        std::snprintf(t, sizeof t, tr(S::name_taken_title), join_name_[0] ? join_name_ : platform::user_name());
+        c.text_wrap(Font::title, kLeft, 330, 1300, t, col::text);
+        std::snprintf(j, sizeof j, tr(S::name_join_as), v.suggest);
+        draw_row(c, kLeft, 470, 900, 100, true, j, nullptr);
+        const int g[] = {G_CROSS, G_SQUARE, G_CIRCLE};
+        const S l[] = {S::hint_join, S::name_pick, S::hint_back};
+        draw_hints(c, g, l, 3);
+        return;
+    }
+    if (v.phase == GuestView::password)
+    {
+        c.text_wrap(Font::title, kLeft, 380, 1300, tr(S::pw_needed), col::text);
+        const int g[] = {G_CROSS, G_CIRCLE};
+        const S l[] = {S::hint_type, S::hint_back};
+        draw_hints(c, g, l, 2);
+        return;
+    }
     if (!over)
     {
         // a turning ring while waiting
@@ -1457,6 +1605,16 @@ void App::draw_joining(Canvas &c, const GuestView &v) noexcept
         c.text_wrap(Font::title, kLeft + 110, 392, 1150, msg, col::text);
         if (v.phase == GuestView::asking)
             c.text(Font::body, kLeft + 110, 470, tr(S::st_asking_sub), col::muted);
+        // Players on this PS5: one tile per signed-in controller
+        draw_seats_strip(c, 640);
+        // the real round trip on the join's way, before a seat is taken (the design's 6.4)
+        if (v.route_rtt_ms >= 0 && (v.phase == GuestView::asking || v.phase == GuestView::waiting))
+        {
+            char ln[160];
+            std::snprintf(ln, sizeof ln, tr(S::st_your_conn), route_ui::tier_text(v.tier), v.route_rtt_ms);
+            const int bw = draw_bars(c, kLeft + 110, 540, rooms::bars_for_ms(v.route_rtt_ms), false);
+            c.text(Font::body, kLeft + 110 + bw + 16, 538, ln, col::text);
+        }
     }
     else
     {
@@ -1466,9 +1624,10 @@ void App::draw_joining(Canvas &c, const GuestView &v) noexcept
     }
     if (over)
     {
-        const int g[] = {G_CROSS, G_CIRCLE};
-        const S l[] = {S::hint_retry, S::hint_back};
-        draw_hints(c, g, l, 2);
+        const bool closed = v.phase == GuestView::ended && (!std::strcmp(v.why, "closed") || !std::strcmp(v.why, "removed"));
+        const int g[] = {G_CROSS, G_SQUARE, G_CIRCLE};
+        const S l[] = {closed || good_end ? S::hint_play_again : S::hint_retry, S::hint_home, S::hint_back};
+        draw_hints(c, g, l, 3);
     }
     else
     {
@@ -1498,11 +1657,18 @@ void App::draw_playing_ui(Canvas &c, const GuestView &v) noexcept
 
 int App::draw_playing_layer(Canvas &l, const GuestView &v, std::uint64_t now, int *top) noexcept
 {
-    // Only the two bands are cleared and drawn: the rest of the layer is never read.
-    constexpr int kTopBand = 120, kBottomBand = 150;
-    const platform::Chords ch = fake_.on ? platform::Chords{fake_.ps, fake_.leave, false, false} : platform::chords();
-    std::memset(l.pixels(), 0, sizeof(std::uint32_t) * ui::kW * kTopBand);
-    std::memset(l.pixels() + ui::kW * (ui::kH - kBottomBand), 0, sizeof(std::uint32_t) * ui::kW * kBottomBand);
+    // Only the two bands are cleared and drawn: the rest of the layer is never read (all of it
+    // while the Room menu is open).
+    constexpr int kTopBand = 170, kBottomBand = 280;
+    const platform::Chords ch = fake_.on ? platform::Chords{fake_.ps, fake_.leave, false, false, false, false}
+                                         : platform::chords_peek();
+    if (ov_open_)
+        std::memset(l.pixels(), 0, sizeof(std::uint32_t) * ui::kW * ui::kH);
+    else
+    {
+        std::memset(l.pixels(), 0, sizeof(std::uint32_t) * ui::kW * kTopBand);
+        std::memset(l.pixels() + ui::kW * (ui::kH - kBottomBand), 0, sizeof(std::uint32_t) * ui::kW * kBottomBand);
+    }
     *top = 0;
     int bottom = 0;
     // Top: what the person should know now.
@@ -1550,12 +1716,13 @@ int App::draw_playing_layer(Canvas &l, const GuestView &v, std::uint64_t now, in
     const bool hints = settings_.hints && joined_at_ && now - joined_at_ < 10000000;
     if (hold || hints)
     {
-        const int y0 = ui::kH - kBottomBand + 30;
+        const int y0 = ui::kH - 170;
         const char *line1 = hold ? tr(ch.leave > 0 ? S::play_hold_leave : S::play_hold_ps) : tr(S::play_hint_ps);
         const char *line2 = hold ? nullptr : tr(S::play_hint_leave);
+        const char *line3 = hold ? nullptr : tr(S::play_hint_room);
         const int w = 1100;
         const int x = (ui::kW - w) / 2;
-        for (int y = y0; y < y0 + 96; ++y)
+        for (int y = y0; y < y0 + (hold ? 96 : 130); ++y)
             for (int xx = x; xx < x + w; ++xx)
                 l.pixels()[y * ui::kW + xx] = (col::panel & 0xffffffu) | (215u << 24);
         if (hold)
@@ -1571,274 +1738,21 @@ int App::draw_playing_layer(Canvas &l, const GuestView &v, std::uint64_t now, in
         }
         else
         {
-            l.text(Font::small, x + 30, y0 + 14, line1, col::text);
-            l.text(Font::small, x + 30, y0 + 52, line2, col::text);
+            l.text(Font::small, x + 30, y0 + 10, line1, col::text);
+            l.text(Font::small, x + 30, y0 + 50, line2, col::text);
+            l.text(Font::small, x + 30, y0 + 90, line3, col::text);
         }
         bottom = kBottomBand;
     }
+    // The room: who is talking, unread chat, the mic; the Room menu; chat lines over the game.
+    const int ov = draw_overlay(l, v, now);
+    if (ov >= ui::kH)
+        *top = ui::kH;
+    else if (ov > *top)
+        *top = ov < kTopBand ? kTopBand : ov;
+    if (!bottom)
+        bottom = draw_chat_lines(l, v, now);
     return bottom;
-}
-
-void App::draw_host(Canvas &c, const CompanionView &v) noexcept
-{
-    refresh_helper_view();
-    draw_frame(c, tr(S::home_host));
-    char buf[320];
-    const CompanionDoc &d = v.doc;
-    const char *name = d.engine_name[0] ? d.engine_name : engine_name_[0] ? engine_name_ : addr_;
-    c.text(Font::small, kLeft, kTop + 66, name, col::muted);
-    Row rows[24];
-    const int n = host_rows(v, rows, 24);
-    sel_ = n ? clampi(sel_, 0, n - 1) : 0;
-    if (v.phase == CompanionView::connecting || v.phase == CompanionView::idle || v.phase == CompanionView::retrying)
-    {
-        const float t = static_cast<float>(net::now_us() % 1200000) / 1200000.0f;
-        c.ring(kLeft + 40, 420, 36, 8, col::accent, t, 0.3f);
-        c.text(Font::title, kLeft + 110, 392, tr(v.phase == CompanionView::retrying ? S::host_retrying : S::host_connecting), col::text);
-    }
-    else if (v.phase == CompanionView::failed)
-    {
-        if (!std::strcmp(v.why, "old_engine"))
-            c.text_wrap(Font::title, kLeft, 300, 1500, tr(S::host_old_engine), col::text);
-        else
-        {
-            std::snprintf(buf, sizeof buf, tr(S::fail_unreachable), addr_);
-            c.text_wrap(Font::title, kLeft, 300, 1500, !std::strcmp(v.why, "busy") ? tr(S::fail_busy) : buf, col::text);
-        }
-        const int g[] = {G_CROSS, G_CIRCLE};
-        const S l[] = {S::hint_retry, S::hint_back};
-        draw_hints(c, g, l, 2);
-        return;
-    }
-    else if (v.phase == CompanionView::unpaired || v.phase == CompanionView::pairing)
-    {
-        c.text(Font::title, kLeft, 260, tr(S::host_pair_title), col::text);
-        int y = 330;
-        if (v.auth[0])
-            y += c.text_wrap(Font::body, kLeft, y, 1500, tr(S::host_auth_dropped), col::warn) + 10;
-        y += c.text_wrap(Font::body, kLeft, y, 1500, tr(S::host_pair_text), col::muted) + 30;
-        if (v.phase == CompanionView::pairing && v.pair_left_s > 0)
-        {
-            c.round_rect(kLeft, y, 760, 200, 24, col::panel, 235);
-            c.text_center(Font::huge, kLeft + 380, y + (200 - ui::font_height(Font::huge)) / 2, v.pair_display, col::text);
-            y += 230;
-            y += c.text_wrap(Font::body, kLeft, y, 1500, tr(S::host_pair_code_text), col::text) + 10;
-            std::snprintf(buf, sizeof buf, tr(S::host_pair_left), v.pair_left_s / 60, v.pair_left_s % 60);
-            c.text(Font::small, kLeft, y, buf, col::muted);
-        }
-        else
-        {
-            if (v.phase == CompanionView::pairing)
-                y += c.text_wrap(Font::body, kLeft, y, 1500, tr(S::host_pair_gone), col::warn) + 10;
-            draw_row(c, kLeft, y, 800, 104, true, tr(S::host_pair_button), nullptr);
-        }
-        const int g[] = {G_CROSS, G_CIRCLE};
-        const S l[] = {S::hint_choose, S::hint_back};
-        draw_hints(c, g, l, 2);
-        return;
-    }
-    if (v.phase != CompanionView::paired)
-        return;
-
-    // Left: the session and what is around it, then the rows.
-    int y = 210;
-    if (d.playing)
-        std::snprintf(buf, sizeof buf, tr(S::host_playing),
-                      !std::strcmp(d.codec, "h264") ? "H.264" : !std::strcmp(d.codec, "h265_hdr") ? "HEVC HDR" : "HEVC",
-                      (d.bitrate_kbps + 500) / 1000);
-    c.circle(kLeft + 10, y + 18, 9, d.playing ? col::good : col::muted);
-    c.text(Font::small, kLeft + 34, y + 4, d.playing ? buf : tr(S::host_idle), d.playing ? col::text : col::muted, 1060);
-    y += 44;
-    const HelperState &hs = helper_view_;
-    if (hs.present == 1 && hs.rp_known && !hs.rp.ready)
-    {
-        // What this console's helper says is missing, in order.
-        const S why = !hs.rp.service_on                                    ? S::host_rp_off_here
-                      : hs.rp.needs_user_permission && !hs.rp.user_on      ? S::host_rp_user_here
-                      : !hs.rp.psn_activated                               ? S::host_rp_account
-                                                                           : S::host_rp_setup;
-        c.circle(kLeft + 10, y + 18, 9, col::warn);
-        c.text(Font::small, kLeft + 34, y + 4, tr(why), col::warn, 1060);
-    }
-    else
-    {
-        const bool good = d.rp_paired || (hs.present == 1 && hs.rp_known && hs.rp.ready);
-        if (d.rp_paired)
-            std::snprintf(buf, sizeof buf, tr(S::host_rp_ready), d.engine_name[0] ? d.engine_name : "PS5Upload");
-        else
-            std::snprintf(buf, sizeof buf, "%s", tr(good ? S::host_rp_on_here : S::host_rp_setup));
-        c.circle(kLeft + 10, y + 18, 9, good ? col::good : col::warn);
-        c.text(Font::small, kLeft + 34, y + 4, buf, good ? col::text : col::warn, 1060);
-    }
-    y += 44;
-    // The helper: what this app saw on 127.0.0.1, else what the engine heard.
-    const int helper_on = hs.present >= 0 ? hs.present : d.helper_present;
-    if (helper_on >= 0)
-    {
-        c.circle(kLeft + 10, y + 18, 9, helper_on ? col::good : col::warn);
-        c.text(Font::small, kLeft + 34, y + 4, tr(helper_on ? S::host_helper_on : S::host_helper_off),
-               helper_on ? col::text : col::warn, 1060);
-        y += 44;
-    }
-    if (hs.error[0])
-    {
-        c.text(Font::small, kLeft + 34, y + 4, hs.error, col::warn, 1060);
-        y += 44;
-    }
-    y += 16;
-    const int row_h = 76, row_w = 1100;
-    // Seven rows fit above the note; keep the selected one in view.
-    const int first = sel_ > 6 ? sel_ - 6 : 0;
-    for (int i = first; i < n && i < first + 7; ++i)
-    {
-        const Row &r = rows[i];
-        const bool s = sel_ == i;
-        char title[160];
-        const char *value = nullptr;
-        switch (r.kind)
-        {
-        case Row::ask:
-            for (int k = 0; k < d.n_asks; ++k)
-                if (d.asks[k].id == r.id)
-                    std::snprintf(title, sizeof title, tr(!std::strcmp(d.asks[k].client_kind, "ps5") ? S::host_asks_ps5 : S::host_asks),
-                                  d.asks[k].name[0] ? d.asks[k].name : tr(S::host_friend));
-            break;
-        case Row::open: std::snprintf(title, sizeof title, "%s", tr(S::host_together_open)); break;
-        case Row::new_code: std::snprintf(title, sizeof title, "%s", tr(S::host_new_code)); break;
-        case Row::close: std::snprintf(title, sizeof title, "%s", tr(S::host_close)); break;
-        case Row::guest:
-            for (int k = 0; k < d.n_guests; ++k)
-                if (d.guests[k].id == r.id)
-                {
-                    const char *gn = d.guests[k].name[0] ? d.guests[k].name : tr(S::host_friend);
-                    if (d.guests[k].rtt_ms >= 0)
-                        std::snprintf(title, sizeof title, tr(S::host_guest_rtt), d.guests[k].player, gn, d.guests[k].rtt_ms);
-                    else
-                        std::snprintf(title, sizeof title, tr(S::host_guest), d.guests[k].player, gn);
-                    // how they are connected (docs/ROUTES.md): "Tailscale · Good"
-                    static char way_buf[96];
-                    route_ui::guest_line(d.guests[k].route, d.guests[k].tier, way_buf, sizeof way_buf);
-                    if (way_buf[0])
-                        value = way_buf;
-                }
-            break;
-        case Row::sw_block:
-            std::snprintf(title, sizeof title, "%s", tr(S::host_sw_block));
-            value = tr(d.block_system_buttons ? S::on : S::off);
-            break;
-        case Row::sw_max:
-        {
-            std::snprintf(title, sizeof title, "%s", tr(S::host_sw_max));
-            static char m[8];
-            std::snprintf(m, sizeof m, "%d", d.max_players);
-            value = m;
-            break;
-        }
-        case Row::sw_seat:
-            std::snprintf(title, sizeof title, "%s", tr(S::host_sw_seat));
-            value = tr(d.stream_seat ? S::on : S::off);
-            break;
-        case Row::sw_invites:
-            std::snprintf(title, sizeof title, "%s", tr(S::host_sw_invites));
-            value = tr(!std::strcmp(d.invites, "wifi") ? S::wifi_only : S::anywhere);
-            break;
-        case Row::sw_awake:
-            std::snprintf(title, sizeof title, "%s", tr(S::host_sw_awake));
-            value = tr(!std::strcmp(d.keep_awake, "always") ? S::awake_always
-                       : !std::strcmp(d.keep_awake, "transfers") ? S::awake_transfers
-                                                                 : S::awake_off);
-            break;
-        case Row::pair: title[0] = 0; break;
-        case Row::rp_enable:
-            std::snprintf(title, sizeof title, "%s",
-                          tr(net::now_us() < rp_confirm_until_ ? S::host_rp_enable_confirm : S::host_rp_enable));
-            break;
-        case Row::rp_pin:
-            std::snprintf(title, sizeof title, "%s",
-                          tr(!std::strcmp(hs.pin.state, "waiting") ? S::host_rp_pin_stop : S::host_rp_pin));
-            break;
-        }
-        draw_row(c, kLeft, y, row_w, row_h - 10, s, title, nullptr, value);
-        if (r.kind == Row::ask)
-            c.circle(kLeft + 14, y + (row_h - 10) / 2, 7, col::warn);
-        y += row_h;
-    }
-    // Right: the Remote Play PIN while it is up, else Play Together's invite (code + QR).
-    const int rx = 1300;
-    const bool pin_up = !std::strcmp(hs.pin.state, "waiting") || !std::strcmp(hs.pin.state, "paired");
-    if (pin_up)
-    {
-        c.text(Font::title, rx, 210, tr(S::host_rp_pin_title), col::text);
-        if (!std::strcmp(hs.pin.state, "paired"))
-            c.text_wrap(Font::body, rx, 290, 540, tr(S::host_rp_pin_paired), col::good);
-        else
-        {
-            char shown[20];
-            const std::size_t pl = std::strlen(hs.pin.pin);
-            // 1234 5678: easier to type
-            if (pl == 8)
-                std::snprintf(shown, sizeof shown, "%.4s %.4s", hs.pin.pin, hs.pin.pin + 4);
-            else
-                std::snprintf(shown, sizeof shown, "%s", hs.pin.pin);
-            c.text(Font::big, rx, 290, shown, col::text);
-            std::snprintf(buf, sizeof buf, tr(S::host_rp_pin_text), hs.pin.seconds_left / 60, hs.pin.seconds_left % 60);
-            c.text_wrap(Font::small, rx, 390, 540, buf, col::muted);
-        }
-    }
-    else
-        c.text(Font::title, rx, 210, tr(S::host_together), col::text);
-    if (pin_up)
-        ; // the PIN has the right side
-    else if (!d.together_open)
-        c.text_wrap(Font::body, rx, 280, 520, tr(d.playing ? S::host_together_closed : S::host_together_wait), col::muted);
-    else if (d.has_invite)
-    {
-        c.text(Font::small, rx, 280, tr(S::host_code), col::muted);
-        c.text(Font::big, rx, 310, d.code_display, col::text);
-        std::snprintf(buf, sizeof buf, tr(S::host_code_left), (d.invite_left_s + 59) / 60);
-        c.text(Font::small, rx, 400, buf, col::muted);
-        if (d.url[0])
-        {
-            static std::uint8_t qr[qrcodegen_BUFFER_LEN_MAX], tmp[qrcodegen_BUFFER_LEN_MAX];
-            if (qrcodegen_encodeText(d.url, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 20, qrcodegen_Mask_AUTO, true))
-            {
-                const int size = qrcodegen_getSize(qr);
-                const int module = (420 / (size + 4)) > 2 ? 420 / (size + 4) : 2;
-                c.qr(qr, rx, 450, module);
-                c.text(Font::small, rx, 450 + (size + 4) * module + 14,
-                       tr(!std::strcmp(d.works, "anywhere") ? S::host_works_anywhere : S::host_works_wifi), col::muted);
-            }
-        }
-    }
-    if (!d.n_guests && d.together_open)
-        c.text(Font::small, rx, 960 - 40, tr(S::host_no_guests), col::muted);
-    // what to press for the selected row
-    const Row *r = n ? &rows[sel_] : nullptr;
-    if (r && r->kind == Row::ask)
-    {
-        const int g[] = {G_CROSS, G_SQUARE, G_CIRCLE};
-        const S l[] = {S::hint_allow, S::hint_deny, S::hint_back};
-        draw_hints(c, g, l, 3);
-    }
-    else if (r && r->kind == Row::guest)
-    {
-        const int g[] = {G_TRIANGLE, G_CIRCLE};
-        const S l[] = {S::hint_remove, S::hint_back};
-        draw_hints(c, g, l, 2);
-    }
-    else if (r && r->kind >= Row::sw_block && r->kind <= Row::sw_awake)
-    {
-        const int g[] = {G_CROSS, G_CIRCLE};
-        const S l[] = {S::hint_change, S::hint_back};
-        draw_hints(c, g, l, 2);
-    }
-    else
-    {
-        const int g[] = {G_CROSS, G_CIRCLE};
-        const S l[] = {S::hint_choose, S::hint_back};
-        draw_hints(c, g, l, 2);
-    }
-    c.text(Font::small, kLeft, 940, tr(S::host_game_note), col::muted);
 }
 
 void App::draw_settings(Canvas &c) noexcept
@@ -1846,13 +1760,13 @@ void App::draw_settings(Canvas &c) noexcept
     draw_frame(c, tr(S::set_title));
     char vol[16];
     std::snprintf(vol, sizeof vol, "%d%%", settings_.music_volume);
-    draw_row(c, kLeft, kContent, 1100, 90, sel_ == 0, tr(S::set_music), nullptr, tr(settings_.music ? S::on : S::off));
-    draw_row(c, kLeft, kContent + 106, 1100, 90, sel_ == 1, tr(S::set_volume), nullptr, vol);
-    draw_row(c, kLeft, kContent + 212, 1100, 90, sel_ == 2, tr(S::set_sounds), nullptr, tr(settings_.sounds ? S::on : S::off));
-    draw_row(c, kLeft, kContent + 318, 1100, 90, sel_ == 3, tr(S::set_hints), nullptr, tr(settings_.hints ? S::on : S::off));
     const char *lang = ui::i18n::find(settings_.language) < 0 ? tr(S::lang_auto) : ui::i18n::name(language_);
-    draw_row(c, kLeft, kContent + 424, 1100, 90, sel_ == 4, tr(S::set_language), nullptr, lang);
-    draw_row(c, kLeft, kContent + 530, 1100, 90, sel_ == 5, tr(S::set_forget), nullptr);
+    const char *labels[10] = {tr(S::set_music), tr(S::set_volume), tr(S::set_sounds), tr(S::set_hints), tr(S::set_language),
+                              tr(S::set_forget), tr(S::set_thanks), tr(S::set_how), tr(S::help_title), tr(S::set_rules)};
+    const char *values[10] = {tr(settings_.music ? S::on : S::off), vol, tr(settings_.sounds ? S::on : S::off),
+                              tr(settings_.hints ? S::on : S::off), lang, nullptr, nullptr, nullptr, nullptr, nullptr};
+    for (int i = 0; i < 10; ++i)
+        draw_row(c, kLeft, kContent - 40 + i * 74, 1100, 64, sel_ == i, labels[i], nullptr, values[i]);
     // About, on the right
     const int ax = 1320, aw = 520;
     int y = kContent;
