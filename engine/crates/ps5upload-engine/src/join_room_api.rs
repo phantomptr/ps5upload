@@ -418,6 +418,9 @@ pub(crate) fn guest_room(p: &Party, id: u64, now: Instant) -> Option<serde_json:
         "locked": p.room.locked,
         "playing_for_min": now.saturating_duration_since(p.room.opened_at).as_secs() / 60,
         "ready": p.room.ready_json(now),
+        // The room's lobby on the hub (as in "joined"): what a guest keeps for "Alex's room is
+        // open" and Rooms › Friends later; null while the room has none.
+        "lobby": crate::join_net::lobby::lobby_id(),
         "proto": jr::PROTO,
         "caps": jr::caps(),
     }))

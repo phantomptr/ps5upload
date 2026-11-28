@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { friendsConfirmed, installFriendsGuard, readFriendsPlaying, useFriendsGuard } from "./friendsGuard";
+import { friendsConfirmed, installFriendsGuard, okToEndFriendsGame, readFriendsNow, readFriendsPlaying, useFriendsGuard } from "./friendsGuard";
 import { headline13 } from "../screens/Home/WhatsNewCard";
 import { friendsTitle } from "../layout/FriendsGuard";
 
@@ -59,6 +59,31 @@ describe("the friends-playing guard (engine together_guard.rs)", () => {
     friendsConfirmed(1000);
     expect((await w.fetch(`${ENGINE}/api/ps5/rp/stop`, { method: "POST", body: "{}" })).status).toBe(200);
     expect(calls).toHaveLength(1);
+  });
+
+  it("installing an update asks first while friends play (GET /api/engine/update friends_playing)", async () => {
+    expect(readFriendsNow({ friends_playing: [{ console: "192.168.1.20", friends: ["Mia", 7, "Lee"] }, { console: "x", friends: [] }] })).toEqual({
+      friends: ["Mia", "Lee"],
+      console: "192.168.1.20",
+    });
+    expect(readFriendsNow({ available: true })).toEqual({ friends: [], console: null });
+    const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000); // past the yes above
+    try {
+      const nobody = (async () => res(200, { friends_playing: [] })) as typeof fetch;
+      expect(await okToEndFriendsGame(ENGINE, nobody)).toBe(true);
+      const down = (async () => {
+        throw new Error("offline");
+      }) as typeof fetch;
+      expect(await okToEndFriendsGame(ENGINE, down)).toBe(true);
+      const playing = (async () => res(200, { friends_playing: [{ console: "192.168.1.20", friends: ["Mia"] }] })) as typeof fetch;
+      const p = okToEndFriendsGame(ENGINE, playing);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(useFriendsGuard.getState().ask?.friends).toEqual(["Mia"]);
+      useFriendsGuard.getState().ask?.resolve(false);
+      expect(await p).toBe(false);
+    } finally {
+      later.mockRestore();
+    }
   });
 
   it("words and the 13.0.0 headline", () => {

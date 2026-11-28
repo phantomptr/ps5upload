@@ -30,7 +30,8 @@ describe("PS5Upload Play pairing", () => {
         { id: "", console: "x" },
         { id: "ee", console: "192.168.1.51", name: null, paired_unix: 8, last_seen_unix: null, connected: false },
       ],
-      waiting: [{ console: "192.168.1.60", expires_in_s: 200 }, {}],
+      waiting: [{ console: "192.168.1.60", name: "Den", code_display: "K7M-2QX", expires_in_s: 200 }, {}],
+      moves: [{ id: "ab12cd34", name: "Living room", addr_old: "192.168.1.50", addr_new: "192.168.1.70", expires_in_s: 90 }, { id: "x" }],
       locked_s: null,
     });
     expect(s).toEqual({
@@ -38,9 +39,15 @@ describe("PS5Upload Play pairing", () => {
         { id: "ab12cd34", console: "192.168.1.50", name: "Living room", pairedUnix: 7, lastSeenUnix: 9, connected: true },
         { id: "ee", console: "192.168.1.51", name: null, pairedUnix: 8, lastSeenUnix: null, connected: false },
       ],
-      waiting: ["192.168.1.60"],
+      waiting: [{ console: "192.168.1.60", name: "Den", codeDisplay: "K7M-2QX" }],
+      moves: [{ id: "ab12cd34", name: "Living room", addrOld: "192.168.1.50", addrNew: "192.168.1.70" }],
       lockedS: null,
     });
+    // An engine that lists only the address: compared by typing, as before.
+    expect(readPairing({ apps: [], waiting: [{ console: "192.168.1.60" }] })?.waiting).toEqual([
+      { console: "192.168.1.60", name: null, codeDisplay: null },
+    ]);
+    expect(readPairResult(false, { error: "not_waiting" })).toEqual({ kind: "not_waiting" });
     expect(readPairing({ apps: [], waiting: [], locked_s: 420 })?.lockedS).toBe(420);
     expect(readPairing({ error: "not found" })).toBeNull();
     expect(readPairing(null)).toBeNull();

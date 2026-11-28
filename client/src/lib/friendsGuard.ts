@@ -87,3 +87,39 @@ function headersOf(h: HeadersInit | undefined): Record<string, string> {
   if (Array.isArray(h)) return Object.fromEntries(h);
   return { ...h };
 }
+
+/** Who plays through a Play Room now, as `GET /api/engine/update` says it (`friends_playing`:
+ *  `[{console, friends}]`): every friend's name and the first console. */
+export function readFriendsNow(body: unknown): { friends: string[]; console: string | null } {
+  const list = (body as { friends_playing?: unknown } | null)?.friends_playing;
+  const friends: string[] = [];
+  let console: string | null = null;
+  for (const e of Array.isArray(list) ? list : []) {
+    const o = (e && typeof e === "object" ? e : {}) as { console?: unknown; friends?: unknown };
+    const names = Array.isArray(o.friends) ? o.friends.filter((f): f is string => typeof f === "string") : [];
+    if (!names.length) continue;
+    if (console === null && typeof o.console === "string") console = o.console;
+    friends.push(...names);
+  }
+  return { friends: friends.slice(0, 8), console };
+}
+
+/** Before something that ends friends' game without asking the engine (installing an update
+ *  quits the app, and with it their Play Room): asks the person when friends play now. True: go
+ *  ahead (nobody plays, they said yes, or the engine couldn't be asked). */
+export async function okToEndFriendsGame(engineUrl: string, f: typeof fetch = globalThis.fetch): Promise<boolean> {
+  if (Date.now() < confirmedUntil) return true;
+  let body: unknown;
+  try {
+    const r = await f(`${engineUrl}/api/engine/update`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return true;
+    body = await r.json();
+  } catch {
+    return true;
+  }
+  const now = readFriendsNow(body);
+  if (!now.friends.length) return true;
+  const yes = await ask(now.friends, now.console);
+  if (yes) friendsConfirmed();
+  return yes;
+}

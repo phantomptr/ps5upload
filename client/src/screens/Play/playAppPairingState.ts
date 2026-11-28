@@ -20,10 +20,28 @@ export interface PairedApp {
   connected: boolean;
 }
 
+/** A PS5 whose TV shows a pairing code now: compare it and pair with one click. */
+export interface WaitingPair {
+  console: string;
+  name: string | null;
+  /** `K7M-2QX`, as the TV shows it; null from an engine that doesn't list it. */
+  codeDisplay: string | null;
+}
+
+/** A paired PS5 that came back at a new address: PS5Upload confirms it is the same one. */
+export interface MovedPair {
+  id: string;
+  name: string | null;
+  addrOld: string;
+  addrNew: string;
+}
+
 export interface PairingState {
   apps: PairedApp[];
-  /** Consoles showing a code now (their address). */
-  waiting: string[];
+  /** Consoles showing a code now. */
+  waiting: WaitingPair[];
+  /** Paired consoles at a new address, waiting for "same PS5?". */
+  moves: MovedPair[];
   /** Pairing is locked (too many wrong codes) for this many seconds; null when it isn't. */
   lockedS: number | null;
 }
@@ -35,6 +53,7 @@ export type PairResult =
   | { kind: "locked"; retryS: number | null }
   | { kind: "code" }
   | { kind: "app_gone" }
+  | { kind: "not_waiting" }
   | { kind: "engine" };
 
 /** A typed code as the engine takes it: capitals, no dashes or spaces, only its letters, 6 at most. */
@@ -62,7 +81,7 @@ const str = (v: unknown): string | null => (typeof v === "string" && v ? v : nul
 /** GET /api/play/app/paired's answer; null for anything else (an engine from before it). */
 export function readPairing(json: unknown): PairingState | null {
   if (!json || typeof json !== "object" || !Array.isArray((json as { apps?: unknown }).apps)) return null;
-  const o = json as { apps: unknown[]; waiting?: unknown; locked_s?: unknown };
+  const o = json as { apps: unknown[]; waiting?: unknown; moves?: unknown; locked_s?: unknown };
   const apps: PairedApp[] = [];
   for (const a of o.apps) {
     if (!a || typeof a !== "object") continue;
@@ -79,11 +98,22 @@ export function readPairing(json: unknown): PairingState | null {
       connected: r.connected === true,
     });
   }
-  const waiting = Array.isArray(o.waiting)
-    ? o.waiting.map((w) => str((w as { console?: unknown } | null)?.console)).filter((c): c is string => !!c)
-    : [];
+  const waiting: WaitingPair[] = [];
+  for (const w of Array.isArray(o.waiting) ? o.waiting : []) {
+    const r = (w && typeof w === "object" ? w : {}) as Record<string, unknown>;
+    const console = str(r.console);
+    if (console) waiting.push({ console, name: str(r.name), codeDisplay: str(r.code_display) });
+  }
+  const moves: MovedPair[] = [];
+  for (const m of Array.isArray(o.moves) ? o.moves : []) {
+    const r = (m && typeof m === "object" ? m : {}) as Record<string, unknown>;
+    const id = str(r.id);
+    const addrOld = str(r.addr_old);
+    const addrNew = str(r.addr_new);
+    if (id && addrOld && addrNew) moves.push({ id, name: str(r.name), addrOld, addrNew });
+  }
   const locked = num(o.locked_s);
-  return { apps, waiting, lockedS: locked && locked > 0 ? locked : null };
+  return { apps, waiting, moves, lockedS: locked && locked > 0 ? locked : null };
 }
 
 /** The pair route's answer as a result. */
@@ -99,6 +129,8 @@ export function readPairResult(ok: boolean, json: unknown): PairResult {
       return { kind: "code" };
     case "app_gone":
       return { kind: "app_gone" };
+    case "not_waiting":
+      return { kind: "not_waiting" };
     default:
       return { kind: "engine" };
   }
@@ -125,6 +157,8 @@ export function pairResultText(tr: Tr, r: PairResult): string {
       return tr("pa_bad_code", undefined, "Type the 6 letters and numbers the TV shows.");
     case "app_gone":
       return tr("pa_app_gone", undefined, "PS5Upload Play closed before it was paired. Open it on the PS5 and get a new code.");
+    case "not_waiting":
+      return tr("pa_not_waiting", undefined, "That TV isn't showing a code any more. Choose Pair in PS5Upload Play again.");
     default:
       return tr("pa_engine", undefined, "Couldn't pair. Check that the engine is up to date.");
   }
@@ -156,6 +190,24 @@ export const playAppApi = {
       return readPairResult(r.ok, r.json);
     } catch {
       return { kind: "engine" };
+    }
+  },
+  /** One click: the code on that TV is the one shown here (POST /api/play/app/pair_confirm). */
+  confirm: async (console: string): Promise<PairResult> => {
+    try {
+      const r = await call("/api/play/app/pair_confirm", { console });
+      return readPairResult(r.ok, r.json);
+    } catch {
+      return { kind: "engine" };
+    }
+  },
+  /** A paired PS5 at a new address: the same one (ok) or not (POST /api/play/app/moved). */
+  moved: async (m: MovedPair, ok: boolean): Promise<boolean> => {
+    try {
+      const r = await call("/api/play/app/moved", { console_old: m.addrOld, addr: m.addrNew, ok });
+      return r.ok;
+    } catch {
+      return false;
     }
   },
   unpair: async (id: string): Promise<boolean> => {

@@ -736,6 +736,14 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     async install() {
       const phase = get().phase;
       if (phase.kind !== "downloaded" || !phase.download.can_install || get().installing) return;
+      // Installing quits the app, and with it friends' Play Room: asked first while they play.
+      // (Loaded here: the engine store reads the page's address when it loads.)
+      try {
+        const [{ okToEndFriendsGame }, { getEngineUrl }] = await Promise.all([import("../lib/friendsGuard"), import("./engine")]);
+        if (!(await okToEndFriendsGame(getEngineUrl()))) return;
+      } catch {
+        // Nobody to ask (no engine here): install as before.
+      }
       set({ installing: true, installFallback: null });
       try {
         await updateInstall(phase.download.path, phase.result.latest_version);

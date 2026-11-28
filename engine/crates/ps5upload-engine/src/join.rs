@@ -8867,6 +8867,22 @@ mod tests {
         assert!(!p.group_playing(lead));
     }
 
+    /// The room push a guest gets every second names the room's lobby (null while it has none):
+    /// what web and app guests keep for "Alex's room is open" and Rooms › Friends.
+    #[test]
+    fn the_guest_room_push_names_the_lobby() {
+        let mut p = party();
+        let t = Instant::now();
+        let id = admit(&mut p, "Sam", t);
+        let v = p.guest_status(id).unwrap();
+        let room = v["room"].as_object().expect("the room beside the status");
+        assert!(room.contains_key("lobby"), "{room:?}");
+        assert_eq!(
+            room["lobby"],
+            serde_json::json!(crate::join_net::lobby::lobby_id())
+        );
+    }
+
     /// Many controllers: a new controller of that PS5 comes along after the first player left
     /// (`release`): it asks with a player still in's token, lands in the same group, and the
     /// host's "let all from that PS5 in" still holds (it was kept on everyone of that PS5).

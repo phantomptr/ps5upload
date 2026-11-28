@@ -9,6 +9,7 @@ import {
   pairCodeReady,
   pairResultText,
   playAppApi,
+  type MovedPair,
   type PairingState,
 } from "./playAppPairingState";
 
@@ -46,6 +47,25 @@ export function PlayAppPairing() {
 
   if (!state) return null;
 
+  const confirm = async (console: string) => {
+    setBusy(true);
+    const r = await playAppApi.confirm(console);
+    setBusy(false);
+    setNote({ text: pairResultText(tr, r), ok: r.kind === "ok" });
+    await refresh();
+  };
+
+  const moved = async (m: MovedPair, ok: boolean) => {
+    setBusy(true);
+    const done = await playAppApi.moved(m, ok);
+    setBusy(false);
+    const name = m.name ?? m.addrNew;
+    if (done && ok) setNote({ text: tr("pa_moved_done", { name }, `${name} is paired at its new address.`), ok: true });
+    else if (!done) setNote({ text: tr("pa_not_waiting", undefined, "That TV isn't showing a code any more. Choose Pair in PS5Upload Play again."), ok: false });
+    else setNote(null);
+    await refresh();
+  };
+
   const pair = async () => {
     if (!pairCodeReady(code)) return;
     setBusy(true);
@@ -76,11 +96,48 @@ export function PlayAppPairing() {
         </p>
       </div>
 
-      {state.waiting.length > 0 && (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="pa-waiting">
-          {tr("pa_waiting", { addr: state.waiting.join(", ") }, `A PS5 at ${state.waiting.join(", ")} is showing a code.`)}
-        </p>
-      )}
+      {state.waiting.map((w) => {
+        const name = w.name ?? w.console;
+        // One click when the code is listed: the person compares it with the TV.
+        return w.codeDisplay ? (
+          <div key={w.console} className="flex flex-wrap items-center gap-2 text-sm" data-testid="pa-confirm-row">
+            <span className="min-w-0 flex-1">
+              {tr("pa_confirm_q", { name, code: w.codeDisplay }, `Does the TV of ${name} show ${w.codeDisplay}?`)}
+            </span>
+            <Button
+              size="sm"
+              variant="primary"
+              leftIcon={<Link2 size={14} />}
+              disabled={busy || state.lockedS !== null}
+              onClick={() => void confirm(w.console)}
+              data-testid="pa-confirm"
+            >
+              {tr("pa_confirm_yes", undefined, "Yes, pair")}
+            </Button>
+          </div>
+        ) : (
+          <p key={w.console} className="text-xs text-[var(--color-muted)]" data-testid="pa-waiting">
+            {tr("pa_waiting", { addr: w.console }, `A PS5 at ${w.console} is showing a code.`)}
+          </p>
+        );
+      })}
+
+      {state.moves.map((m) => {
+        const name = m.name ?? m.addrOld;
+        return (
+          <div key={m.id + m.addrNew} className="flex flex-wrap items-center gap-2 text-sm" data-testid="pa-moved-row">
+            <span className="min-w-0 flex-1">
+              {tr("pa_moved_q", { name, addr: m.addrNew }, `${name} now answers at ${m.addrNew}. Is it the same PS5?`)}
+            </span>
+            <Button size="sm" variant="primary" disabled={busy} onClick={() => void moved(m, true)} data-testid="pa-moved-yes">
+              {tr("pa_moved_yes", undefined, "Yes, same PS5")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void moved(m, false)} data-testid="pa-moved-no">
+              {tr("pa_moved_no", undefined, "No")}
+            </Button>
+          </div>
+        );
+      })}
 
       <form
         className="flex flex-wrap items-end gap-2"
