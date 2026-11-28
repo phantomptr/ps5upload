@@ -26,6 +26,7 @@ extern "C"
     int sceSystemServiceHideSplashScreen();
     int sceSystemServiceLoadExec(const char *path, const char *const *argv);
     int sceSystemServicePowerTick();
+    int sceSystemServiceParamGetInt(int param, int *value);
     int sceUserServiceInitialize(const void *params);
     int sceUserServiceGetInitialUser(std::int32_t *user);
     int sceUserServiceGetUserName(std::int32_t user, char *name, std::size_t size);

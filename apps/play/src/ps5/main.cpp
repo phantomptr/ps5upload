@@ -191,6 +191,18 @@ const char *data_dir() noexcept
 {
     return kDir;
 }
+const std::uint8_t *asset(const char *name, std::size_t *len) noexcept
+{
+    char path[160];
+    std::snprintf(path, sizeof path, "/app0/assets/%s", name);
+    return load_asset(path, len);
+}
+int system_language() noexcept
+{
+    int v = -1;
+    // SCE_SYSTEM_SERVICE_PARAM_ID_LANG
+    return sceSystemServiceParamGetInt(1, &v) == 0 ? v : -1;
+}
 void exit_app() noexcept
 {
     log("app: exit");

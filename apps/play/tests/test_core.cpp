@@ -6,6 +6,8 @@
 #include "../src/core/proto.hpp"
 #include "../src/core/settings.hpp"
 #include "../src/core/ws.hpp"
+#include "../src/ui/i18n.hpp"
+#include "../src/ui/strings.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -395,6 +397,48 @@ void test_settings()
     CHECK(!split_address("1.2.3.4:99999", addr, sizeof addr, &port, 19113));
     CHECK(!split_address("bad/addr", addr, sizeof addr, &port, 19113));
 }
+// A language file as tools/i18n.py writes it: two strings (the second left English), one run.
+void test_i18n()
+{
+    using namespace play::ui;
+    std::uint8_t f[256] = {};
+    std::size_t o = 0;
+    auto u32 = [&](std::uint32_t v) {
+        for (int k = 0; k < 4; ++k)
+            f[o++] = static_cast<std::uint8_t>(v >> (8 * k));
+    };
+    auto u16 = [&](std::uint16_t v) {
+        f[o++] = static_cast<std::uint8_t>(v);
+        f[o++] = static_cast<std::uint8_t>(v >> 8);
+    };
+    const char text[] = "Hallo \xee\x80\x80" "0000!";
+    std::memcpy(f, "PPL1", 4), o = 4;
+    u32(2), u32(1), u32(1), u32(3);
+    u32(24), u32(32), u32(44);
+    u32(0), u32(sizeof text - 1); // string 0
+    u32(0), u32(0);               // string 1: English
+    for (int size = 0; size < 3; ++size)
+        u16(2), u16(1), u16(1), u16(0), u32(0), u32(1); // a 2x1 run, one byte of pixels
+    std::memcpy(f + o, text, sizeof text - 1), o += sizeof text - 1;
+    f[o++] = 0xF1; // level 15, 2 pixels
+    CHECK(i18n::load(f, o));
+    CHECK(!std::strcmp(tr(S::app_name), text) && i18n::right_to_left());
+    CHECK(!std::strcmp(tr(S::tagline), "Play together with friends, from the couch."));
+    int table = -1, id = -1;
+    const char *t = tr(S::app_name);
+    CHECK(i18n::run_ref(t + 6, std::strlen(t + 6), &table, &id) && table == 0 && id == 0);
+    i18n::Run r;
+    CHECK(i18n::run(0, 0, 1, r) && r.w == 2 && r.h == 1 && r.len == 1 && r.rle[0] == 0xF1);
+    CHECK(!i18n::run(0, 1, 1, r) && !i18n::run(0, 0, 3, r));
+    CHECK(!i18n::load(f, 10)); // cut short: English
+    CHECK(!std::strcmp(tr(S::app_name), "PS5Upload Play"));
+    i18n::use_english();
+    CHECK(i18n::find("pt-BR") > 0 && i18n::find("xx") < 0 && i18n::count() == 21);
+    CHECK(!std::strcmp(i18n::code(i18n::from_system_id(0)), "ja") &&
+          !std::strcmp(i18n::code(i18n::from_system_id(17)), "pt-BR") &&
+          !std::strcmp(i18n::code(i18n::from_system_id(1)), "en") &&
+          !std::strcmp(i18n::code(i18n::from_system_id(99)), "en"));
+}
 } // namespace
 
 int main()
@@ -410,6 +454,7 @@ int main()
     test_jitter();
     test_chords();
     test_settings();
+    test_i18n();
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

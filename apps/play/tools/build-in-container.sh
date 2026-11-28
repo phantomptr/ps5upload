@@ -67,8 +67,17 @@ fi
 
 # --- assets: home-screen art and music (tools/assets), the UI font ---
 bash "$root/tools/assets/build-assets.sh" "$build/assets"
-if [[ ! -f $build/assets/font.bin || $root/tools/make-font.py -nt $build/assets/font.bin ]]; then
-    python3 "$root/tools/make-font.py" "$build/assets/font.bin"
+# Translations: the words of each language, and the pictures of words the UI font can't draw
+# (shaped with the pinned Noto fonts, tools/i18n.py), then the font with every letter used.
+python3 "$root/tools/i18n.py" check
+i18n_stamp="$build/assets/i18n/.stamp"
+if [[ ! -f $i18n_stamp || -n $(find "$root/i18n" "$root/tools/i18n.py" "$root/src/ui/strings.hpp" -newer "$i18n_stamp" -print -quit) ]]; then
+    python3 "$root/tools/fetch-fonts.py"
+    python3 "$root/tools/i18n.py" build "$build/assets"
+    touch "$i18n_stamp"
+fi
+if [[ ! -f $build/assets/font.bin || $root/tools/make-font.py -nt $build/assets/font.bin || $build/assets/atlas-chars.txt -nt $build/assets/font.bin ]]; then
+    python3 "$root/tools/make-font.py" "$build/assets/font.bin" "$build/assets/atlas-chars.txt"
 fi
 
 export PS5_PAYLOAD_SDK="$sdk" PS5_CLANG=clang-18
@@ -157,6 +166,8 @@ cp "$build/libc.prx" "$app/sce_module/libc.prx"
 cp "$param" "$app/sce_sys/param.json"
 cp "$build/assets/icon0.png" "$build/assets/pic0.dds" "$build/assets/pic1.dds" "$build/assets/snd0.at9" "$app/sce_sys/"
 cp "$build/assets/font.bin" "$build/assets/ui-bg.rgba" "$build/assets/logo.rgba" "$build/assets/music.pcm" "$app/assets/"
+mkdir -p "$app/assets/i18n"
+cp "$build/assets/i18n/"*.bin "$app/assets/i18n/"
 cp "$root/../../LICENSE" "$app/LICENSE"
 cp "$root/NOTICE.md" "$app/NOTICE.md"
 "$tool" self --inspect --file "$app/eboot.bin" | grep -E 'integrity|segments'

@@ -31,6 +31,7 @@ class NullSinks final : public GuestSinks
 NullSinks null_sinks;
 std::uint8_t buf0[1 << 20], buf1[1 << 20];
 std::uint32_t *presented = nullptr;
+const char *assets_dir = ".";
 
 std::uint8_t *slurp(const char *path, std::size_t *len)
 {
@@ -98,6 +99,13 @@ const char *user_name() noexcept { return "Tester"; }
 long read_file(const char *, void *, std::size_t) noexcept { return -1; }
 bool write_file(const char *, const void *, std::size_t) noexcept { return true; }
 const char *data_dir() noexcept { return "/tmp"; }
+const std::uint8_t *asset(const char *name, std::size_t *len) noexcept
+{
+    char p[512];
+    std::snprintf(p, sizeof p, "%s/%s", assets_dir, name);
+    return slurp(p, len);
+}
+int system_language() noexcept { return -1; }
 void exit_app() noexcept { std::exit(0); }
 GuestSinks &sinks() noexcept { return null_sinks; }
 std::uint8_t *message_buffer(int which, std::size_t *cap) noexcept
@@ -112,6 +120,7 @@ int main(int argc, char **argv)
 {
     if (argc < 3)
         return 2;
+    assets_dir = argv[1];
     char p[512];
     std::size_t n = 0;
     std::snprintf(p, sizeof p, "%s/font.bin", argv[1]);
@@ -129,6 +138,9 @@ int main(int argc, char **argv)
     if (std::uint8_t *d = slurp(p, &n))
         ui::image_from_rgba(d, n, logo);
     static App app("13.0.0", bg, logo);
+    // ui-shot ASSETS OUT [LANG]: every screen in that language
+    if (argc > 3)
+        app.set_language(argv[3]);
     static std::uint32_t ui_px[ui::kW * ui::kH], layer[ui::kW * ui::kH], out[ui::kW * ui::kH];
     auto shot = [&](const char *name, App::Screen s, const App::Fake &f) {
         app.fake(s, f);

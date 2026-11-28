@@ -25,7 +25,7 @@ EXTRA = list(range(0xA0, 0x100)) + [0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x20
                                     0x25A1, 0x25B3, 0x25CB, 0x25CF]
 
 
-def main(out):
+def main(out, extra_file=None):
     for rec in json.loads((FONT / "SOURCE.json").read_text())["files"]:
         if hashlib.sha256((FONT / rec["file"]).read_bytes()).hexdigest() != rec["sha256"]:
             raise SystemExit("pinned font source hash mismatch")
@@ -40,6 +40,12 @@ def main(out):
         codes = list(range(32, 127))
         if px <= 44:
             codes += [c for c in EXTRA if c in have]
+            # every letter the translations draw from the font (tools/i18n.py build)
+            used = {ord(ch) for ch in Path(extra_file).read_text(encoding="utf-8")} if extra_file else set()
+            lacking = sorted(c for c in used if c not in have)
+            if lacking:
+                raise SystemExit("the UI font has no " + " ".join(f"U+{c:04X}" for c in lacking))
+            codes += sorted(used)
         codes = sorted(set(codes))
         cov = bytearray()
         for code in codes:
@@ -55,4 +61,4 @@ def main(out):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)

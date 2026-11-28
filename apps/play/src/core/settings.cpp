@@ -108,6 +108,7 @@ std::size_t Settings::write(char *out, std::size_t cap) const noexcept
     add("music_volume=%d\n", music_volume);
     add("sounds=%d\n", sounds ? 1 : 0);
     add("hints=%d\n", hints ? 1 : 0);
+    add("language=%s\n", language);
     add("clock=%u\n", clock);
     for (const auto &h : hosts)
         if (h.addr[0])
@@ -143,6 +144,15 @@ void Settings::parse(const char *text, std::size_t len) noexcept
             sounds = std::atoi(v) != 0;
         else if (!std::strcmp(k, "hints"))
             hints = std::atoi(v) != 0;
+        else if (!std::strcmp(k, "language"))
+        {
+            // a code: letters and '-' only
+            bool ok = std::strlen(v) < sizeof language;
+            for (const char *q = v; *q && ok; ++q)
+                ok = (*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || *q == '-';
+            if (ok)
+                std::snprintf(language, sizeof language, "%s", v);
+        }
         else if (!std::strcmp(k, "clock"))
             clock = static_cast<std::uint32_t>(std::strtoul(v, nullptr, 10));
         else if (!std::strcmp(k, "host") && hi < kHosts)

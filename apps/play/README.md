@@ -10,6 +10,14 @@ A native PS5 app (title `FAKE99261`) with two roles:
   Play › Play Together › Pair PS5Upload Play), then see the session, let friends in or say no,
   share the invite code and QR code, see who is playing, and change Play Together's switches.
 
+The app speaks PS5Upload's 21 languages: the PS5's system language when it is one of them
+(else English), or the one picked in Settings (Hindi, Bengali and Persian, which the PS5 has no
+system language for, are picked there). English is `src/ui/strings.hpp`; the others are
+`i18n/<code>.json` (`python3 tools/i18n.py export` refreshes `i18n/en.json`, `check` runs in
+`make test`). Latin, Cyrillic and Greek letters come from the UI font; Chinese, Japanese,
+Korean, Arabic, Persian, Hindi, Bengali and Thai words are shaped at build time with the pinned
+Noto fonts and shipped as small pictures (`assets/i18n/<code>.bin`), as PS5Term does.
+
 The app only ever dials out (to the PS5Upload engine's `/api/join/ws` and `/api/play/app`, and a
 UDP probe to port 19261 to find it); it never listens. It works without the PS5Upload helper;
 when the helper runs, the app also uses its loopback app API (`127.0.0.1:9181`): the engines in

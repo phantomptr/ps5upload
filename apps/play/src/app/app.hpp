@@ -33,6 +33,8 @@ class App
 
     App(const char *version, ui::Image bg, ui::Image logo) noexcept;
     void load_settings() noexcept;
+    // Uses a language ("" = the PS5's own), as Settings does.
+    void set_language(const char *code) noexcept;
     // One frame: input, state, drawing. `ui` is the full-screen picture, `layer` the overlay.
     void frame(std::uint64_t now_us, std::uint32_t *ui, std::uint32_t *layer) noexcept;
     // Commands from the dev file (`join ADDR PORT CODE`, `nearby ADDR PORT`, `host ADDR PORT`,
@@ -82,6 +84,8 @@ class App
     void stop_host() noexcept;
     void leave_game() noexcept;
     void save() noexcept;
+    void apply_language() noexcept;
+    int language_ = 0; // the language in use (ui::i18n index)
     void remember_current() noexcept;
     static void on_token(const char *addr, std::uint16_t port, const char *token, void *ctx) noexcept;
 

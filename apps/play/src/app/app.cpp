@@ -4,6 +4,7 @@
 
 #include "../../third_party/qrcodegen/qrcodegen.h"
 #include "../core/proto.hpp"
+#include "../ui/i18n.hpp"
 #include "../ui/strings.hpp"
 #include "log.hpp"
 #include "platform.hpp"
@@ -122,6 +123,46 @@ void App::load_settings() noexcept
         settings_.parse(text, static_cast<std::size_t>(n));
     platform::music(settings_.music, settings_.music_volume);
     platform::sounds(settings_.sounds);
+    apply_language();
+}
+
+void App::set_language(const char *code) noexcept
+{
+    std::snprintf(settings_.language, sizeof settings_.language, "%s", code);
+    apply_language();
+    dirty_ = true;
+}
+
+void App::apply_language() noexcept
+{
+    static bool names_loaded = false;
+    std::size_t len = 0;
+    if (!names_loaded)
+    {
+        const std::uint8_t *d = platform::asset("i18n/names.bin", &len);
+        names_loaded = d && ui::i18n::load_names(d, len);
+    }
+    // The choice in Settings, else the console's own language, else English.
+    int lang = ui::i18n::find(settings_.language);
+    if (lang < 0)
+        lang = ui::i18n::from_system_id(platform::system_language());
+    language_ = lang;
+    if (lang == 0)
+    {
+        ui::i18n::use_english();
+        return;
+    }
+    char path[48];
+    std::snprintf(path, sizeof path, "i18n/%s.bin", ui::i18n::code(lang));
+    const std::uint8_t *d = platform::asset(path, &len);
+    if (!d || !ui::i18n::load(d, len))
+    {
+        log("i18n: %s unreadable: English", path);
+        ui::i18n::use_english();
+        language_ = 0;
+        return;
+    }
+    log("i18n: %s", ui::i18n::code(lang));
 }
 
 void App::save() noexcept
@@ -841,7 +882,7 @@ void App::input_host(std::uint32_t p) noexcept
 
 void App::input_settings(std::uint32_t p) noexcept
 {
-    constexpr int kRows = 5;
+    constexpr int kRows = 6;
     if (p & (pad::kCircle | pad::kOptions))
     {
         save();
@@ -861,6 +902,16 @@ void App::input_settings(std::uint32_t p) noexcept
     case 2: settings_.sounds = !settings_.sounds; break;
     case 3: settings_.hints = !settings_.hints; break;
     case 4:
+    {
+        // Same as this PS5, then each language in turn
+        const int n = ui::i18n::count();
+        int at = ui::i18n::find(settings_.language); // -1: same as this PS5
+        at = (at + 1 + (left ? n : 1)) % (n + 1) - 1;
+        std::snprintf(settings_.language, sizeof settings_.language, "%s", at < 0 ? "" : ui::i18n::code(at));
+        apply_language();
+        break;
+    }
+    case 5:
         if (cross)
         {
             for (auto &h : settings_.hosts)
@@ -1712,18 +1763,21 @@ void App::draw_settings(Canvas &c) noexcept
     draw_row(c, kLeft, kContent + 106, 1100, 90, sel_ == 1, tr(S::set_volume), nullptr, vol);
     draw_row(c, kLeft, kContent + 212, 1100, 90, sel_ == 2, tr(S::set_sounds), nullptr, tr(settings_.sounds ? S::on : S::off));
     draw_row(c, kLeft, kContent + 318, 1100, 90, sel_ == 3, tr(S::set_hints), nullptr, tr(settings_.hints ? S::on : S::off));
-    draw_row(c, kLeft, kContent + 424, 1100, 90, sel_ == 4, tr(S::set_forget), nullptr);
-    int y = kContent + 560;
-    c.text(Font::body, kLeft, y, tr(S::set_about), col::text);
+    const char *lang = ui::i18n::find(settings_.language) < 0 ? tr(S::lang_auto) : ui::i18n::name(language_);
+    draw_row(c, kLeft, kContent + 424, 1100, 90, sel_ == 4, tr(S::set_language), nullptr, lang);
+    draw_row(c, kLeft, kContent + 530, 1100, 90, sel_ == 5, tr(S::set_forget), nullptr);
+    // About, on the right
+    const int ax = 1320, aw = 520;
+    int y = kContent;
+    c.text(Font::body, ax, y, tr(S::set_about), col::text);
     y += 50;
     char buf[96];
     std::snprintf(buf, sizeof buf, tr(S::about_version), version_);
-    c.text(Font::small, kLeft, y, buf, col::muted);
-    y += 36;
-    c.text(Font::small, kLeft, y, tr(S::about_music), col::muted);
-    y += 36;
-    y += c.text_wrap(Font::small, kLeft, y, 1500, tr(S::about_credits), col::muted, 4);
-    c.text(Font::small, kLeft, y, tr(S::about_license), col::muted);
+    c.text(Font::small, ax, y, buf, col::muted);
+    y += 46;
+    y += c.text_wrap(Font::small, ax, y, aw, tr(S::about_music), col::muted, 4) + 10;
+    y += c.text_wrap(Font::small, ax, y, aw, tr(S::about_credits), col::muted, 4) + 10;
+    c.text_wrap(Font::small, ax, y, aw, tr(S::about_license), col::muted, 4);
     const int g[] = {G_CROSS, G_CIRCLE};
     const S l[] = {S::hint_change, S::hint_back};
     draw_hints(c, g, l, 2);

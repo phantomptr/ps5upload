@@ -22,6 +22,12 @@ PS5Upload Play is free software under the GNU General Public License v3 (see `LI
   license (https://opus-codec.org/license/).
 - **JetBrains Mono** (`third_party/jetbrains-mono/`, the UI font baked into `assets/font.bin`):
   SIL Open Font License 1.1 (`third_party/jetbrains-mono/OFL.txt`).
+- **Noto Sans** SC, TC, JP, KR, Arabic, Devanagari, Bengali and Thai (fetched at build time at
+  the pinned commit in `third_party/noto/SOURCE.json`, with SHA-256 checks): the words of
+  languages the UI font has no letters for are drawn with them at build time into
+  `assets/i18n/*.bin`; the fonts themselves are not shipped. SIL Open Font License 1.1
+  (`third_party/noto/*-OFL.txt`). The way those words are made (shaped runs) follows PS5Term's
+  `tools/generate-i18n.py` (GPL-3.0-or-later).
 
 ## Art and music
 

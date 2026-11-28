@@ -98,6 +98,10 @@ class Canvas
 
   private:
     void put_cov(int x, int y, std::uint32_t c, unsigned cov) noexcept;
+    void draw_run(int table, int id, Font f, int x, int y, std::uint32_t c) noexcept;
+    void draw_plain(Font f, int x, int y, const char *s, std::size_t len, std::uint32_t c) noexcept;
+    int draw_line(Font f, int x, int y, const char *s, const void *pieces, int first, int count, bool rtl,
+                  std::uint32_t c) noexcept;
     std::uint32_t *px_;
 };
 } // namespace play::ui

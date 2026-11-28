@@ -3,6 +3,7 @@
 #include "canvas.hpp"
 
 #include "../core/json.hpp"
+#include "i18n.hpp"
 #include "../../third_party/qrcodegen/qrcodegen.h"
 
 #include <cstring>
@@ -324,11 +325,28 @@ void Canvas::copy_from(const Image &img) noexcept
         clear(color::bg);
 }
 
-int Canvas::text_width(Font f, const char *s) noexcept
+namespace
 {
-    const Face &fc = face(f);
+// Text is drawn as pieces: a run reference (a pre-rendered word or cluster, i18n.hpp) or plain
+// characters from the UI font. A right-to-left language draws a line's pieces in reverse order
+// (each piece itself left to right): its words read right to left, names and numbers stay as
+// they are.
+struct Piece
+{
+    std::size_t at, len; // bytes in the string
+    int run_table, run_id; // run_id < 0: plain characters
+    int width;
+};
+constexpr int kMaxPieces = 384;
+
+int run_size(Font f) noexcept
+{
+    return f == Font::small ? 0 : f == Font::body ? 1 : 2;
+}
+
+int plain_width(const Face &fc, const char *s, std::size_t len) noexcept
+{
     int n = 0;
-    const std::size_t len = std::strlen(s);
     for (std::size_t i = 0; i < len;)
     {
         json::utf8_next(s, len, &i);
@@ -337,24 +355,74 @@ int Canvas::text_width(Font f, const char *s) noexcept
     return n * fc.cw;
 }
 
-int Canvas::text(Font f, int x, int y, const char *s, std::uint32_t c, int max_w) noexcept
+// Splits s into pieces; plain text is cut at spaces (each space its own piece) so lines can
+// break there. Returns how many; *has_run says whether any run is in it.
+int pieces(Font f, const char *s, Piece *out, int cap, bool *has_run) noexcept
 {
     const Face &fc = face(f);
-    if (!fc.count)
-        return 0;
     const std::size_t len = std::strlen(s);
-    const int total = text_width(f, s);
-    const bool cut = max_w > 0 && total > max_w;
-    const int limit = cut ? max_w - fc.cw : 1 << 30;
+    int n = 0;
+    *has_run = false;
+    std::size_t i = 0;
+    while (i < len && n < cap)
+    {
+        int table = 0, id = 0;
+        if (i18n::run_ref(s + i, len - i, &table, &id))
+        {
+            i18n::Run r;
+            const int w = i18n::run(table, id, run_size(f), r) ? r.w : 0;
+            out[n++] = Piece{i, i18n::kRunRef, table, id, w};
+            *has_run = true;
+            i += i18n::kRunRef;
+            continue;
+        }
+        std::size_t j = i;
+        if (s[i] == ' ')
+            ++j;
+        else
+            while (j < len && s[j] != ' ')
+            {
+                int t2, id2;
+                if (i18n::run_ref(s + j, len - j, &t2, &id2))
+                    break;
+                json::utf8_next(s, len, &j);
+            }
+        out[n++] = Piece{i, j - i, 0, -1, plain_width(fc, s + i, j - i)};
+        i = j;
+    }
+    return n;
+}
+} // namespace
+
+void Canvas::draw_run(int table, int id, Font f, int x, int y, std::uint32_t c) noexcept
+{
+    i18n::Run r;
+    if (!i18n::run(table, id, run_size(f), r))
+        return;
+    // Line the run's baseline up with the font's (the same for small, body and title).
+    const Face &fc = face(f);
+    const int top = y + fc.base - r.base;
+    int px = 0, py = 0;
+    for (std::size_t k = 0; k < r.len && py < r.h; ++k)
+    {
+        const unsigned level = r.rle[k] >> 4, rep = (r.rle[k] & 15u) + 1;
+        for (unsigned m = 0; m < rep; ++m)
+        {
+            if (level)
+                put_cov(x + px, top + py, c, level * 17);
+            if (++px >= r.w)
+                px = 0, ++py;
+        }
+    }
+}
+
+void Canvas::draw_plain(Font f, int x, int y, const char *s, std::size_t len, std::uint32_t c) noexcept
+{
+    const Face &fc = face(f);
     int pen = x;
     for (std::size_t i = 0; i < len;)
     {
-        std::uint32_t cp = json::utf8_next(s, len, &i);
-        if (pen - x + fc.cw > limit)
-        {
-            cp = 0x2026;
-            i = len;
-        }
+        const std::uint32_t cp = json::utf8_next(s, len, &i);
         const std::uint8_t *g = glyph(fc, cp);
         if (!g)
             g = glyph(fc, '?');
@@ -364,7 +432,168 @@ int Canvas::text(Font f, int x, int y, const char *s, std::uint32_t c, int max_w
                     put_cov(pen + gx, y + gy, c, g[gy * fc.cw + gx]);
         pen += fc.cw;
     }
+}
+
+int Canvas::text_width(Font f, const char *s) noexcept
+{
+    static Piece p[kMaxPieces];
+    bool has_run;
+    const int n = pieces(f, s, p, kMaxPieces, &has_run);
+    int w = 0;
+    for (int i = 0; i < n; ++i)
+        w += p[i].width;
+    return w;
+}
+
+int Canvas::draw_line(Font f, int x, int y, const char *s, const void *pv, int first, int count, bool rtl,
+                      std::uint32_t c) noexcept
+{
+    const auto *p = static_cast<const Piece *>(pv);
+    int pen = x;
+    auto one = [&](const Piece &pc) {
+        if (pc.run_id >= 0)
+            draw_run(pc.run_table, pc.run_id, f, pen, y, c);
+        else
+            draw_plain(f, pen, y, s + pc.at, pc.len, c);
+        pen += pc.width;
+    };
+    if (!rtl)
+    {
+        for (int k = 0; k < count; ++k)
+            one(p[first + k]);
+        return pen - x;
+    }
+    // Right to left: the runs (words) from the last to the first. Plain text between runs is cut
+    // into left-to-right islands (from a letter or digit to the last one: "PS5Upload Play",
+    // "192.168.1.20:19113") kept whole, and single neutral characters (spaces, punctuation) that
+    // go right to left with the words, brackets mirrored. A simple form of the Unicode bidi rules
+    // that is enough for the app's sentences (as PS5Term does it).
+    const Face &fc = face(f);
+    // a letter or digit of the UI font's left-to-right scripts (not typographic punctuation)
+    auto letter_at = [s](std::size_t i, std::size_t end) {
+        std::size_t j = i;
+        const std::uint32_t cp = json::utf8_next(s, end, &j);
+        return (cp >= '0' && cp <= '9') || (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
+               (cp >= 0xC0 && cp < 0x2000 && cp != 0xD7 && cp != 0xF7);
+    };
+    int k = first + count;
+    while (k > first)
+    {
+        if (p[k - 1].run_id >= 0)
+        {
+            one(p[--k]);
+            continue;
+        }
+        int start = k - 1;
+        while (start > first && p[start - 1].run_id < 0)
+            --start;
+        // the group's bytes, contiguous in s
+        const std::size_t gs = p[start].at, ge = p[k - 1].at + p[k - 1].len;
+        struct Unit
+        {
+            std::size_t at, len;
+        };
+        Unit units[160];
+        int nu = 0;
+        for (std::size_t i = gs; i < ge && nu < 160;)
+        {
+            if (letter_at(i, ge))
+            {
+                // an island: up to the last letter or digit before a run of neutrals at its end
+                std::size_t j = i, last = i;
+                while (j < ge)
+                {
+                    const auto cj = static_cast<unsigned char>(s[j]);
+                    if (letter_at(j, ge))
+                    {
+                        json::utf8_next(s, ge, &j);
+                        last = j;
+                    }
+                    else if (cj == ' ' || cj == '.' || cj == ':' || cj == '-' || cj == '_' || cj == '/' || cj == '\'' ||
+                             cj == '@' || cj == ',')
+                        ++j;
+                    else
+                        break;
+                }
+                units[nu++] = Unit{i, last - i};
+                i = last;
+            }
+            else
+            {
+                std::size_t j = i;
+                json::utf8_next(s, ge, &j);
+                units[nu++] = Unit{i, j - i};
+                i = j;
+            }
+        }
+        for (int u = nu - 1; u >= 0; --u)
+        {
+            const char *t = s + units[u].at;
+            std::size_t len = units[u].len;
+            char mirrored[2] = {0, 0};
+            if (len == 1)
+            {
+                const char m = *t == '(' ? ')' : *t == ')' ? '(' : *t == '[' ? ']' : *t == ']' ? '[' : *t == '<' ? '>' : *t == '>' ? '<' : 0;
+                if (m)
+                    mirrored[0] = m, t = mirrored;
+            }
+            draw_plain(f, pen, y, t, len, c);
+            pen += plain_width(fc, t, len);
+        }
+        k = start;
+    }
     return pen - x;
+}
+
+int Canvas::text(Font f, int x, int y, const char *s, std::uint32_t c, int max_w) noexcept
+{
+    const Face &fc = face(f);
+    if (!fc.count)
+        return 0;
+    static Piece p[kMaxPieces];
+    bool has_run;
+    int n = pieces(f, s, p, kMaxPieces, &has_run);
+    const bool rtl = has_run && i18n::right_to_left();
+    int total = 0;
+    for (int i = 0; i < n; ++i)
+        total += p[i].width;
+    if (max_w <= 0 || total <= max_w)
+        return draw_line(f, x, y, s, p, 0, n, rtl, c);
+    // Too long: as many pieces as fit (a plain piece cut by characters), then "…".
+    const int room = max_w - fc.cw;
+    int used = 0, k = 0;
+    while (k < n && used + p[k].width <= room)
+        used += p[k++].width;
+    if (k < n && p[k].run_id < 0 && room - used >= fc.cw)
+    {
+        // part of the next plain piece
+        std::size_t take = 0;
+        int w = 0;
+        const char *ps = s + p[k].at;
+        while (take < p[k].len && used + w + fc.cw <= room)
+        {
+            json::utf8_next(ps, p[k].len, &take);
+            w += fc.cw;
+        }
+        p[k].len = take;
+        p[k].width = w;
+        used += w;
+        ++k;
+    }
+    int drawn;
+    if (rtl)
+    {
+        // the ellipsis on the left, where the cut end of a right-to-left line is
+        draw_plain(f, x, y, "\xe2\x80\xa6", 3, c);
+        drawn = fc.cw + draw_line(f, x + fc.cw, y, s, p, 0, k, true, c);
+    }
+    else
+    {
+        drawn = draw_line(f, x, y, s, p, 0, k, false, c);
+        draw_plain(f, x + drawn, y, "\xe2\x80\xa6", 3, c);
+        drawn += fc.cw;
+    }
+    return drawn;
 }
 
 int Canvas::text_center(Font f, int cx, int y, const char *s, std::uint32_t c) noexcept
@@ -377,41 +606,28 @@ int Canvas::text_wrap(Font f, int x, int y, int max_w, const char *s, std::uint3
     const Face &fc = face(f);
     if (!fc.count)
         return 0;
-    const int per_line = max_w / fc.cw;
-    const std::size_t len = std::strlen(s);
-    int lines = 0;
-    std::size_t at = 0;
-    char buf[512];
-    while (at < len)
+    static Piece p[kMaxPieces];
+    bool has_run;
+    const int n = pieces(f, s, p, kMaxPieces, &has_run);
+    const bool rtl = has_run && i18n::right_to_left();
+    int lines = 0, i = 0;
+    while (i < n)
     {
-        // take words while they fit
-        std::size_t end = at, last_space = 0;
-        int chars = 0;
-        while (end < len && s[end] != '\n')
-        {
-            std::size_t nx = end;
-            json::utf8_next(s, len, &nx);
-            if (chars + 1 > per_line)
-                break;
-            if (s[end] == ' ')
-                last_space = end;
-            end = nx;
-            ++chars;
-        }
-        if (end < len && s[end] != '\n' && last_space > at)
-            end = last_space;
-        const std::size_t n = end - at < sizeof buf - 1 ? end - at : sizeof buf - 1;
-        std::memcpy(buf, s + at, n);
-        buf[n] = 0;
-        text(f, x, y + lines * (fc.ch + gap), buf, c);
+        // skip spaces at the start of a line
+        while (i < n && p[i].run_id < 0 && p[i].len == 1 && s[p[i].at] == ' ')
+            ++i;
+        if (i >= n)
+            break;
+        int w = 0, j = i;
+        while (j < n && (j == i || w + p[j].width <= max_w))
+            w += p[j++].width;
+        // drop spaces at the end of the line
+        int end = j;
+        while (end > i + 1 && p[end - 1].run_id < 0 && p[end - 1].len == 1 && s[p[end - 1].at] == ' ')
+            --end;
+        draw_line(f, x, y + lines * (fc.ch + gap), s, p, i, end - i, rtl, c);
         ++lines;
-        at = end;
-        while (at < len && (s[at] == ' ' || s[at] == '\n'))
-        {
-            if (s[at] == '\n' && at > end)
-                break;
-            ++at;
-        }
+        i = j;
     }
     return lines * (fc.ch + gap);
 }

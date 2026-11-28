@@ -23,6 +23,7 @@ struct Settings
     int music_volume = 25; // percent of full: low by default
     bool sounds = true;
     bool hints = true; // the controls hint while playing
+    char language[8] = {}; // "" = the PS5's own; else a code (ui::i18n)
     Host hosts[kHosts];
     std::uint32_t clock = 0; // the next `seen`
 

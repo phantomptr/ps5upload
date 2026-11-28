@@ -56,6 +56,10 @@ const char *user_name() noexcept;
 long read_file(const char *path, void *buf, std::size_t cap) noexcept;
 bool write_file(const char *path, const void *data, std::size_t len) noexcept;
 const char *data_dir() noexcept; // where settings and the log live
+// A file of the app's own (assets/<name>), read once and kept; null when missing.
+const std::uint8_t *asset(const char *name, std::size_t *len) noexcept;
+// The console's system language id (SCE_SYSTEM_SERVICE_PARAM_ID_LANG), or -1.
+int system_language() noexcept;
 // Back to the home screen (the only way an app ends).
 [[noreturn]] void exit_app() noexcept;
 // Where the guest's pictures and sound go.

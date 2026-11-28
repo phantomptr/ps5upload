@@ -160,6 +160,8 @@ namespace play::ui
     X(set_volume, "Music volume")                                                                               \
     X(set_sounds, "Button sounds")                                                                              \
     X(set_hints, "Show the controls while playing")                                                             \
+    X(set_language, "Language")                                                                                 \
+    X(lang_auto, "Same as this PS5")                                                                            \
     X(set_forget, "Forget remembered computers")                                                                \
     X(set_forgot, "Forgotten.")                                                                                 \
     X(set_about, "About")                                                                                       \
