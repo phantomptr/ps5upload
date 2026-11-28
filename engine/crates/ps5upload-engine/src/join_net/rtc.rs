@@ -2558,6 +2558,8 @@ pub(crate) static TEST_NAT: Mutex<Option<nat::Search>> = Mutex::new(None);
 #[cfg(test)]
 #[path = "track_bench.rs"]
 mod track_bench;
+#[cfg(test)]
+pub(crate) use track_bench::{hold_room, release_room};
 
 #[cfg(test)]
 mod track_tests {

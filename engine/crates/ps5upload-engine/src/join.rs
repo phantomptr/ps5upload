@@ -2953,6 +2953,20 @@ pub async fn relay(
         .on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
 }
 
+/// `GET /api/join/bridge`: PS5Upload Play on a PS5 (a native app, no WebRTC) joins a friend's Play
+/// Together over the internet through this engine: it sends the invite link's room and
+/// fingerprint, this engine joins the room on the hub as a WebRTC guest, checks the host engine's
+/// certificate against the fingerprint, and then passes the guest socket's messages through
+/// unchanged (join_net/bridge.rs). Reached from the LAN: the PS5 is another machine. It reaches
+/// only the hub in the Play Together settings and the engine that answers there, and at most two
+/// bridges per address run at once.
+pub async fn bridge(
+    upgrade: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+) -> Response {
+    crate::join_net::bridge::upgrade(upgrade, peer.ip())
+}
+
 /// The guest page (client/vite.join.config.ts), also served by the built-in hub.
 pub(crate) const PAGE_HTML: &str = include_str!("join_page.html");
 
@@ -4585,7 +4599,11 @@ pub async fn get_state(
         return r;
     }
     touch_reach(&q.addr, &headers);
-    Json(state_json(&q.addr)).into_response()
+    let mut v = state_json(&q.addr);
+    // PS5Upload Play apps on this network joining a friend's internet room through this engine
+    // now (join_net/bridge.rs).
+    v["bridges"] = crate::join_net::bridge::count().into();
+    Json(v).into_response()
 }
 
 /// `GET /api/join/routes?addr=`: how each guest on that console is connected and how well
@@ -5327,6 +5345,7 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/join", get(page))
         .route("/api/join/ws", get(ws))
         .route("/api/join/relay", get(relay))
+        .route("/api/join/bridge", get(bridge))
         .route("/api/join/signal", get(signal))
         .route("/api/join/probe", get(crate::join_route::probe))
         .route("/api/join/routes", get(routes))

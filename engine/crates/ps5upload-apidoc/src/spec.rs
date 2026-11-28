@@ -260,6 +260,7 @@ fn access_of(route: &Route, analysis: &Analysis) -> &'static str {
         || path == "/api/join/ws"
         || path == "/api/join/signal"
         || path == "/api/join/probe"
+        || path == "/api/join/bridge"
         || path == "/api/play/app"
         || path == "/share"
         || path == "/api/share/ws"
