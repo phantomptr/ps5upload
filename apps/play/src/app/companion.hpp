@@ -47,6 +47,9 @@ struct CompanionDoc
         int rtt_ms = -1;
         char via[12] = {};
         char client_kind[12] = {};
+        // the way they play over ("lan", "tailscale", "internet") and its tier word (docs/ROUTES.md)
+        char route[12] = {};
+        char tier[12] = {};
     } guests[4];
     int n_guests = 0;
     // switches

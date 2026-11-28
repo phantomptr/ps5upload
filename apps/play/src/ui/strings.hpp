@@ -57,6 +57,18 @@ namespace play::ui
     X(st_asking_sub, "They see your request in PS5Upload and on their TV.")                                     \
     X(st_waiting, "Your friend is starting their game again…")                                                  \
     X(st_reconnecting, "Connection lost. Getting back in…")                                                     \
+    X(way_lan, "Home network")                                                                                  \
+    X(way_tailscale, "Tailscale")                                                                               \
+    X(way_internet, "Internet")                                                                                 \
+    X(way_bridge, "Internet, through your PS5Upload")                                                          \
+    X(tier_excellent, "Excellent")                                                                              \
+    X(tier_good, "Good")                                                                                        \
+    X(tier_playable, "Playable")                                                                                \
+    X(tier_poor, "Poor")                                                                                        \
+    X(tier_down, "No answer")                                                                                   \
+    X(way_chip, "%s · %s · %d ms")                                                                              \
+    X(way_changed, "Now playing over %s")                                                                       \
+    X(way_poor, "Slow connection: a cable or being nearer the router helps")                                   \
     X(st_picture, "Waiting for the picture…")                                                                   \
     X(st_joined, "You're Player %d on %s")                                                                      \
     X(st_your_friend, "your friend's PS5")                                                                      \

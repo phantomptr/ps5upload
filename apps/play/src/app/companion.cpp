@@ -91,6 +91,8 @@ bool parse_companion_doc(const char *text, std::size_t len, CompanionDoc &doc) n
         x.rtt_ms = d.type(r) == json::Type::number ? static_cast<int>(d.integer(r)) : -1;
         jstr(d, d.get(g, "via"), x.via, sizeof x.via);
         jstr(d, d.get(g, "client_kind"), x.client_kind, sizeof x.client_kind);
+        jstr(d, d.get(g, "route"), x.route, sizeof x.route);
+        jstr(d, d.get(g, "tier"), x.tier, sizeof x.tier);
     }
     const int st = d.get(tog, "settings");
     doc.block_system_buttons = d.boolean(d.get(st, "block_system_buttons"), true);

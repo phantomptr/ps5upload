@@ -8,6 +8,8 @@
 #include "../ui/strings.hpp"
 #include "log.hpp"
 #include "platform.hpp"
+#include "route_pick.hpp"
+#include "route_ui.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -290,6 +292,13 @@ void App::start_join(const char *code) noexcept
     remember_current();
     guest_->leave();
     guest_->join();
+    // Every address discovery found for this engine is a way to it (docs/ROUTES.md): the best
+    // is checked at connect, the rest kept as backups.
+    route::Candidate ways[route::Selector::kMax];
+    pthread_mutex_lock(&disc_lock_);
+    const int n_ways = route_candidates(found_, n_found_, engine_name_, "", addr_, port_, ways, route::Selector::kMax);
+    pthread_mutex_unlock(&disc_lock_);
+    guest_->set_routes(ways, n_ways);
     guest_->start(addr_, port_, code_, platform::user_name(), version_);
     last_phase_ = -1;
     if (screen_ != Screen::joining)
@@ -1467,6 +1476,9 @@ int App::draw_playing_layer(Canvas &l, const GuestView &v, std::uint64_t now, in
         l.text(Font::body, x + 32, 28 + (64 - ui::font_height(Font::body)) / 2, banner, col::text);
         *top = kTopBand;
     }
+    // Top right: the way to the host and how good it is (docs/ROUTES.md).
+    if (route_ui::draw_chip(l, v, now, joined_at_))
+        *top = kTopBand;
     // Bottom: the controls hint (first seconds), or the hold ring while a chord is held.
     const bool hold = ch.ps > 0 || ch.leave > 0;
     const bool hints = settings_.hints && joined_at_ && now - joined_at_ < 10000000;
@@ -1637,6 +1649,11 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
                         std::snprintf(title, sizeof title, tr(S::host_guest_rtt), d.guests[k].player, gn, d.guests[k].rtt_ms);
                     else
                         std::snprintf(title, sizeof title, tr(S::host_guest), d.guests[k].player, gn);
+                    // how they are connected (docs/ROUTES.md): "Tailscale · Good"
+                    static char way_buf[96];
+                    route_ui::guest_line(d.guests[k].route, d.guests[k].tier, way_buf, sizeof way_buf);
+                    if (way_buf[0])
+                        value = way_buf;
                 }
             break;
         case Row::sw_block:

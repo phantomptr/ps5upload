@@ -15,7 +15,7 @@ T := build/host-tests
 
 CORE := src/core/json.cpp src/core/ws.cpp src/core/proto.cpp src/core/jitter.cpp src/core/settings.cpp
 NET := src/net/net.cpp src/net/route.cpp src/net/route_probe.cpp src/app/guest.cpp src/app/guest_route.cpp src/app/route_pick.cpp src/app/companion.cpp src/app/helper.cpp src/app/log.cpp
-UI := src/app/app.cpp src/ui/canvas.cpp src/ui/strings.cpp src/ui/i18n.cpp
+UI := src/app/app.cpp src/app/route_ui.cpp src/ui/canvas.cpp src/ui/strings.cpp src/ui/i18n.cpp
 
 .PHONY: all app release test unit e2e shots clean
 
