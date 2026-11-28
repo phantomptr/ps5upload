@@ -4,7 +4,7 @@ import { Check, Copy, Gamepad2, RefreshCw, Share2, Smartphone, UserMinus, Users,
 
 import { Button, Callout, Toggle } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
-import { delayTone, formatCode, playerColor } from "../../lib/joinProtocol";
+import { formatCode, playerColor } from "../../lib/joinProtocol";
 import { useTr } from "../../state/lang";
 import { RP_BITRATES, useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore } from "../../state/rpQuality";
@@ -12,6 +12,7 @@ import { PictureHereToggle, PlayOnTvNote } from "./PictureHere";
 import { FriendsPs5s } from "./FriendsPs5s";
 import { QrCode } from "./PhonePads";
 import {
+  guestTier,
   inviteOn,
   joinApi,
   linkGrade,
@@ -28,7 +29,7 @@ import {
 } from "./playTogetherState";
 import { InternetHint, netInviteNote, NetworkChoice, routerNote, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
 import { clock } from "../../lib/clockText";
-import { tierLabel } from "../../join/routeTier";
+import { tierLabel, toneOfTier } from "../../join/routeTier";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -194,7 +195,7 @@ function seatNoteText(tr: Tr, note: string): string {
 
 function PlayerCard({ addr, player, guest }: { addr: string; player: number; guest: JoinGuest | null }) {
   const tr = useTr();
-  const tone = delayTone(guest?.rttMs);
+  const tone = toneOfTier(guest ? guestTier(guest) : null);
   const onSeat = !!guest && guest.streamSeat && guest.status !== "left";
   const way = guest ? guestWayText(tr, guest) : null;
   return (

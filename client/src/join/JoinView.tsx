@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
-import { delayTone, playerColor, type JoinStatus } from "../lib/joinProtocol";
+import { playerColor, type JoinStatus } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import {
   HomeScreenTip,
@@ -26,7 +26,7 @@ import { useAutoHide, usePickHint } from "./autoHide";
 import { PadCheck } from "./PadCheck";
 import { OpenOnWifi } from "./OpenOnWifi";
 import type { NetPath } from "./netPath";
-import { tierLabel } from "./routeTier";
+import { tierLabel, tierOfMs, toneOfTier } from "./routeTier";
 import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -719,7 +719,7 @@ export function JoinView({
   const player = stage.player;
   const light = snap.light ?? playerColor(player);
   const delay = snap.rttMs ?? status?.rttMs ?? null;
-  const tone = delayTone(delay);
+  const tone = toneOfTier(snap.tier ?? tierOfMs(delay));
   const coarse = coarsePointer();
   const showTouch = live && !reconnecting && !pad.ready && coarse && (!inApp || full);
   const showGuide = showsGuide({ player, guided, movedOff, reconnecting });

@@ -416,16 +416,6 @@ export function joinSocketUrl(link: Pick<JoinLink, "origin">): string {
   return `${link.origin.replace(/^http/, "ws")}/api/join/ws`;
 }
 
-/** Delay in ms as a colour: under 60 ms good, under 120 ms fair, else slow. */
-export function delayTone(ms: number | null | undefined): "good" | "fair" | "slow" | "none" {
-  if (ms == null || !Number.isFinite(ms)) return "none";
-  if (ms < 60) return "good";
-  if (ms < 120) return "fair";
-  return "slow";
-}
-
-/** A delay a friend notices: the host is told how to make it smoother. */
-export const HIGH_DELAY_MS = 120;
 
 /** The light-bar colour a player number has on a DualSense (Player 1 blue, 2 red, 3 green, 4 pink). */
 export function playerColor(player: number): [number, number, number] {

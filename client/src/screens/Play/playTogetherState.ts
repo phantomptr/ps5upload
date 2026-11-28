@@ -5,9 +5,9 @@
 import { useEffect, useState } from "react";
 
 import type { MeshJoin } from "../../api/mesh";
-import { HIGH_DELAY_MS, type GuestState } from "../../lib/joinProtocol";
+import type { GuestState } from "../../lib/joinProtocol";
 import { getEngineUrl } from "../../state/engine";
-import { readTier, type Tier } from "../../join/routeTier";
+import { readTier, slowEnough, tierOfMs, type Tier } from "../../join/routeTier";
 
 export interface JoinGuest {
   id: number;
@@ -563,12 +563,18 @@ export function friendsIn(s: JoinHostState): JoinGuest[] {
   return s.guests.filter((g) => g.status !== "left" && g.status !== "asking");
 }
 
-/** The friend whose delay most needs the host's attention, or null. */
+/** A guest's tier: what their app or page measured, else the engine's round trip alone. */
+export function guestTier(g: Pick<JoinGuest, "tier" | "rttMs">): Tier | null {
+  return g.tier ?? tierOfMs(g.rttMs);
+}
+
+/** The friend whose connection most needs the host's attention, or null: Poor, or Playable and
+ *  falling behind (the one tier table, design 6.1). */
 export function slowFriend(s: JoinHostState): JoinGuest | null {
   let worst: JoinGuest | null = null;
   for (const g of s.guests) {
     if (g.status !== "playing" && g.status !== "picking_user") continue;
-    if (g.rttMs == null || g.rttMs < HIGH_DELAY_MS) continue;
+    if (g.rttMs == null || !slowEnough(guestTier(g), g.behind)) continue;
     if (!worst || g.rttMs > (worst.rttMs ?? 0)) worst = g;
   }
   return worst;
