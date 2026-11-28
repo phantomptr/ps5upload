@@ -421,6 +421,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/jobs/{id}/resume"),
     ("GET", "/api/jobs/{id}/summary"),
     ("GET", "/api/join"),
+    ("GET", "/api/join/bridge"),
     ("POST", "/api/join/close"),
     ("POST", "/api/join/decide"),
     ("POST", "/api/join/invite"),

@@ -200,6 +200,9 @@
   "GET /api/jobs/{id}/summary": {
    "summary": "A finished job's transfer summary"
   },
+  "GET /api/join/bridge": {
+   "summary": "A socket that joins a friend's internet Play Together room as a WebRTC guest for PS5Upload Play"
+  },
   "GET /api/join/relay": {
    "summary": "A socket that forwards a guest page to the host engine's /api/join/ws or /api/join/signal"
   },

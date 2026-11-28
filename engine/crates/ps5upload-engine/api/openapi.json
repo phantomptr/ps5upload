@@ -26254,6 +26254,29 @@
         }
       }
     },
+    "/api/join/bridge": {
+      "get": {
+        "description": "`GET /api/join/bridge`: PS5Upload Play on a PS5 (a native app, no WebRTC) joins a friend's Play\nTogether over the internet through this engine: it sends the invite link's room and\nfingerprint, this engine joins the room on the hub as a WebRTC guest, checks the host engine's\ncertificate against the fingerprint, and then passes the guest socket's messages through\nunchanged (join_net/bridge.rs). Reached from the LAN: the PS5 is another machine. It reaches\nonly the hub in the Play Together settings and the engine that answers there, and at most two\nbridges per address run at once.",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A socket that joins a friend's internet Play Together room as a WebRTC guest for PS5Upload Play",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
+        }
+      }
+    },
     "/api/join/close": {
       "post": {
         "description": "`POST /api/join/close {addr}`: every guest out, invites void.",
