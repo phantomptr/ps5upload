@@ -23,6 +23,9 @@ export interface Job {
   mine: boolean;
   /** What it works on, when the job says (a network-share copy names its file or folder). */
   name?: string;
+  /** Seconds since it began (how long it ran, once ended), when the helper knows: the page's own
+   *  jobs and network-share copies (#981). */
+  elapsed_s?: number;
 }
 
 /** Network-share jobs carry this in front of the daemon's id, so cancel goes to the right place. */
@@ -41,6 +44,7 @@ interface SmbDaemonJob {
   files_total?: unknown;
   started?: unknown;
   ended?: unknown;
+  elapsed_s?: unknown;
   src?: unknown;
   dest?: unknown;
 }
@@ -74,6 +78,7 @@ export function smbJobToJob(s: SmbDaemonJob, nowS: number): Job | null {
     bytes_total: num(s.bytes_total),
     mine: true,
     ...(name ? { name } : {}),
+    ...(typeof s.elapsed_s === "number" && Number.isFinite(s.elapsed_s) && s.elapsed_s >= 0 ? { elapsed_s: s.elapsed_s } : {}),
   };
 }
 

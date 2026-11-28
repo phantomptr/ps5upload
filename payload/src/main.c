@@ -45,6 +45,7 @@
 
 #include "proc_identity.h"
 #include "webui_api.h"
+#include "webui_queue.h"
 #include "webui_server.h"
 #include "webui_settings.h"
 #include "webui_tile.h"
@@ -936,6 +937,8 @@ int main(void) {
         if (plan.serve) (void)webui_api_server_start();
         else fprintf(stderr, "webui: PS5Upload Minion is off (%s enabled:false); the page is not served\n",
                      WEBUI_SETTINGS_PATH);
+        /* The page's queue (#982) goes on whether or not the page is served. */
+        webui_queue_start();
         startup_trace("WEBUI_STARTED");
         /* Every start with the tile on: the tile thread registers PSUP00001 again whenever app.db
          * does not list it, and logs "webui tile: ensure ok/FAILED"; a failure reaches the page and

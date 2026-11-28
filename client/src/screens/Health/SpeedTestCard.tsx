@@ -4,6 +4,7 @@ import { Gauge, Square } from "lucide-react";
 import { Button, Card } from "../../components";
 import { ProgressBar } from "../../components/ProgressBar";
 import { formatBytes } from "../../lib/format";
+import { RateFigures } from "../../components/RateFigures";
 import { speedVerdict } from "../../lib/speedVerdict";
 import { useTr } from "../../state/lang";
 import {
@@ -145,6 +146,8 @@ export function SpeedTestCard({ host }: { host: string }) {
               {st && st.total > 0 && (
                 <span className="tabular-nums text-[var(--color-muted)]">
                   {formatBytes(st.sent)} / {formatBytes(st.total)}
+                  {/* The live speed (#981); the result below is the measured one. */}
+                  <RateFigures id={`speedtest:${phaseText}`} done={st.sent} total={st.total} prefix=" · " />
                 </span>
               )}
             </div>

@@ -1,6 +1,7 @@
 import { CircleX, Copy, Download, FolderCog, ListTodo, Upload, type LucideIcon } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { t } from "../strings";
+import { RateLine } from "../ui/rate";
 import type { Job } from "./useJobs";
 
 const KIND_ICON: Record<Job["kind"], LucideIcon> = {
@@ -78,6 +79,11 @@ export function TaskRow({ job, onCancel }: { job: Job; onCancel: (job: Job) => v
               : t(job.state === "done" ? "cw_home_state_done" : "cw_home_state_failed")}
             {progress ? <span className="cw-dim">{` · ${progress}`}</span> : null}
           </div>
+          {running ? (
+            <div className="cw-task-sub">
+              <RateLine id={job.job} done={job.bytes_done} total={job.bytes_total} elapsedS={job.elapsed_s} />
+            </div>
+          ) : null}
         </div>
       </div>
       {running ? (

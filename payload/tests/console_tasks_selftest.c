@@ -74,6 +74,8 @@ static void test_only_noted_jobs_and_keys(void) {
     CHECK(strstr(json, "\"state\":\"running\"") != NULL);
     CHECK(strstr(json, "\"name\":\"My \\\"Game\\\".iso\"") != NULL);
     CHECK(strstr(json, "\"files_done\":1,\"files_total\":2,\"bytes_done\":50,\"bytes_total\":100,\"age_s\":0") != NULL);
+    /* #981: how long it has run, for the speed line */
+    CHECK(strstr(json, "\"age_s\":0,\"elapsed_s\":1}") != NULL);
     {
         uint8_t b[16];
         id_of(0xBB, b);
@@ -108,6 +110,8 @@ static void test_how_it_ended_is_kept(void) {
     CHECK(ctasks_observe(res, n, 11000) == 0);
     read_json(14000);
     CHECK(strstr(json, "\"name\":\"a\",\"files_done\":1,\"files_total\":2,\"bytes_done\":10,\"bytes_total\":10,\"age_s\":4") != NULL);
+    /* ended: how long it ran (0 to 10 s), not how long ago it started */
+    CHECK(strstr(json, "\"age_s\":4,\"elapsed_s\":10}") != NULL);
     CHECK(strstr(json, "\"kind\":\"copy\",\"state\":\"done\"") != NULL);
     CHECK(strstr(json, "\"kind\":\"delete\",\"state\":\"failed\",\"name\":\"b\"") != NULL);
     CHECK(strstr(json, "\"kind\":\"move\",\"state\":\"cancelled\"") != NULL);
@@ -115,6 +119,25 @@ static void test_how_it_ended_is_kept(void) {
     /* out of the window, not listed any more */
     read_json(10000 + CTASKS_KEEP_MS + 2000);
     CHECK(json[0] == '\0');
+}
+
+/* #981: the elapsed time of a job the page started; -1 for any other; a clock that went back reads 0. */
+static void test_elapsed(void) {
+    uint8_t a[16], b[16];
+    ava1_job_entry_t e[1];
+    size_t n;
+    ctasks_reset();
+    id_of(0x11, a);
+    id_of(0x22, b);
+    ctasks_started(a, "copy", "/data/a", 5000);
+    CHECK(ctasks_elapsed_ms(a, 65000) == 60000);
+    CHECK(ctasks_elapsed_ms(a, 4000) == 0);
+    CHECK(ctasks_elapsed_ms(b, 65000) == -1);
+    e[0] = job(0x11, 1, 10, 10);
+    n = list_of(e, 1);
+    CHECK(ctasks_observe(res, n, 95000) == 0);
+    /* ended at 95 s: it ran 90 s, however long after that it is read */
+    CHECK(ctasks_elapsed_ms(a, 200000) == 90000);
 }
 
 /* Asked to stop, the stop failed, and it fails by itself later: not "cancelled". An ended one says so. */
@@ -211,6 +234,7 @@ static void test_slots_and_long_names(void) {
 int main(void) {
     test_only_noted_jobs_and_keys();
     test_how_it_ended_is_kept();
+    test_elapsed();
     test_a_stop_that_did_not_go_through();
     test_vanished_and_too_new();
     test_slots_and_long_names();

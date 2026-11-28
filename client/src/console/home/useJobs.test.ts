@@ -197,6 +197,9 @@ describe("network-share jobs in Tasks (#658)", () => {
     expect(smbJobToJob(smb({ kind: "upload", src: "/data/saves/a.zip", dest: "backup/a.zip" }), 1010)?.name).toBe("a.zip");
     expect(smbJobToJob(smb({ kind: "remove", src: "old" }), 1010)?.kind).toBe("op");
     expect(smbJobToJob(smb({ state: "cancelled" }), 1010)?.state).toBe("failed");
+    // #981: how long it has run, on the console's clock; a daemon without it says nothing.
+    expect(smbJobToJob(smb({ elapsed_s: 95 }), 1010)?.elapsed_s).toBe(95);
+    expect(smbJobToJob(smb(), 1010)?.elapsed_s).toBeUndefined();
   });
 
   it("keeps a long network-share copy that just ended (from when it ended, not when it started)", () => {

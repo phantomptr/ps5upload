@@ -148,6 +148,8 @@ curl -s http://127.0.0.1:19113/api/jobs/<job_id>
 - **Tasks started on the console.** `GET /api/ps5/console-tasks?addr=` lists what someone started on
   the console page, with its progress, and `POST /api/ps5/console-tasks/cancel {addr, id}` stops one
   whose `cancellable` is true. A helper older than this feature answers `supported: false`.
+  Each task has `elapsed_s` (seconds since it started on the console) when the helper knows it, and
+  copies and installs waiting in the page's queue are listed with `state: "queued"` (read-only).
 
 ### `Prefer: respond-async`
 

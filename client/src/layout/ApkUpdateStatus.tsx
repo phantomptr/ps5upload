@@ -1,5 +1,6 @@
 import { ExternalLink, Settings as SettingsIcon } from "lucide-react";
 
+import { RateFigures } from "../components/RateFigures";
 import type { UpdateCheck } from "../api/ps5";
 import { useTr } from "../state/lang";
 import {
@@ -97,6 +98,7 @@ export function ApkProgress({ received, total }: { received: number; total: numb
         {pct == null
           ? tr("update_toast_downloading", undefined, "Downloading…")
           : tr("update_apk_downloading_pct", { percent: pct }, "Downloading… {percent}%")}
+        <RateFigures id="apk-update" done={received} total={total} prefix=" · " />
       </span>
     </div>
   );

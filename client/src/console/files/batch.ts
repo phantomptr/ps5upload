@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../api";
 import { cancelJob, fetchJobs, type Job } from "../home/useJobs";
+import { newRateTracker, trackRate, type RateTracker, type RateView } from "../../lib/transferRate";
 import type { BatchOptions, BatchResult, JobEnd } from "./move";
 
 export type BatchOp = "copy" | "move" | "delete" | "chmod" | "rename" | "unpack" | "install" | "extract";
@@ -34,6 +35,12 @@ export interface BatchProgress {
   phase?: string | null;
   /** Stop cancels the item running too, so it is offered for one item as well. */
   cancels?: boolean;
+  /** When the batch began (Date.now()). */
+  startedAt?: number;
+  /** Speed and time left of the running item's bytes, and seconds since the batch began, as of
+   *  the last byte report (#981). */
+  rate?: RateView;
+  elapsedS?: number;
 }
 
 /** How often a running job is checked. */
@@ -60,7 +67,7 @@ export interface WaiterDeps {
  */
 export function createJobWaiter(deps: WaiterDeps) {
   const pollMs = deps.pollMs ?? BATCH_POLL_MS;
-  return async (id: string, stopped?: () => boolean): Promise<JobEnd> => {
+  return async (id: string, stopped?: () => boolean, onJob?: (j: Job) => void): Promise<JobEnd> => {
     let absent = 0;
     let cancelAsked = false;
     let after = 0;
@@ -76,6 +83,7 @@ export function createJobWaiter(deps: WaiterDeps) {
         if (j) {
           absent = 0;
           if (j.state !== "running") return cancelAsked && j.state === "failed" ? "cancelled" : j.state;
+          onJob?.(j);
         } else if (++absent >= BATCH_ABSENT_READS) {
           return cancelAsked ? "cancelled" : "gone";
         }
@@ -148,7 +156,11 @@ export function batchOptions(ctl: BatchControl): BatchOptions {
   return {
     onProgress: ctl.onProgress,
     stopped: ctl.stopped,
-    waitJob: (id, unstoppable) => waitJob(id, unstoppable ? undefined : ctl.stopped),
+    // The job's bytes as it runs (a copy's): the batch line shows its speed and time left.
+    waitJob: (id, unstoppable) =>
+      waitJob(id, unstoppable ? undefined : ctl.stopped, (j) => {
+        if (j.bytes_total > 0 || j.bytes_done > 0) ctl.onBytes(j.bytes_done, j.bytes_total);
+      }),
   };
 }
 
@@ -165,18 +177,33 @@ export function startBatch<R extends BatchResult = BatchResult>(
 ): Promise<R> | null {
   if (progress) return null;
   stopAsked = false;
-  progress = { op, at: 0, total, stopping: false, ...(paths ? { paths } : {}), ...(cancels ? { cancels } : {}) };
+  const startedAt = Date.now();
+  let rates: RateTracker = newRateTracker();
+  let ratedAt = 0;
+  progress = { op, at: 0, total, stopping: false, startedAt, ...(paths ? { paths } : {}), ...(cancels ? { cancels } : {}) };
   emit();
   const ctl: BatchControl = {
     onProgress: (at, n) => {
       if (!progress) return;
+      // A new item: its bytes are measured from scratch.
+      if (at !== progress.at) {
+        rates = newRateTracker();
+        ratedAt = at;
+        progress = { ...progress, rate: undefined };
+      }
       progress = { ...progress, at, total: n };
       emit();
     },
     onBytes: (done, total) => {
       if (!progress) return;
-      if (progress.bytesDone === done && progress.bytesTotal === total) return;
-      progress = { ...progress, bytesDone: done, bytesTotal: total };
+      if (ratedAt !== progress.at) {
+        rates = newRateTracker();
+        ratedAt = progress.at;
+      }
+      // Read on every report (once a second), unchanged bytes too: that is how a stall shows.
+      const now = Date.now();
+      const rate = trackRate(rates, now, done, total);
+      progress = { ...progress, bytesDone: done, bytesTotal: total, rate, elapsedS: (now - startedAt) / 1000 };
       emit();
     },
     onPhase: (phase) => {

@@ -95,7 +95,7 @@ export function SettlingLine({ live }: { live: JobLive }) {
   const tr = useTr();
   const total = live.settleTotal ?? 0;
   const left = live.settleLeft ?? 0;
-  const { rate, etaSeconds } = useRateEta("settle", Math.max(0, total - left), total);
+  const { rate, etaSeconds } = useRateEta("settle", Math.max(0, total - left), total, "count");
   if (!live.settling) return null;
   const counted = total > 0;
   return (
@@ -128,7 +128,7 @@ export function VerifyingLine({ live }: { live: JobLive }) {
   const tr = useTr();
   const total = live.verifyTotal ?? 0;
   const checked = Math.max(0, total - (live.verifyLeft ?? 0));
-  const { etaSeconds } = useRateEta("verify", checked, total);
+  const { etaSeconds } = useRateEta("verify", checked, total, "count");
   if (!live.verifying || live.settling) return null;
   if (total <= 0) {
     return (

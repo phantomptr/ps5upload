@@ -11,9 +11,10 @@
  * cannot show twice in that app and no paired PC can stop another one's job.
  *
  * One entry of the JSON: {"id":"<32 hex>","kind":"copy","state":"running","name":"game.iso",
- * "files_done":N,"files_total":N,"bytes_done":N,"bytes_total":N,"age_s":N}. kind: the token given to
- * ctasks_started. state: running, done, failed, cancelled, or gone (it left the job table without
- * anyone seeing how it ended). age_s: seconds since it ended, 0 while it runs. name may be "". */
+ * "files_done":N,"files_total":N,"bytes_done":N,"bytes_total":N,"age_s":N,"elapsed_s":N}. kind: the
+ * token given to ctasks_started. state: running, done, failed, cancelled, or gone (it left the job
+ * table without anyone seeing how it ended). age_s: seconds since it ended, 0 while it runs.
+ * elapsed_s: seconds since it started, or how long it ran once it ended (#981). name may be "". */
 #ifndef PS5UPLOAD_CONSOLE_TASKS_H
 #define PS5UPLOAD_CONSOLE_TASKS_H
 
@@ -47,6 +48,10 @@ int ctasks_observe(const uint8_t *res, size_t n, uint64_t now_ms);
 /* The entries still kept, as JSON array elements with no brackets, into out. Their length, or -1
  * when they do not fit. */
 int ctasks_json(char *out, size_t cap, uint64_t now_ms);
+
+/* Milliseconds since job `id` started (how long it ran, once it ended); -1 when it is not one the
+ * page started. */
+int64_t ctasks_elapsed_ms(const uint8_t id[16], uint64_t now_ms);
 
 /* Tests only. */
 void ctasks_reset(void);

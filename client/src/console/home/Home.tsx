@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArchiveRestore, Eraser, Gamepad2, HardDrive, Sparkles, Usb, X } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { ApiError, call, callBlob, isOffline } from "../api";
@@ -11,6 +11,7 @@ import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pollWhileVisible } from "../ui/visiblePoll";
 import { TaskRow } from "./TaskRow";
+import { QueueSection } from "../queue/QueueList";
 import { PlayAppCard } from "./PlayAppCard";
 import { HomeDeviceAsks } from "../settings/Devices";
 import { useJobs, visibleJobs, type Job } from "./useJobs";
@@ -136,6 +137,8 @@ function askCopy(ask: Ask): {
 /* ---- view ---- */
 
 export interface HomeViewProps {
+  /** The console's queue section (#982), rendered under Tasks. */
+  queue?: ReactNode;
   status: ConsoleStatus | null;
   /** null until the first answer. */
   volumes: Volume[] | null;
@@ -365,6 +368,9 @@ export function HomeView(p: HomeViewProps) {
         ) : null}
       </section>
 
+      {/* The console's queue (#982): what runs and what waits, in order. */}
+      {p.queue ?? null}
+
       <section className="cw-home-section">
         <h2 className="cw-h2">{t("cw_home_storage")}</h2>
         {drivesNote ? (
@@ -585,6 +591,7 @@ export function Home({ ctx }: { ctx: SectionContext }) {
 
   return (
     <HomeView
+      queue={<QueueSection />}
       status={status}
       volumes={volumes}
       volumesError={volumesError}

@@ -371,6 +371,11 @@ static void escape_makes_valid_json(void) {
     CHECK(n == 4 && strcmp(out, "a") == 0);
 }
 
+static int64_t elapsed_if_first_byte_1(const uint8_t id[16], void *ctx) {
+    (void)ctx;
+    return id[0] == 1 ? 61999 : -1;
+}
+
 static int mine_if_first_byte_1(const uint8_t id[16], void *ctx) {
     (void)ctx;
     return id[0] == 1;
@@ -402,14 +407,19 @@ static void jobs_to_json(void) {
     r.jobs_count = 2;
     ava1_w_init(&w, enc, sizeof enc);
     CHECK(ava1_job_list_result_encode(&r, &w) == 0);
-    CHECK(webui_jobs_to_json(enc, w.len, mine_if_first_byte_1, NULL, out, sizeof out) == 2);
+    CHECK(webui_jobs_to_json(enc, w.len, mine_if_first_byte_1, NULL, NULL, out, sizeof out) == 2);
     CHECK(strcmp(out,
                  "{\"jobs\":[{\"job\":\"01ababababababababababababababab\",\"kind\":\"copy\",\"state\":\"running\","
                  "\"files_done\":1,\"files_total\":2,\"bytes_done\":3,\"bytes_total\":4,\"mine\":true},"
                  "{\"job\":\"00000000000000000000000000000000\",\"kind\":\"op\",\"state\":\"failed\","
                  "\"files_done\":0,\"files_total\":0,\"bytes_done\":0,\"bytes_total\":0,\"mine\":false}]}") == 0);
     CHECK(json_valid(out));
-    CHECK(webui_jobs_to_json(enc, w.len, NULL, NULL, out, 40) == -1);
+    CHECK(webui_jobs_to_json(enc, w.len, NULL, NULL, NULL, out, 40) == -1);
+    /* #981: a job whose start is known says how long it has run; the others leave it out */
+    CHECK(webui_jobs_to_json(enc, w.len, mine_if_first_byte_1, elapsed_if_first_byte_1, NULL, out, sizeof out) == 2);
+    CHECK(strstr(out, "\"bytes_total\":4,\"mine\":true,\"elapsed_s\":61}") != NULL);
+    CHECK(strstr(out, "\"bytes_total\":0,\"mine\":false}") != NULL);
+    CHECK(json_valid(out));
 }
 
 static size_t status_enc(const ava1_status_t *st, uint8_t *enc, size_t cap) {

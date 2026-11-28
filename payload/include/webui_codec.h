@@ -53,11 +53,12 @@ int webui_list_to_json(const uint8_t *res, size_t n, char *out, size_t cap);
 /* An encoded ava1_job_list_result_t as
  *   {"jobs":[{"job":"<32 hex>","kind":"upload"|"download"|"copy"|"op"|"other",
  *             "state":"running"|"done"|"failed","files_done":N,"files_total":N,
- *             "bytes_done":N,"bytes_total":N,"mine":bool},...]}
- * `mine` (may be NULL: never mine) tells whether a job is the caller's. Returns the number of
- * jobs written or -1 (does not decode, or does not fit). */
-int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx), void *ctx,
-                       char *out, size_t cap);
+ *             "bytes_done":N,"bytes_total":N,"mine":bool[,"elapsed_s":N]},...]}
+ * `mine` (may be NULL: never mine) tells whether a job is the caller's. `elapsed` (may be NULL)
+ * gives the milliseconds since a job started, or < 0 when that is not known: elapsed_s is left out
+ * then (#981). Returns the number of jobs written or -1 (does not decode, or does not fit). */
+int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx),
+                       int64_t (*elapsed)(const uint8_t id[16], void *ctx), void *ctx, char *out, size_t cap);
 
 /* The longest operation result /api/jobs/status carries (a HASH result is ~2.2 KiB with a long
  * path; CRC32 and FFPFSC_UNPACK far less). A longer one is answered as "result":null. */

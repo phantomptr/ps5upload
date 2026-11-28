@@ -64,6 +64,7 @@ export function rowFigures(row: ActivityRow, tr: Tr, long = false, cap = 0): str
     const c = capFigure(task, tr, cap);
     if (c) out.push(c);
   }
+  if (task.rate?.stalled) out.push(tr("task_stalled", undefined, "Stalled"));
   if (shownEta(task.eta)) {
     const time = formatDuration(task.eta);
     out.push(tr("activity_left", { time }, `${time} left`));
@@ -84,6 +85,7 @@ export function lineFigures(row: ActivityRow, tr: Tr, cap = 0): string[] {
     const c = capFigure(task, tr, cap);
     if (c) out.push(c);
   }
+  if (task.rate?.stalled) out.push(tr("task_stalled", undefined, "Stalled"));
   if (shownEta(task.eta)) {
     const time = formatDuration(task.eta);
     out.push(tr("activity_left", { time }, `${time} left`));

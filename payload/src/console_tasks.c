@@ -144,6 +144,22 @@ int ctasks_observe(const uint8_t *res, size_t n, uint64_t now_ms) {
     return rc < 0 ? -1 : 0;
 }
 
+/* Running: since it started; ended: how long it ran. A clock that went back reads 0. */
+static uint64_t ran_ms_locked(const ctask_t *t, uint64_t now_ms) {
+    uint64_t end = t->state == CT_RUNNING ? now_ms : t->ended_ms;
+    return end > t->started_ms ? end - t->started_ms : 0;
+}
+
+int64_t ctasks_elapsed_ms(const uint8_t id[16], uint64_t now_ms) {
+    const ctask_t *t;
+    int64_t ms = -1;
+    pthread_mutex_lock(&g_mu);
+    t = find_locked(id);
+    if (t) ms = (int64_t)ran_ms_locked(t, now_ms);
+    pthread_mutex_unlock(&g_mu);
+    return ms;
+}
+
 static const char *state_name(uint8_t s) {
     switch (s) {
     case CT_RUNNING: return "running";
@@ -170,10 +186,11 @@ int ctasks_json(char *out, size_t cap, uint64_t now_ms) {
         webui_json_escape(name, sizeof name, t->name, strlen(t->name));
         k = snprintf(out + pos, cap - pos,
                      "%s{\"id\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\",\"name\":\"%s\",\"files_done\":%lu,"
-                     "\"files_total\":%lu,\"bytes_done\":%llu,\"bytes_total\":%llu,\"age_s\":%llu}",
+                     "\"files_total\":%lu,\"bytes_done\":%llu,\"bytes_total\":%llu,\"age_s\":%llu,\"elapsed_s\":%llu}",
                      written ? "," : "", hex, t->kind, state_name(t->state), name, (unsigned long)t->files_done,
                      (unsigned long)t->files_total, (unsigned long long)t->bytes_done, (unsigned long long)t->bytes_total,
-                     t->state == CT_RUNNING ? 0ull : (unsigned long long)((now_ms - t->ended_ms) / 1000u));
+                     t->state == CT_RUNNING ? 0ull : (unsigned long long)((now_ms - t->ended_ms) / 1000u),
+                     (unsigned long long)(ran_ms_locked(t, now_ms) / 1000u));
         if (k < 0 || (size_t)k >= cap - pos) {
             failed = 1;
             break;

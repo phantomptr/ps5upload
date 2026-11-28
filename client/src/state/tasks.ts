@@ -29,6 +29,7 @@
 import { create } from "zustand";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { hostOf } from "../lib/addr";
+import { newRateTracker, trackRate, type RateTracker } from "../lib/transferRate";
 
 // ---------------------------------------------------------------------------
 // Types — §10.1
@@ -117,6 +118,8 @@ export interface TaskProgress {
 export interface TaskRate {
   bytesPerSec: number;
   filesPerSec?: number;
+  /** No bytes have moved for a while though some are still to come (#981). */
+  stalled?: boolean;
 }
 
 export interface TaskError {
@@ -324,58 +327,32 @@ function newTaskId(): string {
 // Speed and time left for jobs that report bytes but no speed
 // ---------------------------------------------------------------------------
 
-/** One job's last byte sample and its smoothed speed. Memory only: a speed is never persisted. */
-interface RateSample {
-  at: number;
-  current: number;
-  bytesPerSec: number;
-}
-
-const rateSamples = new Map<string, RateSample>();
-/** A sample this close to the previous one says little about speed; wait for the next. */
-const MIN_SAMPLE_MS = 400;
-/** Weight of the newest sample in the smoothed speed. */
-const RATE_ALPHA = 0.3;
-/** Below this a job shows no speed (and no time left) rather than a figure that means nothing. */
-const MIN_RATE = 1;
-/** What is left of a speed once the bytes have stopped: it fades, and under this it is gone
- *  (the status bar showed "1.1222416 B/s" for a read-back that was still working, #669). */
-const FADED_RATE = 1024;
+/** Each job's speed window (lib/transferRate, the computation every surface shares, #981).
+ *  Memory only: a speed is never persisted. */
+const rateSamples = new Map<string, RateTracker>();
 
 /** Many jobs (library moves, downloads, file copies, watched engine jobs) report bytes moved
  *  but no speed, so the activity bar could show a percentage and nothing about how fast or how
- *  long. Derive both from successive byte samples, smoothed so one bursty poll does not swing
- *  the figure. A reporter that sends its own `rate` keeps it. Pure apart from `samples`. */
+ *  long. Derive both from successive byte samples over a trailing window, so one bursty poll does
+ *  not swing the figure; a job that stops moving shows as stalled. A reporter that sends its own
+ *  `rate` keeps it. Null for a count that is not bytes; otherwise the rate and time left to set
+ *  (undefined clears a figure that no longer holds). Pure apart from `trackers`. */
 export function deriveRate(
-  samples: Map<string, RateSample>,
+  trackers: Map<string, RateTracker>,
   id: string,
   progress: TaskProgress | undefined,
   now: number,
-): { rate: TaskRate; eta?: number } | null {
+): { rate: TaskRate | undefined; eta: number | undefined } | null {
   if (!progress || progress.unit !== "bytes") return null;
-  const prev = samples.get(id);
-  // First sample, or the job started a new leg (bytes went backwards): start over.
-  if (!prev || progress.current < prev.current) {
-    samples.set(id, { at: now, current: progress.current, bytesPerSec: 0 });
-    return null;
+  let t = trackers.get(id);
+  if (!t) {
+    t = newRateTracker();
+    trackers.set(id, t);
   }
-  const dt = now - prev.at;
-  if (dt < MIN_SAMPLE_MS) {
-    return prev.bytesPerSec > 0 ? withEta(prev.bytesPerSec, progress) : null;
-  }
-  const instant = ((progress.current - prev.current) * 1000) / dt;
-  let bytesPerSec =
-    prev.bytesPerSec > 0 ? prev.bytesPerSec + RATE_ALPHA * (instant - prev.bytesPerSec) : instant;
-  // A step that moves no bytes (a conversion's hashing pass) decays the average by 0.7 a sample:
-  // left alone it reached 1e-211 B/s and "1e+218h left". Under a byte a second is no speed.
-  if (bytesPerSec < MIN_RATE || (instant === 0 && bytesPerSec < FADED_RATE)) bytesPerSec = 0;
-  samples.set(id, { at: now, current: progress.current, bytesPerSec });
-  return bytesPerSec > 0 ? withEta(bytesPerSec, progress) : null;
-}
-
-function withEta(bytesPerSec: number, p: TaskProgress): { rate: TaskRate; eta?: number } {
-  const left = Math.max(0, p.total - p.current);
-  return { rate: { bytesPerSec }, ...(p.total > 0 ? { eta: left / bytesPerSec } : {}) };
+  const v = trackRate(t, now, progress.current, progress.total);
+  if (v.stalled) return { rate: { bytesPerSec: 0, stalled: true }, eta: undefined };
+  if (v.bytesPerSec > 0) return { rate: { bytesPerSec: v.bytesPerSec }, eta: v.etaSeconds ?? undefined };
+  return { rate: undefined, eta: undefined };
 }
 
 function sampleRate(
@@ -416,6 +393,9 @@ interface TaskState {
     control?: TaskControlRef;
     status?: TaskStatus;
     progress?: TaskProgress;
+    /** It began this long before it was registered (a task found already running, such as one
+     *  started on the console's own page): its elapsed time counts from then (#981). */
+    startedAgoMs?: number;
   }) => string;
 
   /** Patch a task — typically progress/rate/eta as the engine reports.
@@ -475,7 +455,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       control: init.control,
       status: init.status ?? "running",
       progress: init.progress,
-      createdAt: new Date(now).toISOString(),
+      createdAt: new Date(now - Math.max(0, init.startedAgoMs ?? 0)).toISOString(),
       updatedAtMs: now,
     };
     set((s) => {

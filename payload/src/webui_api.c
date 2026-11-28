@@ -15,6 +15,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include "statvfs_avail.h"
@@ -51,6 +52,7 @@
 #include "webui_offline.h"
 #include "webui_pkg.h"
 #include "webui_page.h"
+#include "webui_queue.h"
 #include "webui_server.h"
 #include "webui_settings.h"
 #include "webui_smb.h"
@@ -1032,6 +1034,12 @@ static int is_mine(const uint8_t id[16], void *ctx) {
     return ava1_jobs_owner_is(id, k_console_id);
 }
 
+/* How long a job the page started has run (#981); -1 for any other (a PC's: its app shows that). */
+static int64_t job_elapsed(const uint8_t id[16], void *ctx) {
+    (void)ctx;
+    return ctasks_elapsed_ms(id, (uint64_t)mono_ms());
+}
+
 /* "uploading": the destinations of running uploads (a PC's), for the Files badge. Left out when
  * the list cannot be read (the jobs answer stands on its own). */
 static void add_uploads(char *json, size_t cap) {
@@ -1064,7 +1072,7 @@ static void r_jobs(const char *b, size_t n, uint8_t *out, int fd) {
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
-    if (webui_jobs_to_json(out, ol, is_mine, NULL, json, API_JOBS_JSON) < 0) {
+    if (webui_jobs_to_json(out, ol, is_mine, job_elapsed, NULL, json, API_JOBS_JSON) < 0) {
         send_error(fd, 500, "bad_jobs_reply", 14);
     } else {
         /* The page has now seen how its finished jobs ended: release them (after a short grace, so
@@ -1124,12 +1132,24 @@ int webui_console_tasks(char *out, size_t cap) {
         if (arr && end && end > arr) smb_len = (size_t)(end - arr) + 1;
     }
     if (smb_len && pos + smb_len + 32 < cap)
-        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":%.*s}", (int)smb_len, arr);
+        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":%.*s", (int)smb_len, arr);
     else
-        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":[]}");
+        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":[]");
     free(smb);
     if (k < 0 || (size_t)k >= cap - pos) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
-    return (int)(pos + (size_t)k);
+    pos += (size_t)k;
+    /* The page's queue (#982), for the apps to show what waits; left out when it does not fit. */
+    if (cap - pos > 16) {
+        size_t at = pos;
+        memcpy(out + pos, ",\"queue\":", 9);
+        pos += 9;
+        k = webui_queue_json(out + pos, cap - pos - 2);
+        if (k < 0) pos = at;
+        else pos += (size_t)k;
+    }
+    if (cap - pos < 2) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
+    memcpy(out + pos, "}", 2);
+    return (int)(pos + 1);
 }
 
 int webui_console_task_cancel(const char *b, size_t n, char *out, size_t cap) {
@@ -3630,6 +3650,12 @@ static const struct {
     { "/api/smb/delete", webui_smb_delete },
     { "/api/smb/rename", webui_smb_rename },
     { "/api/smb/job", webui_smb_job },
+    { "/api/queue", webui_queue_get },
+    { "/api/queue/add", webui_queue_add },
+    { "/api/queue/cancel", webui_queue_cancel },
+    { "/api/queue/top", webui_queue_top },
+    { "/api/queue/clear", webui_queue_clear },
+    { "/api/queue/pause", webui_queue_pause },
     { "/api/smb/cancel", webui_smb_cancel },
     { "/api/smb/jobs", webui_smb_jobs },
     { "/api/library/scan", webui_library_scan },
@@ -3768,6 +3794,55 @@ int webui_api_stream(const webui_req_t *r, const uint8_t *pre, size_t pre_len, i
     }
     webui_send_json(fd, 404, "{\"error\":\"not_found\"}");
     return 0;
+}
+
+int webui_api_call(const char *path, const char *body, char *reply, size_t cap) {
+    enum { BUF = 512 * 1024 };
+    int sv[2], http = -1, sz = BUF;
+    size_t i, got = 0;
+    uint8_t *out;
+    char *buf, *sep;
+    if (cap) reply[0] = '\0';
+    for (i = 0; i < sizeof k_routes / sizeof k_routes[0]; i++)
+        if (strcmp(path, k_routes[i].path) == 0) break;
+    if (i == sizeof k_routes / sizeof k_routes[0] || k_routes[i].fn == r_mesh || !cap) return -1;
+    buf = malloc(BUF);
+    out = malloc(API_OUT_MAX);
+    if (!buf || !out || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        free(buf);
+        free(out);
+        return -1;
+    }
+    /* the whole reply fits in the pair's buffer: the route writes it all before it is read */
+    (void)setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &sz, sizeof sz);
+    (void)setsockopt(sv[1], SOL_SOCKET, SO_RCVBUF, &sz, sizeof sz);
+    if (ava1_server_local_rpc_enter() == 0) {
+        ava1_server_set_rpc_peer(k_console_id);
+        k_routes[i].fn(body, strlen(body), out, sv[0]);
+        ava1_server_local_rpc_leave();
+    }
+    free(out);
+    (void)shutdown(sv[0], SHUT_WR);
+    close(sv[0]);
+    for (;;) {
+        ssize_t r = read(sv[1], buf + got, BUF - 1 - got);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        got += (size_t)r;
+        if (got >= BUF - 1) break;
+    }
+    close(sv[1]);
+    buf[got] = '\0';
+    if (sscanf(buf, "HTTP/1.%*d %d", &http) != 1) http = -1;
+    sep = strstr(buf, "\r\n\r\n");
+    if (sep) {
+        size_t len = got - (size_t)(sep + 4 - buf);
+        if (len >= cap) len = cap - 1;
+        memcpy(reply, sep + 4, len);
+        reply[len] = '\0';
+    }
+    free(buf);
+    return http;
 }
 
 int webui_api_route(const webui_req_t *r, const uint8_t *body, size_t body_len, int fd) {

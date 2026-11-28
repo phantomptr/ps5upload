@@ -466,8 +466,8 @@ static const char *job_kind(uint8_t k) {
     }
 }
 
-int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx), void *ctx,
-                       char *out, size_t cap) {
+int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx),
+                       int64_t (*elapsed)(const uint8_t id[16], void *ctx), void *ctx, char *out, size_t cap) {
     ava1_job_list_result_t r;
     ava1_job_entry_t e;
     ava1_r_t it;
@@ -479,16 +479,19 @@ int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t i
     pos = (size_t)snprintf(out, cap, "{\"jobs\":[");
     ava1_r_init(&it, r.jobs, r.jobs_len);
     while ((rc = ava1_job_entry_next(&it, &e)) == 1) {
-        char hex[33];
+        char hex[33], ran[32];
         int k;
+        int64_t ms = elapsed ? elapsed(e.job_id, ctx) : -1;
         webui_hex16(e.job_id, hex);
+        ran[0] = '\0';
+        if (ms >= 0) snprintf(ran, sizeof ran, ",\"elapsed_s\":%lld", (long long)(ms / 1000));
         k = snprintf(out + pos, cap - pos,
                      "%s{\"job\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\",\"files_done\":%lu,\"files_total\":%lu,"
-                     "\"bytes_done\":%llu,\"bytes_total\":%llu,\"mine\":%s}",
+                     "\"bytes_done\":%llu,\"bytes_total\":%llu,\"mine\":%s%s}",
                      written ? "," : "", hex, job_kind(e.kind),
                      e.state == 0 ? "running" : (e.state == 1 ? "done" : "failed"), (unsigned long)e.files_done,
                      (unsigned long)e.files_total, (unsigned long long)e.bytes_done, (unsigned long long)e.bytes_total,
-                     mine && mine(e.job_id, ctx) ? "true" : "false");
+                     mine && mine(e.job_id, ctx) ? "true" : "false", ran);
         if (k < 0 || (size_t)k >= cap - pos) {
             out[0] = '\0';
             return -1;

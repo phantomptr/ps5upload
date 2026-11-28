@@ -138,6 +138,11 @@ function installPlaylistBridge() {
 function installUpdateBridge() {
   let id: string | null = null;
   useUpdateStore.subscribe((s, p) => {
+    // The download's bytes as they come in: the row shows its speed and time left (#981).
+    if (id && s.downloadProgress && s.downloadProgress !== p.downloadProgress) {
+      const { received, total } = s.downloadProgress;
+      useTaskStore.getState().updateTask(id, { progress: { current: received, total: total ?? 0, unit: "bytes" } });
+    }
     if (s.phase === p.phase) return;
     const phase: UpdatePhase = s.phase;
     const tasks = useTaskStore.getState();

@@ -15,8 +15,9 @@
  *   gzip cap went from 220 to 224 KiB when the converter's own failure and stage sentences landed
  *   (the page was within 0.1 KiB of 220). The raw cap went from 768 to 784 KiB when Uninstall
  *   learned to delete a game's folder or image (the page was 2.8 KiB over; gzip had room), and from
- *   784 to 800 KiB when Extract learned to delete the archive as it unpacks and Saves showed save
- *   sync (13.0.0); the gzip cap went from 224 to 228 KiB with save sync (224.0 gzip).
+ *   784 to 800 KiB when Extract learned to delete the archive as it unpacks, and to 816 KiB when
+ *   Saves showed save sync and the console's queue landed (#982) (13.0.0). The gzip cap went from 224
+ *   to 232 KiB with save sync and every transfer's speed, elapsed time and time left (#981).
  * - Strings: every other locale is emitted next to the page as strings/<code>.json (minified, cw_*
  *   keys only); payload/Makefile gzips each into the ELF (build/webui_strings.c) and the helper
  *   serves them at GET /strings/<code>.json. The page fetches them with ?v=<hash of these files>
@@ -40,8 +41,8 @@ import react from "@vitejs/plugin-react";
 import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
-const RAW_BUDGET = 800 * 1024; // 784 until Extract's free-space option and save sync (13.0.0)
-const GZIP_BUDGET = 228 * 1024; // ruling R19 (was 150 KiB), 224 until save sync, 220 until the converter's sentences
+const RAW_BUDGET = 816 * 1024; // 784 until 13.0.0 (free-space extract, save sync, console queue)
+const GZIP_BUDGET = 232 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences, 224 until 13.0.0
 const TOKENS_ID = "virtual:pc-tokens.css";
 
 /** The `{…}` body that starts at `open` (the index of a "{"), braces balanced. */
