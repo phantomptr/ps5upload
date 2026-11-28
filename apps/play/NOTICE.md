@@ -48,3 +48,128 @@ PS5Upload Play is free software under the GNU General Public License v3 (see `LI
 - `snd0.at9` is made at build time by PS5 AT9 Converter
   (https://github.com/BlackBearRevived/ps5-at9-converter, GPL-3.0-or-later), pinned to commit
   74a722898a6b97fd52256770bf45187e40c3fa2e; it is fetched into `.deps/` and is not part of the app.
+
+## Trademarks and warranty
+
+PS5Upload Play is an unofficial, independent app. It is not affiliated with, endorsed by or
+sponsored by Sony Interactive Entertainment. PlayStation and PS5 are trademarks of Sony
+Interactive Entertainment Inc., named only to say what the app works with. It comes with no
+warranty of any kind and is used at your own risk; the full terms are in PS5Upload's
+DISCLAIMER.md (https://github.com/phantomptr/ps5upload/blob/main/DISCLAIMER.md).
+
+## Source code
+
+PS5Upload Play's complete source is `apps/play/` in https://github.com/phantomptr/ps5upload, at
+the tag of the PS5Upload release this copy came with (`git clone --recursive --branch <tag>`
+also fetches the BearSSL submodule). The pinned downloads the build makes (payload SDK,
+libopus, Noto fonts, AT9 converter) are named with their hashes in `tools/build-in-container.sh`
+and `third_party/*/SOURCE.json`.
+
+## License texts
+
+The app's binary includes the following code, whose licenses ask for their notices to travel
+with it.
+
+### Opus (libopus 1.5.2), BSD 3-clause
+
+```
+Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+                    Jean-Marc Valin, Timothy B. Terriberry,
+                    CSIRO, Gregory Maxwell, Mark Borgerding,
+                    Erik de Castro Lopo, Mozilla, Amazon
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of Internet Society, IETF or IETF Trust, nor the
+names of specific contributors, may be used to endorse or promote
+products derived from this software without specific prior written
+permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Opus is subject to the royalty-free patent licenses which are
+specified at:
+
+Xiph.Org Foundation:
+https://datatracker.ietf.org/ipr/1524/
+
+Microsoft Corporation:
+https://datatracker.ietf.org/ipr/1914/
+
+Broadcom Corporation:
+https://datatracker.ietf.org/ipr/1526/
+```
+
+### BearSSL, MIT
+
+```
+Copyright (c) 2016 Thomas Pornin <pornin@bolet.org>
+
+Permission is hereby granted, free of charge, to any person obtaining 
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be 
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, 
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND 
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### QR Code generator library, MIT
+
+```
+Copyright (c) Project Nayuki. (MIT License)
+https://www.nayuki.io/page/qr-code-generator-library
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+- The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+- The Software is provided "as is", without warranty of any kind, express or
+  implied, including but not limited to the warranties of merchantability,
+  fitness for a particular purpose and noninfringement. In no event shall the
+  authors or copyright holders be liable for any claim, damages or other
+  liability, whether in an action of contract, tort or otherwise, arising from,
+  out of or in connection with the Software or the use or other dealings in the
+  Software.
+```
+
+### Fonts
+
+JetBrains Mono (Copyright 2020 The JetBrains Mono Project Authors) and Noto Sans are under the
+SIL Open Font License 1.1: https://openfontlicense.org (the full text is in
+`third_party/jetbrains-mono/OFL.txt` and `third_party/noto/*-OFL.txt` in the source).

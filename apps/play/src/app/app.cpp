@@ -520,6 +520,7 @@ void App::on_input(std::uint32_t p, std::uint32_t held, std::uint64_t now) noexc
     case Screen::thanks: input_thanks(p); break;
     case Screen::welcome: input_welcome(p); break;
     case Screen::help: input_help(p); break;
+    case Screen::terms: input_terms(p); break;
     case Screen::confirm: input_confirm(p); break;
     case Screen::menu: input_menu(p); break;
     }
@@ -1214,6 +1215,7 @@ void App::draw(std::uint32_t *ui_px, std::uint32_t *layer, std::uint64_t now, bo
     case Screen::thanks: draw_thanks(c); break;
     case Screen::welcome: draw_welcome(c); break;
     case Screen::help: draw_help(c); break;
+    case Screen::terms: draw_terms(c); break;
     case Screen::confirm: draw_confirm(c); break;
     case Screen::menu: draw_menu(c); break;
     case Screen::playing:
@@ -1778,7 +1780,8 @@ void App::draw_settings(Canvas &c) noexcept
     y += 46;
     y += c.text_wrap(Font::small, ax, y, aw, tr(S::about_music), col::muted, 4) + 10;
     y += c.text_wrap(Font::small, ax, y, aw, tr(S::about_credits), col::muted, 4) + 10;
-    c.text_wrap(Font::small, ax, y, aw, tr(S::about_license), col::muted, 4);
+    y += c.text_wrap(Font::small, ax, y, aw, tr(S::about_license), col::muted, 4) + 10;
+    c.text_wrap(Font::small, ax, y, aw, tr(S::about_terms), col::muted, 4);
     const int g[] = {G_CROSS, G_CIRCLE};
     const S l[] = {S::hint_change, S::hint_back};
     draw_hints(c, g, l, 2);

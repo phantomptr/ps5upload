@@ -501,5 +501,16 @@
   "chat_too_long": "Pesan terlalu panjang (maksimal 140 karakter).",
   "voice_ptt_only": "Hanya tekan untuk bicara di room ini: tahan Create.",
   "home_host_auto": "Jadi host dari PS5 ini dengan PS5Upload di %s",
-  "pair_grant_failed": "Pemasangan lewat helper tidak berhasil. Tampilkan kode saja."
+  "pair_grant_failed": "Pemasangan lewat helper tidak berhasil. Tampilkan kode saja.",
+  "about_terms": "Tidak berafiliasi dengan atau didukung oleh Sony Interactive Entertainment. Gratis, tanpa jaminan: gunakan atas risikomu sendiri. Ketentuan dan privasi: Aturan & tanggung jawab, lalu △.",
+  "notice_safety": "Jaga keamanan: jangan bagikan data pribadi, kata sandi, atau informasi akun kepada orang yang tidak kamu kenal, dan tinggalkan room mana pun yang membuatmu tidak nyaman. Chat dan suara hanya berjalan di antara orang-orang di dalam room dan tidak disimpan.",
+  "terms_hint": "Ketentuan & privasi",
+  "terms_title": "Ketentuan & privasi",
+  "terms_1": "PS5Upload Play gratis, tidak resmi, dan tidak berafiliasi dengan atau didukung oleh Sony Interactive Entertainment; PlayStation dan PS5 adalah merek dagangnya, disebut hanya untuk menjelaskan dengan apa aplikasi ini bekerja. Aplikasi ini disediakan tanpa jaminan apa pun. Kamu menggunakannya atas risiko sendiri: pembuatnya tidak bertanggung jawab atas data yang hilang, kerusakan konsol, pemblokiran, atau tindakan lain terhadap akunmu.",
+  "terms_2": "Kamu bertanggung jawab atas apa yang kamu lakukan dengannya: mainkan hanya game yang kamu atau temanmu miliki, serta patuhi hukum di tempat tinggalmu dan ketentuan platform yang kamu gunakan. PS5Upload Play tidak menyediakan game.",
+  "terms_3": "Privasi: aplikasi ini menyimpan pengaturan, data pairing, dan log di PS5 ini dan tidak mengirim data penggunaan. Untuk menemukan game lewat internet, aplikasi ini memakai server PS5Upload, yang melihat alamat jaringan PS5 ini dan apa yang ditampilkan room yang terdaftar, menyimpannya di memori hanya selama diperlukan, dan tidak pernah meneruskan chat, suara, atau video.",
+  "terms_4": "Dukungan bersifat sukarela: donasi adalah hadiah yang tidak membeli apa pun, tidak membuka apa pun, dan tidak dapat dikembalikan.",
+  "terms_5": "Ketentuan lengkap: github.com/phantomptr/ps5upload (DISCLAIMER.md). Pertanyaan hukum atau permintaan penghapusan konten: phantomptr@gmail.com.",
+  "thanks_voluntary": "Dukungan bersifat sukarela: hadiah yang tidak membeli apa pun dan tidak dapat dikembalikan.",
+  "wel_terms": "Gratis, tidak resmi, dan tidak berafiliasi dengan Sony; tanpa jaminan, gunakan atas risikomu sendiri. Ketentuannya ada di Pengaturan › Aturan & tanggung jawab."
 }

@@ -501,5 +501,16 @@
   "chat_too_long": "Questa riga è troppo lunga (al massimo 140 caratteri).",
   "voice_ptt_only": "Solo premi per parlare in questa stanza: tieni premuto Create.",
   "home_host_auto": "Ospita da questa PS5 con PS5Upload su %s",
-  "pair_grant_failed": "L'abbinamento tramite l'helper non ha funzionato. Mostra invece un codice."
+  "pair_grant_failed": "L'abbinamento tramite l'helper non ha funzionato. Mostra invece un codice.",
+  "about_terms": "Non affiliato né approvato da Sony Interactive Entertainment. Gratuito, senza alcuna garanzia: usalo a tuo rischio. Termini e privacy: Regole e responsabilità, poi △.",
+  "notice_safety": "Stai al sicuro: non condividere dati personali, password o informazioni dell'account con persone che non conosci, ed esci da qualsiasi stanza che ti mette a disagio. Chat e voce passano solo tra le persone nella stanza e non vengono salvate.",
+  "terms_hint": "Termini e privacy",
+  "terms_title": "Termini e privacy",
+  "terms_1": "PS5Upload Play è gratuito, non ufficiale e non è affiliato né approvato da Sony Interactive Entertainment; PlayStation e PS5 sono suoi marchi, citati solo per dire con cosa funziona l'app. È fornito senza alcuna garanzia. Lo usi a tuo rischio: i suoi autori non sono responsabili di dati persi, danni a una console, ban o altre azioni sui tuoi account.",
+  "terms_2": "Sei responsabile di ciò che ci fai: gioca solo a giochi che possiedi tu o i tuoi amici, e rispetta le leggi del luogo in cui vivi e i termini delle piattaforme che usi. PS5Upload Play non fornisce giochi.",
+  "terms_3": "Privacy: l'app tiene impostazioni, abbinamenti e log su questa PS5 e non invia dati di utilizzo. Per trovare partite via internet usa l'hub di PS5Upload, che vede l'indirizzo di rete di questa PS5 e ciò che mostra una stanza elencata, li tiene in memoria solo finché servono e non trasmette mai chat, voce o video.",
+  "terms_4": "Il supporto è volontario: una donazione è un regalo che non acquista nulla, non sblocca nulla e non è rimborsabile.",
+  "terms_5": "Termini completi: github.com/phantomptr/ps5upload (DISCLAIMER.md). Domande legali o richieste di rimozione: phantomptr@gmail.com.",
+  "thanks_voluntary": "Il supporto è volontario: un regalo che non acquista nulla e non è rimborsabile.",
+  "wel_terms": "Gratuito, non ufficiale e non affiliato a Sony; nessuna garanzia, usalo a tuo rischio. I termini sono in Impostazioni › Regole e responsabilità."
 }

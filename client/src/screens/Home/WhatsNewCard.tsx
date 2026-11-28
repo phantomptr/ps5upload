@@ -100,7 +100,22 @@ export function WhatsNewCard() {
             >
               {tr("whats_new_13_open", undefined, "Open Play Room")}
             </Link>
+            <Link
+              to="/bug-report"
+              onClick={dismiss}
+              className="inline-flex items-center rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--color-surface-3)] max-md:min-h-11"
+              data-testid="home-whats-new-report"
+            >
+              {tr("whats_new_13_report", undefined, "Send a bug report")}
+            </Link>
           </div>
+          <p className="text-xs text-[var(--color-muted)]" data-testid="home-whats-new-test">
+            {tr(
+              "whats_new_13_test",
+              undefined,
+              "Help us test: Play Rooms, PS5Upload Play and the new things on the PS5 (Minion's queue, save sync, freeing space while extracting, the USB adapter) have been tried on only a few consoles. If something goes wrong, open Bug Report, save the zip and post it on GitHub or Discord.",
+            )}
+          </p>
         </div>
       )}
     </Card>

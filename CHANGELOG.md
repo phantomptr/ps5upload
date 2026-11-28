@@ -6,6 +6,14 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Help us test**
+- 13.0.0 brings a lot that runs on the PS5: Play Rooms, PS5Upload Play, Minion's queue, save sync, freeing space while extracting and the USB adapter. They have been tried on only a few consoles, so your reports matter. If something goes wrong, open **Bug Report** in the sidebar, save the zip and post it on GitHub (the "Remote Play, Play Room or PS5Upload Play problem" form asks the useful questions) or on Discord. For a Play Room, make it on the computer or phone that hosts the room.
+- Bug reports now carry the Play Room's state (listed or not, locked, how many are blocked), PS5Upload Play's connection (paired, connected, app version) and the USB adapter's state: counts and states only, never chat, names or addresses.
+
+**Terms, privacy and credits**
+- About › Disclaimer, Minion's About and Rules & responsibility, and PS5Upload Play's new Terms & privacy screen (△ on Rules & responsibility) say plainly: PS5Upload is unofficial and not affiliated with Sony, comes with no warranty, and isn't liable for lost data, damage, bans or account actions; you're responsible for what you install, copy and share; what stays on your devices and what the Play Rooms hub briefly sees; donations are voluntary gifts; and where legal or takedown requests go. The Play Rooms notice adds how to stay safe. Thanks & Support, the USB adapter settings, the first-run screen, the join page and the website say their part too. [DISCLAIMER.md](DISCLAIMER.md) has the full terms.
+- The credits now include everything PS5Upload Play and the tailnet core build on, and PS5Upload Play carries the license texts of the code inside it.
+
 **Play Rooms**
 - **Your Play Together is now your room.** Keep it Private (only people you invite), make it Friends (people you've played with see it's open) or Public (anyone can find it in Rooms). Changing who can see it never removes anyone, and your invite links keep working.
 - **An optional password** for people who find your room. Five wrong tries and they wait 10 minutes.

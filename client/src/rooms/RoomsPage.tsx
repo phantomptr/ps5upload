@@ -92,6 +92,13 @@ export function RoomsPage() {
         <button type="button" className="text-xs text-white/60 underline" onClick={notice.show} data-testid="room-rules">
           {tr("room_notice_link", undefined, "Rules & responsibility")}
         </button>
+        <p className="text-[11px] leading-snug text-white/40" data-testid="rooms-legal">
+          {tr(
+            "join_legal",
+            undefined,
+            "PS5Upload is free, unofficial and not affiliated with Sony. You're responsible for what you say and do while you play.",
+          )}
+        </p>
       </div>
       {pick && (
         <Sheet dark onClose={() => setPick(null)}>

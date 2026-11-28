@@ -97,6 +97,9 @@ export function Thanks({ onBack, list = LIST }: { onBack?: () => void; list?: Su
             ))}
           </ul>
         ) : null}
+        <p className="cw-dim cw-setting-note" data-thanks-voluntary="">
+          {t("cw_thanks_voluntary")}
+        </p>
       </section>
 
       <section className="cw-home-section">

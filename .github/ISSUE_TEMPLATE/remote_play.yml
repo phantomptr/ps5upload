@@ -1,11 +1,11 @@
-name: Remote Play or Play Together problem
-description: Picture, sound, controller, pairing, stutter, or a friend who can't join
+name: Remote Play, Play Room or PS5Upload Play problem
+description: Picture, sound, controller, pairing, stutter, a friend who can't join, chat and voice, or PS5Upload Play on the PS5
 labels: ["bug", "remote-play"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting! Please attach the zip from **Bug Report** (in the app's sidebar), made right after the problem (while the stream is still open is best). It has the stream's numbers and nothing private.
+        Thanks for reporting! Please attach the zip from **Bug Report** (in the app's sidebar), made right after the problem (while the stream is still open is best). Make it on the computer or phone that **hosts** the Play Room: it has the stream's and the room's numbers, PS5Upload Play's connection state, and nothing private (no chat, no addresses, no keys).
   - type: checkboxes
     id: symptoms
     attributes:
@@ -19,6 +19,9 @@ body:
         - label: Controller buttons wrong, or a button doesn't work
         - label: Disconnects
         - label: A friend can't join, or joins but can't play
+        - label: The Rooms list, a password or a knock (asking to join) doesn't work
+        - label: Chat or voice doesn't work
+        - label: PS5Upload Play on the PS5 (won't open, can't find the computer, pairing, picture or controller)
   - type: textarea
     id: what-happened
     attributes:
@@ -33,11 +36,40 @@ body:
       options:
         - Remote Play on the same network as the PS5
         - Remote Play from outside the home (Tailscale)
-        - Play Together, friend on the same network
-        - Play Together, friend over the internet
+        - Play Room, friend on the same network
+        - Play Room, friend over the internet
+        - Play Room, friend joined from the Rooms list
+        - PS5Upload Play on the friend's PS5 (guest)
+        - PS5Upload Play on the host's PS5 (host side, pairing)
         - Phone as a controller / watch link
     validations:
       required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Were you hosting or joining?
+      options:
+        - Hosting (the PS5 and the game are mine)
+        - Joining a friend's room
+        - Both (I tried both sides)
+  - type: dropdown
+    id: joined
+    attributes:
+      label: How did the friend join? (Play Room only)
+      options:
+        - Invite link or QR code
+        - Short code
+        - Nearby (same network, no code)
+        - Rooms list (public or friends' rooms)
+        - Play again
+        - PS5Upload Play's home screen
+        - Not sure
+  - type: input
+    id: route
+    attributes:
+      label: Connection shown (Play Room only)
+      description: The way and its rating, as the app or PS5Upload Play shows it.
+      placeholder: "e.g. Home network · Good / Internet · Playable · 48 ms / Tailscale · Poor"
   - type: input
     id: version
     attributes:
@@ -55,8 +87,8 @@ body:
   - type: input
     id: friend
     attributes:
-      label: The friend's device and browser (Play Together only)
-      placeholder: "e.g. iPhone 15, Safari / Asus ROG Phone 7, Chrome"
+      label: The friend's device and browser (Play Room only)
+      placeholder: "e.g. iPhone 15, Safari / Asus ROG Phone 7, Chrome / PS5 Slim with PS5Upload Play"
   - type: input
     id: controller
     attributes:
@@ -91,3 +123,13 @@ body:
     attributes:
       label: PS5 firmware
       placeholder: "e.g. 13.60"
+  - type: input
+    id: guest-ps5
+    attributes:
+      label: The friend's PS5 model and firmware (PS5Upload Play only)
+      placeholder: "e.g. PS5 Slim, 11.40"
+  - type: input
+    id: helper
+    attributes:
+      label: Helper running on the PS5 with PS5Upload Play?
+      placeholder: "e.g. yes, 13.0.0 / no helper"

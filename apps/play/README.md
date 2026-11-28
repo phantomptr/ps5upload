@@ -65,3 +65,15 @@ With a file `/data/ps5upload-play/dev` present, the app also reads one command a
 Measured facts from the phase 0 spike are in [docs/PHASE0.md](docs/PHASE0.md), microphone capture
 in [docs/MIC.md](docs/MIC.md); where the code
 comes from is in [NOTICE.md](NOTICE.md).
+
+## ProsperoStore listing (draft)
+
+The catalog record (`apps/FAKE99261.json` in the store's catalog, category `streaming`, with
+`"internalOnly": true`) takes one sentence. Draft:
+
+> Join a friend's PS5Upload Play Room on your PS5 with your own controller, or run your own room
+> from the couch (unofficial, not affiliated with Sony).
+
+PS5Upload Play is free, comes with no warranty and is not affiliated with or endorsed by Sony
+Interactive Entertainment; its Terms & privacy screen (△ on Rules & responsibility) and
+[DISCLAIMER.md](../../DISCLAIMER.md) have the terms.

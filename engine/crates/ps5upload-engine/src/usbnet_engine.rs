@@ -134,6 +134,29 @@ fn host_key(console: &str) -> String {
 }
 
 impl Table {
+    /// Every console's adapter for a bug report (`/api/diag/features`): states and the chip, never
+    /// a console's or the adapter's address.
+    pub fn diag(&self) -> Value {
+        let now = Instant::now();
+        let m = self.m.lock().unwrap_or_else(|p| p.into_inner());
+        let consoles: Vec<Value> = m
+            .values()
+            .map(|st| {
+                json!({
+                    "serving": st.brief.is_some(),
+                    "chip": st.brief.as_ref().map(|b| b.chip.clone()),
+                    "mbps": st.brief.as_ref().map(|b| b.mbps),
+                    "seen": st.seen,
+                    "reachable": st.reachable,
+                    "fails": st.fails,
+                    "held": st.held(now),
+                    "preferred": st.preferred,
+                })
+            })
+            .collect();
+        json!({ "consoles": consoles })
+    }
+
     fn with<R>(&self, host: &str, f: impl FnOnce(&mut State) -> R) -> R {
         let mut m = self.m.lock().unwrap_or_else(|p| p.into_inner());
         f(m.entry(host_key(host)).or_default())

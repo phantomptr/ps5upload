@@ -542,6 +542,44 @@ acknowledge and accept that:
 - **Indemnity.** You agree to hold the authors, contributors, and
   distributors harmless from any claim arising out of your use or
   misuse of this software.
+- **Not liable.** The authors, contributors and distributors are not
+  liable for lost data, damage to a console or any other device, a
+  banned or restricted account or console, or any other action a
+  platform takes against you.
+- **What you do with it is up to you.** You're responsible for what you
+  install, copy, share, stream and send with it, using only content you
+  own or have the right to use, and for following the laws where you
+  live and the terms of the platforms you use. PS5Upload manages your
+  own games and backups; it doesn't provide games or help anyone get
+  games they don't own.
+- **Play Rooms, chat and voice.** PS5Upload only provides the tool. Nobody
+  behind it runs, monitors, records or moderates rooms, chat, voice,
+  player names or room names, and it isn't responsible for what users
+  say, share or do. Each user is responsible for their own conduct, and
+  parents and guardians for supervising children. Protect yourself: share
+  no personal details with strangers, keep a room Private or give it a
+  password, mute, hide or block anyone, and leave any room you don't like.
+- **Privacy.** No accounts and no usage data (no telemetry, analytics or
+  tracking). Your games, files, settings and logs stay on your own
+  devices and PS5s. The Play Rooms hub only helps devices connect over the
+  internet: it sees their network addresses and a listed room's card,
+  keeps them in memory only for as long as needed, logs no addresses or
+  names, and never carries chat, voice or video. Details:
+  [DISCLAIMER.md § 9](DISCLAIMER.md#9-privacy) and the
+  [hub's privacy notes](engine/crates/ps5upload-hub/PROTOCOL.md#privacy).
+- **Experimental features** (such as the USB Ethernet adapter) are barely
+  tested and may not work. Use them at your own risk.
+- **Other people's tools and services.** Payloads, cheats, artwork and
+  services the app works with belong to their authors, under their own
+  licences and terms.
+- **Donations are voluntary.** A donation is a gift: it buys nothing,
+  unlocks nothing, creates no obligation and isn't refundable.
+- **Contact.** Legal questions and copyright or takedown requests:
+  phantomptr@gmail.com or a [GitHub issue](https://github.com/phantomptr/ps5upload/issues).
+  Security problems: [SECURITY.md](SECURITY.md).
+
+This section and [DISCLAIMER.md](DISCLAIMER.md) are a plain-language
+summary, not legal advice.
 
 If any of the above is not acceptable to you, do not use this
 software.
@@ -583,6 +621,8 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [ProsperoSunshine](https://github.com/Darkatek7/ProsperoSunshine) (Darkatek7, from ps5-mcp's RemoteEye) — the `/dev/hid` requests that make Play Together's virtual controllers (add, insert, delete, output, and the state block layout), written anew in `payload/src/vpad.c` (GPL-3.0-only, as its source)
 * [tom-ps5-usbnet](https://github.com/wujiezero/tom-ps5-usbnet) (wujiezero) — the user-space driver for USB 2.5G/5G/10G Ethernet adapters (Realtek RTL8156B/8157/8159, after Linux's `r8152`), its lwIP setup and connection joining, adapted file by file into the experimental adapter daemon `payload/usbnet/` (GPL-3.0-or-later; [NOTICE](payload/usbnet/NOTICE.md))
 * [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) (Streetpea and the Chiaki authors) — Remote Play streaming: its session, control, Takion, crypto, FEC, video and audio receiving code, ported to Rust in `engine/crates/ps5upload-core/src/rp_stream/`
+* [Tailscale](https://github.com/tailscale/tailscale) (Tailscale Inc & contributors, BSD-3-Clause) and [wireguard-go](https://git.zx2c4.com/wireguard-go) (WireGuard LLC, MIT) — the tailnet core in `tailnet/` (its Noise IK client, control, netmap, DERP, disco and WireGuard handshake) ports their protocol code to C; no Go code is linked ([tailnet/NOTICE](tailnet/NOTICE))
+* PS5Term (its native app boilerplate is by BlackBearReloaded; GPL-3.0-or-later) — PS5Upload Play's native app boilerplate, toolchain and clean-room libc, its tiled framebuffer and pad structures, and its font, asset and translation tools, adapted in `apps/play/` ([apps/play/NOTICE.md](apps/play/NOTICE.md))
 
 **Libraries:**
 * Desktop client: [Tauri](https://tauri.app/), [React](https://react.dev/), [react-router](https://reactrouter.com/), [Zustand](https://github.com/pmndrs/zustand), [lucide-react](https://lucide.dev/) icons, built with [Vite](https://vitejs.dev/) and [Tailwind CSS](https://tailwindcss.com/)
@@ -590,6 +630,9 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * Remote Play sound on devices with no Opus decoder (older Safari and WebKit): [opus-decoder](https://github.com/eshaz/wasm-audio-decoders/tree/main/src/opus-decoder) (MIT, used unmodified from npm), [libopus](https://opus-codec.org/) (BSD-3-Clause) compiled to WebAssembly, loaded only where it is needed
 * Remote Play upscaling: [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT) — **ported**: its EASU and RCAS shaders rewritten as WebGL 2 GLSL in `client/src/lib/rpPicture.ts`
 * Engine: [tokio](https://tokio.rs/), [axum](https://github.com/tokio-rs/axum), [serde](https://serde.rs/), [anyhow](https://github.com/dtolnay/anyhow), [uuid](https://github.com/uuid-rs/uuid), [zip](https://github.com/zip-rs/zip2), and the other crates in the `Cargo.lock` files
+* PS5Upload Play (`apps/play/`): [Opus](https://opus-codec.org/) (Xiph.Org and contributors, BSD-3-Clause) linked into the app; the [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library) (Project Nayuki, MIT) in `apps/play/third_party/qrcodegen`; [BearSSL](https://www.bearssl.org/) (Thomas Pornin, MIT) for the hub's TLS; [JetBrains Mono](https://www.jetbrains.com/lp/mono/) and Noto Sans (SIL OFL 1.1) baked into its font pictures; [PS5 AT9 Converter](https://github.com/BlackBearRevived/ps5-at9-converter) (GPL-3.0-or-later) run at build time to encode its music, not shipped
+* [lwIP](https://savannah.nongnu.org/projects/lwip/) (Adam Dunkels and contributors, BSD-3-Clause) — the TCP/IP stack of the tailnet core and the experimental USB adapter daemon, the `third_party/lwip` submodule
+* [BearSSL](https://www.bearssl.org/) (Thomas Pornin, MIT) — TLS for the tailnet core, the `third_party/bearssl` submodule
 * [UnRAR](https://www.rarlab.com/) (Alexander Roshal) — `.rar` extraction on **desktop and Docker**, compiled from the source the `unrar_sys` crate bundles into its own program, `ps5upload-unrar`, which holds only ps5upload's own code and UnRAR and which the engine runs over pipes (UnRAR is never linked into the engine); used to *extract only*, never to compress.
 
 **Fetched at runtime:**
@@ -607,6 +650,9 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [NeoEnabler](https://github.com/gasb07/NeoEnabler) (gasb07) — the `/dev/mp1` read requests and table layout behind the Hardware screen's GPU and per-core CPU clocks (`payload/src/mp1_clock.c`); only its reads are used, written anew, and we never change clocks
 * [chiaki](https://git.sr.ht/~thestr4ng3r/chiaki) — cross-checked while porting playactor's registration
 * [TMDB](https://www.themoviedb.org/) — cover art in earlier versions (no longer used)
+* The PS5 [VLC port](https://github.com/ZiZc3/VLC) (GPL-2.0-or-later) — the libSceVideodec2 structure layouts and call order PS5Upload Play's decoder follows
+* [shadPS4](https://github.com/shadps4-emu/shadPS4) (GPL-2.0-or-later), renan-marcel's PS5_PayloadSDK pull request #1 and ThatRetiredDude's TokenStation5 pull request #19 — the libSceAudioIn call signatures behind PS5Upload Play's microphone (no code copied)
+* [ProsperoStore](https://github.com/darkxex/ProsperoStore) (darkxex) — how it installs a homebrew app, which PS5Upload follows so either one can update or remove the other's copy of PS5Upload Play
 
 License texts and the notices these projects require are in [`LICENSES/`](LICENSES/).
 
@@ -647,6 +693,17 @@ v3.0, which GPLv3 §13 allows combining with; see [`LICENSES/AGPL-3.0.txt`](LICE
 
 Included third-party code keeps its own license, next to the code or in [`LICENSES/`](LICENSES/);
 see [Credits](#credits).
+
+**Source code.** Every release's complete source (the apps, the engine and its Docker images,
+the PS5 helper and payloads, PS5Upload Play and the hub) is this repository at the release's
+tag. GitHub's "Source code" downloads leave out the three git submodules; get everything with
+`git clone --recursive --branch <tag> https://github.com/phantomptr/ps5upload`. Files the builds
+fetch (the payload SDK, libopus, the Noto fonts, the AT9 converter) are pinned by commit or
+SHA-256 in the build scripts.
+
+**Trademarks.** PlayStation, PS4 and PS5 are trademarks of Sony Interactive Entertainment Inc.
+Other names belong to their owners. They are used only to say what PS5Upload works with;
+PS5Upload is not affiliated with or endorsed by any of them.
 
 ## Author
 

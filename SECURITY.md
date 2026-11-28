@@ -68,3 +68,11 @@ Reports most in scope:
 Out of scope: an attack that only uses what the defaults above already allow to
 anyone on your LAN, physical access to an unlocked machine, and the security of
 the third-party jailbreak/loader the payload depends on.
+
+## Not a security problem?
+
+Legal questions and copyright or takedown requests: write to phantomptr@gmail.com or open an
+[issue](https://github.com/phantomptr/ps5upload/issues) (keep private details out of public
+issues). See [DISCLAIMER.md](DISCLAIMER.md#13-contact-legal-and-takedown-requests). Abuse in a
+Play Room (chat, voice, names) is handled by the room's host and each player's mute, hide, block
+and leave; nobody behind PS5Upload monitors or moderates rooms.

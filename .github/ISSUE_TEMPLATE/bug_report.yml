@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in PS5Upload isn't working (for Remote Play, Play Together and installs there are forms of their own)
+description: Something in PS5Upload isn't working (for Remote Play, Play Rooms, PS5Upload Play and installs there are forms of their own)
 labels: ["bug"]
 body:
   - type: markdown
@@ -18,6 +18,12 @@ body:
         - Payloads (send, autoload, updates, Payload Manager)
         - Cheats
         - Console page on the PS5 (PS5Upload tile)
+        - Minion queue (copies and installs on the PS5)
+        - Play Room
+        - PS5Upload Play (on the PS5)
+        - Chat & voice
+        - USB network adapter
+        - Save sync
         - Hardware / temperatures / fan / power
         - Tailscale
         - Web UI (browser)

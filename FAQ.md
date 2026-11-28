@@ -4075,6 +4075,12 @@ addresses straight to my wallet, each with a QR code and the one network to send
 who supports it is thanked there by the name they gave on Ko-fi, most support first; amounts are
 never shown. Want your name changed or taken off? Say so on Discord.
 
+**Q: What does a donation get me?**
+Nothing but thanks. Support is voluntary: a donation is a gift that buys nothing, unlocks no
+feature, creates no obligation for either of us and isn't refundable. Every feature is free for
+everyone. Ko-fi and the crypto networks handle the payment under their own terms, and crypto sent
+on the wrong network can't be recovered.
+
 ## Disclaimer
 
 **Use this software entirely at your own risk.** Provided "as is",
@@ -4095,5 +4101,61 @@ without warranty of any kind.
 - No support guaranteed — free volunteer-built tool.
 
 If those terms aren't acceptable, do not use this software.
+
+The full terms are in [DISCLAIMER.md](DISCLAIMER.md). They are a plain-language summary, not
+legal advice.
+
+**Q: Is PS5Upload made or approved by Sony?**
+No. PS5Upload is an unofficial, independent project. It is not affiliated with, endorsed by or
+sponsored by Sony Interactive Entertainment. PlayStation and PS5 are Sony's trademarks, named only
+to say what PS5Upload works with.
+
+**Q: Can I lose data, damage my console or get banned?**
+Yes, it can happen, and it's your risk. PS5Upload comes with no warranty, and the people who make
+it aren't liable for lost data, damage to a console or any other device, a banned or restricted
+account or console, or anything else a platform does. Back up what you can't afford to lose.
+
+**Q: Can I use it to download or share games?**
+No. PS5Upload manages your own games, saves and backups. It doesn't provide games, link to them or
+help anyone get games they don't own, and Share with a friend never sends retail games. Use only
+content you own or have the right to use, and follow the laws where you live.
+
+**Q: What does PS5Upload know about me? (Privacy)**
+Nothing it sends anywhere. There are no accounts and no usage data (no telemetry, analytics or
+tracking). Your games, files, settings and logs stay on your own devices and PS5s, and a bug
+report goes only where you post it. To connect people over the internet (internet invites,
+PS5Upload Play's waiting room, the Rooms list), the Play Rooms hub sees each device's network
+address and what a listed room shows (its name, the host's name, the game, the player count and
+its settings). It keeps them in memory only while they're needed (a room's card until it closes,
+12 hours at most), writes nothing to disk, logs no addresses or names, and never carries chat,
+voice or video. Services you choose to use (GitHub for updates and payloads, Tailscale, artwork
+and cheat sources, streaming sites, Ko-fi) follow their own privacy terms. Details:
+[DISCLAIMER.md](DISCLAIMER.md) § 9.
+
+**Q: Who is responsible for what happens in a Play Room?**
+The people in it. PS5Upload only provides the tool: nobody behind it runs, monitors, records or
+moderates rooms, chat, voice, player names or room names. Each person is responsible for what they
+say and do, and parents and guardians for supervising children. To protect yourself: don't share
+personal details with people you don't know, keep your room Private or give it a password, mute,
+hide or block anyone who bothers you, and leave any room you don't like. A host can remove and
+block people and turn chat and voice off. Report threats or illegal content to the police where
+you live.
+
+**Q: What does "Experimental" mean?**
+A feature marked Experimental (such as the PS5's USB Ethernet adapter) is new and has been tried
+on little or no hardware. It may not work. Use it at your own risk, and turn it off if it
+misbehaves.
+
+**Q: Where are the licenses and the source code?**
+PS5Upload is free software under the GPL v3. The README's Credits section, the `LICENSES/` folder
+and the notice files list the open-source work it builds on, each under its own license. Every
+release's full source is the repository at that release's tag (clone with `--recursive` to get the
+submodules too).
+
+**Q: How do I send a legal question or a takedown request?**
+Write to phantomptr@gmail.com or open an issue on
+[GitHub](https://github.com/phantomptr/ps5upload/issues) (keep private details out of public
+issues). Say what the material is, where it is and why. Security problems go through
+[SECURITY.md](SECURITY.md).
 
 ---

@@ -501,5 +501,16 @@
   "chat_too_long": "Cette ligne est trop longue (140 caractères au maximum).",
   "voice_ptt_only": "Appuyer pour parler uniquement dans cette salle : maintenez Create.",
   "home_host_auto": "Héberger depuis cette PS5 avec PS5Upload sur %s",
-  "pair_grant_failed": "L'association via l'assistant n'a pas marché. Affichez plutôt un code."
+  "pair_grant_failed": "L'association via l'assistant n'a pas marché. Affichez plutôt un code.",
+  "about_terms": "Non affilié à Sony Interactive Entertainment et non approuvé par Sony Interactive Entertainment. Gratuit, sans garantie : utilisez-le à vos risques et périls. Conditions et confidentialité : Règles & responsabilité, puis △.",
+  "notice_safety": "Restez prudent : ne partagez pas d'informations personnelles, de mots de passe ou d'informations de compte avec des inconnus, et quittez toute salle où vous êtes mal à l'aise. Le chat et la voix ne circulent qu'entre les personnes de la salle et ne sont pas enregistrés.",
+  "terms_hint": "Conditions & confidentialité",
+  "terms_title": "Conditions & confidentialité",
+  "terms_1": "PS5Upload Play est gratuit, non officiel, et n'est ni affilié à Sony Interactive Entertainment ni approuvé par celle-ci ; PlayStation et PS5 sont ses marques, citées uniquement pour indiquer avec quoi l'app fonctionne. Il est fourni sans garantie. Vous l'utilisez à vos risques et périls : ses créateurs ne sont pas responsables des pertes de données, des dommages à une console, des bannissements ou d'autres mesures contre vos comptes.",
+  "terms_2": "Vous êtes responsable de ce que vous en faites : ne jouez qu'à des jeux qui vous appartiennent ou qui appartiennent à vos amis, et respectez les lois de votre pays et les conditions des plateformes que vous utilisez. PS5Upload Play ne fournit pas de jeux.",
+  "terms_3": "Confidentialité : l'app garde ses paramètres, ses appairages et son journal sur cette PS5 et n'envoie aucune donnée d'utilisation. Pour trouver des parties sur Internet, elle utilise le hub PS5Upload, qui voit l'adresse réseau de cette PS5 et ce qu'affiche une salle répertoriée, ne les garde en mémoire que le temps nécessaire et ne transmet jamais le chat, la voix ou la vidéo.",
+  "terms_4": "Le soutien est volontaire : un don est un cadeau qui n'achète rien, ne débloque rien et n'est pas remboursable.",
+  "terms_5": "Conditions complètes : github.com/phantomptr/ps5upload (DISCLAIMER.md). Questions juridiques ou demandes de retrait : phantomptr@gmail.com.",
+  "thanks_voluntary": "Le soutien est volontaire : un cadeau qui n'achète rien et n'est pas remboursable.",
+  "wel_terms": "Gratuit, non officiel et non affilié à Sony ; sans garantie, à utiliser à vos risques et périls. Les conditions sont dans Paramètres › Règles & responsabilité."
 }

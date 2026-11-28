@@ -49,6 +49,7 @@ class App
         help,     // the controls
         confirm,  // an ending or loosening action, said in words first
         menu,     // the host's player menu / blocked list
+        terms,    // terms and privacy (from the notice's △)
     };
 
     App(const char *version, ui::Image bg, ui::Image logo) noexcept;
@@ -191,6 +192,7 @@ class App
     void input_thanks(std::uint32_t p) noexcept;
     void input_welcome(std::uint32_t p) noexcept;
     void input_help(std::uint32_t p) noexcept;
+    void input_terms(std::uint32_t p) noexcept;
     void input_confirm(std::uint32_t p) noexcept;
     void input_menu(std::uint32_t p) noexcept;
     void draw_rooms(ui::Canvas &c) noexcept;
@@ -203,6 +205,7 @@ class App
     void draw_thanks(ui::Canvas &c) noexcept;
     void draw_welcome(ui::Canvas &c) noexcept;
     void draw_help(ui::Canvas &c) noexcept;
+    void draw_terms(ui::Canvas &c) noexcept;
     void draw_confirm(ui::Canvas &c) noexcept;
     void draw_menu(ui::Canvas &c) noexcept;
     // 4 bars for a tier (4 Excellent ... 1 Poor, 0 none); hollow = an estimate. Returns the width.

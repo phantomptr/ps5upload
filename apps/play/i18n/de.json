@@ -501,5 +501,16 @@
   "chat_too_long": "Die Zeile ist zu lang (höchstens 140 Zeichen).",
   "voice_ptt_only": "In diesem Raum nur Push-to-Talk: Create halten.",
   "home_host_auto": "Von dieser PS5 aus hosten mit PS5Upload auf %s",
-  "pair_grant_failed": "Kopplung über den Helfer hat nicht geklappt. Zeig stattdessen einen Code."
+  "pair_grant_failed": "Kopplung über den Helfer hat nicht geklappt. Zeig stattdessen einen Code.",
+  "about_terms": "Nicht mit Sony Interactive Entertainment verbunden und nicht von Sony Interactive Entertainment unterstützt. Kostenlos, ohne Gewährleistung: Nutzung auf eigene Gefahr. Bedingungen und Datenschutz: Regeln & Verantwortung, dann △.",
+  "notice_safety": "Pass auf dich auf: Teile keine persönlichen Daten, Passwörter oder Kontoinformationen mit Leuten, die du nicht kennst, und verlass jeden Raum, in dem du dich unwohl fühlst. Chat und Sprache gehen nur zwischen den Leuten im Raum hin und her und werden nicht gespeichert.",
+  "terms_hint": "Bedingungen & Datenschutz",
+  "terms_title": "Bedingungen & Datenschutz",
+  "terms_1": "PS5Upload Play ist kostenlos, inoffiziell und weder mit Sony Interactive Entertainment verbunden noch von Sony Interactive Entertainment unterstützt; PlayStation und PS5 sind Marken von Sony Interactive Entertainment und werden nur genannt, um zu sagen, womit die App funktioniert. Es gibt keine Gewährleistung. Die Nutzung erfolgt auf eigene Gefahr: Die Macher haften nicht für verlorene Daten, Schäden an einer Konsole, Sperren oder andere Maßnahmen gegen deine Konten.",
+  "terms_2": "Du bist verantwortlich für das, was du damit machst: Spiel nur Spiele, die dir oder deinen Freunden gehören, und halte dich an die Gesetze deines Landes und die Bedingungen der Plattformen, die du nutzt. PS5Upload Play stellt keine Spiele bereit.",
+  "terms_3": "Datenschutz: Die App speichert ihre Einstellungen, Kopplungen und ihr Protokoll auf dieser PS5 und sendet keine Nutzungsdaten. Um Spiele über das Internet zu finden, nutzt sie den PS5Upload-Hub. Er sieht die Netzwerkadresse dieser PS5 und das, was ein gelisteter Raum anzeigt, hält beides nur so lange im Speicher, wie es gebraucht wird, und überträgt nie Chat, Sprache oder Video.",
+  "terms_4": "Unterstützung ist freiwillig: Eine Spende ist ein Geschenk, das nichts kauft, nichts freischaltet und nicht erstattet wird.",
+  "terms_5": "Vollständige Bedingungen: github.com/phantomptr/ps5upload (DISCLAIMER.md). Rechtliche Fragen oder Löschanfragen: phantomptr@gmail.com.",
+  "thanks_voluntary": "Unterstützung ist freiwillig: ein Geschenk, das nichts kauft und nicht erstattet wird.",
+  "wel_terms": "Kostenlos, inoffiziell und nicht mit Sony verbunden; keine Gewährleistung, Nutzung auf eigene Gefahr. Die Bedingungen stehen unter Einstellungen › Regeln & Verantwortung."
 }

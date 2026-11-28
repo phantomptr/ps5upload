@@ -1,6 +1,8 @@
 # ps5u-usbnet: third-party code and credits
 
-ps5u-usbnet is part of PS5Upload (GPL-3.0, see ../../LICENSE). It builds on:
+ps5u-usbnet is part of PS5Upload (GPL-3.0, see ../../LICENSE). It is **experimental**: tried on
+little or no real hardware, with no warranty, used at your own risk (see ../../DISCLAIMER.md).
+It builds on:
 
 ## tom-ps5-usbnet — GPL-3.0-or-later
 

@@ -203,6 +203,7 @@ namespace play::ui
     X(about_music, "Music: an original piece made for PS5Upload Play.")                                         \
     X(about_credits, "Uses the JetBrains Mono and Noto Sans fonts (SIL OFL 1.1), Opus (BSD), BearSSL (MIT) and the QR Code generator library by Project Nayuki (MIT).") \
     X(about_license, "PS5Upload Play is free software under the GNU GPL v3.") \
+    X(about_terms, "Not affiliated with or endorsed by Sony Interactive Entertainment. Free, with no warranty: use it at your own risk. Terms and privacy: Rules & responsibility, then △.") \
     X(flag_sent, "%s: the host was told") \
     X(hint_flag, "Tell the host") \
     X(chat_too_long, "That line is too long (140 characters at most).") \
@@ -474,11 +475,20 @@ namespace play::ui
     X(notice_title, "Play Rooms: you're responsible for what you say and do") \
     X(notice_body, "PS5Upload only gives you the tool to play together. We don't run, watch, record or moderate rooms, chat or voice, and we aren't responsible for what anyone says, shares or does in them, including names and room names. You're responsible for your own conduct and for following the law and the rules of the platforms and games you use. Only play with people you trust; you can mute, hide, remove or block anyone.") \
     X(notice_parents, "Parents: please supervise children who use Play Rooms.") \
+    X(notice_safety, "Stay safe: don't share personal details, passwords or account information with people you don't know, and leave any room that makes you uncomfortable. Chat and voice go only between the people in the room and aren't saved.") \
+    X(terms_hint, "Terms & privacy") \
+    X(terms_title, "Terms & privacy") \
+    X(terms_1, "PS5Upload Play is free, unofficial and not affiliated with or endorsed by Sony Interactive Entertainment; PlayStation and PS5 are its trademarks, named only to say what the app works with. It comes with no warranty. You use it at your own risk: its makers aren't liable for lost data, damage to a console, bans or other action on your accounts.") \
+    X(terms_2, "You're responsible for what you do with it: play only games you or your friends own, and follow the laws where you live and the terms of the platforms you use. PS5Upload Play doesn't provide games.") \
+    X(terms_3, "Privacy: the app keeps its settings, pairings and log on this PS5 and sends no usage data. To find games over the internet it uses the PS5Upload hub, which sees this PS5's network address and what a listed room shows, keeps them in memory only while they're needed, and never carries chat, voice or video.") \
+    X(terms_4, "Support is voluntary: a donation is a gift that buys nothing, unlocks nothing and isn't refundable.") \
+    X(terms_5, "Full terms: github.com/phantomptr/ps5upload (DISCLAIMER.md). Legal questions or takedown requests: phantomptr@gmail.com.") \
     X(notice_accept, "I understand") \
     X(notice_later, "Not now") \
     X(thanks_title, "Thank you") \
     X(thanks_count, "%d supporters, and %d more who stayed anonymous") \
     X(thanks_text, "PS5Upload is free. These people help keep it going.") \
+    X(thanks_voluntary, "Support is voluntary: a gift that buys nothing and isn't refundable.") \
     X(thanks_kofi, "Support on Ko-fi") \
     X(thanks_more, "More ways to support") \
     X(thanks_scan, "Scan with your phone.") \
@@ -486,6 +496,7 @@ namespace play::ui
     X(wel_2, "Or host: on your own PS5, see who wants to join and share your invite from the couch.") \
     X(wel_3, "What you need: your friend has PS5Upload open with a Play Room, and you're on the same network, on Tailscale, or have their invite on your phone.") \
     X(wel_got_it, "Got it") \
+    X(wel_terms, "Free, unofficial and not affiliated with Sony; no warranty, use it at your own risk. Settings › Rules & responsibility has the terms.") \
     X(help_title, "Controls") \
     X(help_move, "D-pad or left stick: move. ✕ choose, ○ back, △ help, OPTIONS settings.") \
     X(help_tabs, "L1 / R1: tabs and sorts.") \

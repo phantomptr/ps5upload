@@ -24,6 +24,10 @@ import { TailscaleSection } from "./Tailscale";
 import { UsbNetSection } from "./UsbNet";
 import { DevicesSection } from "./Devices";
 
+/** Where legal questions and takedown requests go (DISCLAIMER.md § 13). */
+const LEGAL_EMAIL = "phantomptr@gmail.com";
+const ISSUES_URL = "github.com/phantomptr/ps5upload/issues";
+
 /** /api/settings (payload/src/webui_api.c send_settings). */
 export interface WebSettings {
   lan: boolean;
@@ -516,6 +520,19 @@ export function SettingsView(p: SettingsViewProps) {
           ) : null}
         </div>
         <p className="cw-dim cw-setting-note">{t("cw_about_disclaimer")}</p>
+        {/* 13.0.0 legal audit: the same words as DISCLAIMER.md in short. */}
+        <p className="cw-dim cw-setting-note" data-about="risk">
+          {t("cw_about_risk")}
+        </p>
+        <p className="cw-dim cw-setting-note" data-about="responsibility">
+          {t("cw_about_responsibility")}
+        </p>
+        <p className="cw-dim cw-setting-note" data-about="privacy">
+          {t("cw_about_privacy")}
+        </p>
+        <p className="cw-dim cw-setting-note" data-about="contact">
+          {t("cw_about_contact", { email: LEGAL_EMAIL, url: ISSUES_URL })}
+        </p>
       </section>
 
       {p.askLan ? (

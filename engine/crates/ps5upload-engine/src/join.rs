@@ -2461,6 +2461,15 @@ impl Party {
             // How many players have a profile chosen (never which), and the companion's state.
             "seat_profiles": seat_profiles(&self.console).len(),
             "companion": self.companion,
+            // The Play Room: states and counts, never its name, game, invites or blocked people.
+            "room": {
+                "locked": self.room.locked,
+                "open_s": now.duration_since(self.room.opened_at).as_secs(),
+                "listed": self.room.listed.json(),
+                "game_set": self.room.game.is_some(),
+                "blocked": self.room.blocked.len(),
+                "ready_check": self.room.ready.as_ref().is_some_and(|r| r.live(now)),
+            },
         })
     }
 }
@@ -2490,6 +2499,9 @@ pub(crate) fn diag_summary() -> serde_json::Value {
         "comms": crate::join_comms::diag(),
         // Recent players: the count only, never a name.
         "history": crate::join_history::diag(),
+        // Blocked for every room: the count only; and whether wrong passwords locked anyone out.
+        "blocked_always": crate::join_room::blocked_always_list().len(),
+        "pw_lockout_warned": crate::join_room::many_wrong_passwords(),
     })
 }
 
