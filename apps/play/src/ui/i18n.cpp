@@ -162,6 +162,11 @@ void use_english() noexcept
     drop(lang);
 }
 
+std::uint32_t strings() noexcept
+{
+    return lang.index ? lang.strings : 0;
+}
+
 bool load_names(const std::uint8_t *data, std::size_t len) noexcept
 {
     return open(names, data, len);

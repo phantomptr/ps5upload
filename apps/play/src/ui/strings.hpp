@@ -30,7 +30,7 @@ namespace play::ui
     X(hint_phone, "Phone code")                                                                                 \
     X(inv_got, "%s sent you an invite.")                                                                        \
     X(inv_unreachable, "This PS5 can't reach %s's game. It needs to be on this network or on Tailscale.")       \
-    X(inv_bridge_need, "To play %s's game over the internet, this PS5 needs PS5Upload 13.0.0 or later open on a computer on your home network, with \"PS5Upload Play can find this computer\" on in PS5Upload › Settings › App › Play Together.") \
+    X(inv_bridge_need, "To play %s's game over the internet, this PS5 needs PS5Upload 13.0.0 or later open on a computer on your home network, with \"PS5Upload Play can find this computer\" on in PS5Upload › Settings › App › Play Room.") \
     X(why_friend, "Your friend's PS5Upload doesn't remember this PS5 any more. Join once with a code, then Play again works.") \
     X(hint_choose, "Choose")                                                                                    \
     X(hint_back, "Back")                                                                                        \
@@ -49,7 +49,7 @@ namespace play::ui
     X(pick_title_guest, "Which computer is your friend's game on?")                                             \
     X(pick_title_host, "Which computer runs PS5Upload for this PS5?")                                           \
     X(pick_looking, "Looking for PS5Upload on this network…")                                                   \
-    X(pick_none, "No PS5Upload found yet. Make sure PS5Upload is open on the computer, and that \"PS5Upload Play can find this computer\" is on in PS5Upload › Settings › App › Play Together. You can also type its address.") \
+    X(pick_none, "No PS5Upload found yet. Make sure PS5Upload is open on the computer, and that \"PS5Upload Play can find this computer\" is on in PS5Upload › Settings › App › Play Room. You can also type its address.") \
     X(pick_found, "On this network")                                                                            \
     X(pick_used, "Used before")                                                                                 \
     X(pick_tailnet, "Over Tailscale")                                                                           \
@@ -58,14 +58,14 @@ namespace play::ui
     X(pick_type_sub, "The address PS5Upload shows, like 192.168.1.20:19113")                                    \
     X(way_title, "Join a game on %s")                                                                           \
     X(way_code, "Enter a code")                                                                                 \
-    X(way_code_sub, "Your friend reads it out from PS5Upload › Play › Play Together")                                  \
+    X(way_code_sub, "Your friend reads it out from PS5Upload › Play › Play Room")                                  \
     X(way_nearby, "Ask to join without a code")                                                                 \
-    X(way_nearby_sub, "Works when one Play Together is open on that computer")                                  \
+    X(way_nearby_sub, "Works when a Play Room is open on that computer")                                  \
     X(code_title, "Enter your friend's code")                                                                   \
-    X(code_help, "Six letters and numbers, like KMX-4R7. Your friend sees it in PS5Upload › Play › Play Together.")    \
+    X(code_help, "Six letters and numbers, like KMX-4R7. Your friend sees it in PS5Upload › Play › Play Room.")    \
     X(code_join, "Join")                                                                                        \
     X(addr_title, "Type the computer's address")                                                                \
-    X(addr_help, "PS5Upload shows it on its Play Together screen. Add :port if it is not 19113.")               \
+    X(addr_help, "PS5Upload shows it on its Play Room screen. Add :port if it is not 19113.")               \
     X(addr_bad, "That doesn't look like an address. Use numbers and dots, like 192.168.1.20.")                  \
     X(addr_ok, "Use this address")                                                                              \
     X(st_connecting, "Connecting to %s…")                                                                       \
@@ -93,7 +93,7 @@ namespace play::ui
     X(why_full, "The game is full right now.")                                                                  \
     X(why_denied, "Your friend said no this time.")                                                             \
     X(why_no_answer, "Your friend didn't answer in time.")                                                      \
-    X(why_closed, "Play Together isn't open on that computer right now.")                                       \
+    X(why_closed, "Your friend isn't hosting a Play Room right now.")                                       \
     X(why_not_playing, "Your friend isn't playing right now. They start Remote Play in PS5Upload first.")       \
     X(why_old_helper, "Your friend's PS5 needs a newer PS5Upload helper. They can update it in PS5Upload.")     \
     X(why_unreachable_ps5, "PS5Upload couldn't reach your friend's PS5.")                                       \
@@ -107,13 +107,13 @@ namespace play::ui
     X(fail_closed, "PS5Upload closed the connection.")                                                          \
     X(fail_bridge_old, "PS5Upload at %s is too old to play over the internet. Update it to 13.0.0 or later.")   \
     X(fail_bridge_reach, "Couldn't reach PS5Upload at %s to play over the internet. Is it open on that computer?") \
-    X(fail_bridge_hub, "Your PS5Upload couldn't reach the Play Together server. Check that computer's internet connection.") \
+    X(fail_bridge_hub, "Your PS5Upload couldn't reach the invite service. Check that computer's internet connection.") \
     X(fail_bridge_room, "Your friend's internet invite isn't open any more. Ask them for a new one.")           \
     X(fail_bridge_direct, "Your network and your friend's couldn't connect over the internet. Try again, or play over Tailscale.") \
     X(fail_bridge_other, "Your PS5Upload couldn't open the internet invite (%s).")                              \
     X(end_left, "You left the game.")                                                                           \
     X(end_kicked, "Your friend took you out of the game.")                                                      \
-    X(end_closed, "Your friend closed Play Together.")                                                          \
+    X(end_closed, "Your friend closed the room.")                                                          \
     X(end_replaced, "You joined from somewhere else, so this one stopped.")                                     \
     X(end_host_stopped, "Your friend stopped playing.")                                                         \
     X(end_lost, "The connection to your friend's game was lost.")                                               \
@@ -131,9 +131,9 @@ namespace play::ui
     X(play_took_host, "Your friend's stream ended: the user picked on the TV may have been theirs.")           \
     X(host_connecting, "Connecting to PS5Upload…")                                                              \
     X(host_pair_title, "Pair this PS5 with PS5Upload")                                                          \
-    X(host_pair_text, "PS5Upload Play needs your OK once before it can show and change Play Together from here.") \
+    X(host_pair_text, "PS5Upload Play needs your OK once before it can show and change your Play Room from here.") \
     X(host_pair_button, "Show a pairing code")                                                                  \
-    X(host_pair_code_text, "On your computer, open Play › Play Together in PS5Upload, find the PS5Upload Play card, choose Pair and type this code.") \
+    X(host_pair_code_text, "On your computer, PS5Upload shows this code in Play › Play Room: choose Yes, pair there, or type the code.") \
     X(host_pair_left, "The code works for %d:%02d more.")                                                       \
     X(host_pair_gone, "The code ran out. Show a new one.")                                                      \
     X(host_auth_dropped, "PS5Upload no longer knows this PS5's pairing. Pair again.")                           \
@@ -159,16 +159,16 @@ namespace play::ui
     X(host_rp_pin_text, "Type it in PS5Upload › Play › Set up Play. %d:%02d left.")                             \
     X(host_rp_pin_paired, "Paired: PS5Upload can start Remote Play with this PS5 now.")                         \
     X(host_rp_pin_failed, "That PIN didn't work (%s). Show a new one.")                                         \
-    X(host_together, "Play Together")                                                                           \
-    X(host_together_closed, "Play Together is closed.")                                                         \
-    X(host_together_open, "Open Play Together")                                                                 \
+    X(host_together, "Play Room")                                                                           \
+    X(host_together_closed, "Your Play Room is closed.")                                                         \
+    X(host_together_open, "Open a Play Room")                                                                 \
     X(host_together_wait, "Friends can join once you play. Start Remote Play in PS5Upload › Play.")             \
     X(host_code, "Invite code")                                                                                 \
     X(host_code_left, "Works for %d more minutes")                                                              \
     X(host_works_anywhere, "Scan to join from anywhere")                                                        \
     X(host_works_wifi, "Scan to join on this Wi-Fi")                                                            \
     X(host_new_code, "New invite code")                                                                         \
-    X(host_close, "Close Play Together")                                                                        \
+    X(host_close, "Close the Play Room")                                                                        \
     X(host_asks, "%s wants to play")                                                                            \
     X(host_asks_ps5, "%s wants to play (on a PS5)")                                                             \
     X(host_friend, "A friend")                                                                                  \

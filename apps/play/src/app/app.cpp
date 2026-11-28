@@ -180,9 +180,11 @@ void App::apply_language() noexcept
     char path[48];
     std::snprintf(path, sizeof path, "i18n/%s.bin", ui::i18n::code(lang));
     const std::uint8_t *d = platform::asset(path, &len);
-    if (!d || !ui::i18n::load(d, len))
+    // A file made for other strings is not used: the ids would shift and a translation would get
+    // another string's %s or %d.
+    if (!d || !ui::i18n::load(d, len) || ui::i18n::strings() != static_cast<std::uint32_t>(ui::S::count_))
     {
-        log("i18n: %s unreadable: English", path);
+        log("i18n: %s unreadable or made for other strings: English", path);
         ui::i18n::use_english();
         language_ = 0;
         return;

@@ -435,7 +435,7 @@ void test_i18n()
         u16(2), u16(1), u16(1), u16(0), u32(0), u32(1); // a 2x1 run, one byte of pixels
     std::memcpy(f + o, text, sizeof text - 1), o += sizeof text - 1;
     f[o++] = 0xF1; // level 15, 2 pixels
-    CHECK(i18n::load(f, o));
+    CHECK(i18n::load(f, o) && i18n::strings() == 2); // the app refuses a file of another count
     CHECK(!std::strcmp(tr(S::app_name), text) && i18n::right_to_left());
     CHECK(!std::strcmp(tr(S::tagline), "Play together with friends, from the couch."));
     int table = -1, id = -1;
@@ -444,7 +444,7 @@ void test_i18n()
     i18n::Run r;
     CHECK(i18n::run(0, 0, 1, r) && r.w == 2 && r.h == 1 && r.len == 1 && r.rle[0] == 0xF1);
     CHECK(!i18n::run(0, 1, 1, r) && !i18n::run(0, 0, 3, r));
-    CHECK(!i18n::load(f, 10)); // cut short: English
+    CHECK(!i18n::load(f, 10) && i18n::strings() == 0); // cut short: English
     CHECK(!std::strcmp(tr(S::app_name), "PS5Upload Play"));
     i18n::use_english();
     CHECK(i18n::find("pt-BR") > 0 && i18n::find("xx") < 0 && i18n::count() == 21);

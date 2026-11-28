@@ -17,6 +17,8 @@ int from_system_id(int id) noexcept;
 // Uses a language file (the bytes must stay alive); false (English) when it can't be read.
 bool load(const std::uint8_t *data, std::size_t len) noexcept;
 void use_english() noexcept;
+// How many strings the loaded language file has (0: English).
+std::uint32_t strings() noexcept;
 bool load_names(const std::uint8_t *data, std::size_t len) noexcept;
 bool right_to_left() noexcept;
 

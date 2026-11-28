@@ -17,10 +17,12 @@ import {
 const REFRESH_MS = 5000;
 
 /**
- * Play › Play Together › PS5Upload Play: type the code the app shows on the TV, and see (and
- * unpair) the PS5s paired. Hidden on an engine from before PS5Upload Play.
+ * Play › Play Room › PS5Upload Play: compare the code the app shows on the TV and pair with one
+ * click (or type it), confirm a paired PS5 at a new address, and see (and unpair) the PS5s
+ * paired. Hidden on an engine from before PS5Upload Play. `onlyWhenAsked`: inside an open room,
+ * shown only while something waits for an answer.
  */
-export function PlayAppPairing() {
+export function PlayAppPairing({ onlyWhenAsked = false }: { onlyWhenAsked?: boolean } = {}) {
   const tr = useTr();
   const [state, setState] = useState<PairingState | null>(null);
   const [code, setCode] = useState("");
@@ -46,6 +48,8 @@ export function PlayAppPairing() {
   }, []);
 
   if (!state) return null;
+  // Inside an open room: only while a TV shows a code or a paired PS5 moved (and the answer).
+  if (onlyWhenAsked && !state.waiting.length && !state.moves.length && !note) return null;
 
   const confirm = async (console: string) => {
     setBusy(true);

@@ -37,6 +37,7 @@ import { RoomChatBox, type ChatBoxLine } from "../../components/RoomChatBox";
 import { peopleIn, roomApi } from "../../lib/room/room";
 import { useLangStore } from "../../state/lang";
 import { PlayerMenu } from "./PlayRoom/PlayerMenu";
+import { PlayAppPairing } from "./PlayAppPairing";
 import { RoomHeader } from "./PlayRoom/RoomHeader";
 import { HostVoice } from "./PlayRoom/HostVoice";
 import { useRoomNotice } from "./PlayRoom/RoomNotice";
@@ -574,6 +575,9 @@ export function PlayTogetherPanel({
           <X size={16} />
         </button>
       </div>
+      {/* PS5Upload Play on the TV asking to pair (or a paired PS5 at a new address): answered
+          here too while the room is open, not only before it starts. */}
+      <PlayAppPairing onlyWhenAsked />
       {state.open && friendsIn(state).length === 0 && (
         <p className="text-sm text-[var(--color-muted)]" data-testid="room-empty">
           {tr(

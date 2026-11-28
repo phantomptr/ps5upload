@@ -1240,7 +1240,8 @@ void App::draw_thanks(Canvas &c) noexcept
     c.circle(hx + 34, hy, 22, col::bad);
     for (int i = 0; i < 39; ++i)
         c.fill(hx - 22 + i, hy + 6 + i, 78 - 2 * i, 1, col::bad);
-    c.text(Font::big, kLeft + 110, 90, tr(S::thanks_title), col::text);
+    // the title size: the big sizes carry only ASCII, and translations need the text sizes
+    c.text(Font::title, kLeft + 110, 108, tr(S::thanks_title), col::text, 1100);
     char b[200];
     std::snprintf(b, sizeof b, tr(S::thanks_count), n_names_, n_anonymous_);
     c.text(Font::body, kLeft, 210, b, col::muted, 1100);
