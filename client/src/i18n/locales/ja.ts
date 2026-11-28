@@ -1875,8 +1875,7 @@ err_install_1401:
   "PS5 の ShellUI インストールパスがリクエストを拒否しました（0x80B21401）。FW 9.60 で、ファームウェアポイントに依存先の BGFT レジスタが欠けている場合、別の tier の失敗と併発することが多いです。Connection → Send payload から最新のペイロードをお試しになるか、PS5 本体の Debug Settings パネル経由でインストールしてください。",
 err_install_2101:
   "同じコンテンツの以前のダウンロードがまだ PS5 でキューに残っています。PS5 の通知パネルを開いて消去してから、インストールを再試行してください。",
-err_install_80b2_generic:
-  "PS5 の PlayGo サブシステムが 0x80B2_xxxx エラーでインストールを拒否しました。これは pkg のパーサーではなくインストールの取得パスの問題です — ファイル自体はおそらく正常です。最新のヘルパーを送ってください（バナーの「ヘルパーを送る」、または「接続」画面から）。そのインストールパスは、最も一般的な 0x80B2 拒否を回避します。",
+err_install_80b2_generic_v2: "PS5 がこのパッケージのインストールを拒否しました（エラー 0x80B2…）。ファイル自体はたいてい問題ありません。最新のヘルパーを PS5 に送って（バナーの「ヘルパーを送る」、または「接続」画面から）もう一度お試しください。このエラーの最もよくある原因を回避できます。",
 err_bgft_not_loadable:
   "お使いの PS5 ファームウェアは、ps5upload が利用できる形で Sony の BGFT インストーラーを公開していません。PS5 で最新のヘルパーが動いていることを確認してから（バナーの「ヘルパーを送る」、または「接続」画面からもう一度送信）、再試行してください。それでも失敗する場合、このファームウェアではその方法で .pkg をインストールできません。PS5 本体でインストールするか（設定 → システム → デバッグ設定 → ゲーム → Package Installer）、ゲームフォルダーやディスクイメージなら「ゲーム」のそのゲームのページで「ホーム画面に追加」を使ってください。",
 err_install_enoent_dlc:
@@ -6179,6 +6178,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_tour3_fullscreen": "最初にボタンを押すと、ページがテレビ全体に表示されます。全画面は設定でオフにできます。",
 "cw_settings_using": "コントローラーとヒント",
 "cw_settings_start": "起動時のページ",
+"cw_settings_start_note": "PS5 に保存されます。チートを選ぶと、PS5Upload Minion は実行中のゲームのチートを開きます。",
 "cw_settings_tz": "タイムゾーン",
 "cw_settings_tz_auto": "自動",
 "cw_settings_tz_offset": "UTCとの時差",
@@ -6187,7 +6187,6 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_settings_tz_note_auto": "PS5 のブラウザーの時刻は本体のタイムゾーンに従います: {zone}、現在 {now}。違っている場合は「UTCとの時差」を選んでください。",
 "cw_settings_tz_note_unknown": "PS5 がタイムゾーンを返さなかったため、ブラウザーの時刻は UTC で表示されます。「UTCとの時差」を選んで設定してください。",
 "cw_settings_tz_note_offset": "PS5 のブラウザーの時刻は {zone} を使います（現在 {now}）。スマートフォンや PC は自分の時計を使います。",
-"cw_settings_start_note": "PS5 に保存されます。チートを選ぶと、PS5Upload Minion は実行中のゲームのチートを開きます。",
 "cw_settings_controls": "操作方法",
 "cw_settings_controls_note": "ここでの各ボタンの役割。ボタンを押して試せます。",
 "cw_settings_tips": "ヒントをもう一度表示",
@@ -8210,8 +8209,8 @@ helper_copies_failed_body: "古いヘルパーのままです: {list}。PS5 は�
 "join_block_note": "{host}さんがフレンドのPSボタンとCreateボタンを無効にしています。",
 "join_guide_title": "テレビであと1ステップ",
 "join_guide_body": "コントローラーのPSボタンを1回押してください。テレビに「このコントローラーを使うのは誰ですか？」と表示されます。クイックプレイか自分のユーザーを選んでください。ホストの操作は不要です。",
-"join_guide_stuck": "その画面で何も動きませんか？ホストに PS5Upload からバグレポートを送ってもらってください。ホストの PS5 があなたのコントローラーを受け付けているかが分かります。",
 "join_guide_menus": "PS5のホーム画面でメニューを操作できるのはホストだけです。あなたのコントローラーはゲームの中で使えます。",
+"join_guide_stuck": "その画面で何も動きませんか？ホストに PS5Upload からバグレポートを送ってもらってください。ホストの PS5 があなたのコントローラーを受け付けているかが分かります。",
 "join_guide_ok": "OK",
 "join_reconnecting": "再接続中…",
 "join_reconnecting_left": "あと{time}は枠が確保されています。",

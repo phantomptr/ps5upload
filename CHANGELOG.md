@@ -12,6 +12,9 @@ What's new in ps5upload, written for humans.
 **Play Together**
 - **When a friend's controller does nothing on "Who's using this controller?"** (reported on an early-firmware PS5), the helper log now says whether the PS5 took or refused that controller's input, so a bug report from the host shows where it stops. The friend's guide says to ask the host for one.
 
+**Installs**
+- The message for a 0x80B2 install error is in plain words now, in every language.
+
 ## 12.6.44
 
 **TV mode (#976)**

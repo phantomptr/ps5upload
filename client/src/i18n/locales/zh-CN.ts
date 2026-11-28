@@ -1837,7 +1837,7 @@ err_install_116f_npxs: "PS5 安装器拒绝了此系统 pkg（0x80B2116F）。So
 err_install_116f_game: "Sony 的 PlayGo 拒绝了此次安装（0x80B2116F，INVALID_SLOT）。仅凭此代码无法确定原因是安装包、现有安装状态，还是安装器上下文。暂存的 pkg 已保留；你可以试试 PS5 的 Settings → System → Debug Settings → Game → Package Installer。",
 err_install_1401: "PS5 的 ShellUI 安装路径拒绝了该请求（0x80B21401）。在 FW 9.60 上，当固件版本缺少我们依赖的 BGFT 寄存器时，通常会与另一层失败同时出现。请尝试通过 连接 → 发送 payload 使用最新载荷，或通过 PS5 本机的 Debug Settings 面板安装。",
 err_install_2101: "针对相同内容的先前下载仍在 PS5 上排队。请打开 PS5 的通知面板，将其清除后重试安装。",
-err_install_80b2_generic: "PS5 的 PlayGo 子系统以 0x80B2_xxxx 错误拒绝了此安装。这是安装获取路径的问题，而非 pkg 解析器 — 您的文件很可能没问题。请发送当前版本的助手（点横幅中的“发送助手”，或在“连接”界面发送）；它的安装路径可绕过最常见的 0x80B2 拒绝类别。",
+err_install_80b2_generic_v2: "PS5 拒绝安装此软件包（错误 0x80B2…）。文件本身通常没问题。请把最新版本的助手发送到 PS5（点横幅中的“发送助手”，或在“连接”界面发送），然后重试：它能避开此错误最常见的原因。",
 err_bgft_not_loadable: "您的 PS5 固件未以 ps5upload 可用的方式暴露 Sony 的 BGFT 安装器。请确认 PS5 运行的是当前版本的助手（点横幅中的“发送助手”，或在“连接”界面重新发送），然后重试。如果仍然失败，说明此固件无法用这种方式安装 .pkg：请在 PS5 上直接安装（设置 → 系统 → 调试设置 → 游戏 → Package Installer），如果是游戏文件夹或磁盘镜像，请在“游戏”中该游戏的页面上使用“添加到主屏幕”。",
 err_install_enoent_dlc: "这看起来像是一个 DLC pkg（content_id {contentId}）。Sony 的安装器需要先安装基础游戏（{baseTitle}）才能安装 DLC，因为安装会从基础游戏的 app_home 读取元数据。请先安装 {baseTitle}，然后重试此 DLC。0x80020002 是内核在尝试跟随基础游戏引用时报告“无此文件”— 并非您的 DLC pkg 有问题。",
 err_install_defrag: "您的 PS5 需要碎片整理后的可用空间。请前往 Settings → Storage → Free up space，然后重试。",
