@@ -29,6 +29,8 @@ use tokio::sync::{mpsc, Notify};
 use crate::config::Config;
 use crate::limits::{canonical_ip, v6_site, IpKey, RateTable, Window};
 use crate::metrics::{ErrorKind, Gauges, Limit, Metrics, Stray};
+use crate::rooms;
+use crate::throttle::{Bucket, Class};
 use crate::{Field, Shared};
 
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -82,12 +84,14 @@ pub const CLOSE_DONE: u16 = 1000;
 pub const CLOSE_GOING_AWAY: u16 = 1001;
 
 pub(crate) struct State {
-    rooms: HashMap<String, Room>,
+    pub(crate) rooms: HashMap<String, Room>,
     rooms_per_ip: HashMap<IpKey, usize>,
     conns_per_ip: HashMap<IpKey, usize>,
     /// Open connections per IPv6 /48 (see [`v6_site`]).
     conns_per_v6_site: HashMap<u64, usize>,
     joins: RateTable,
+    /// Play Rooms: cards, caches, previews, buckets, switches (`rooms.rs`).
+    pub(crate) lobby: rooms::RoomsState,
 }
 
 impl State {
@@ -98,10 +102,17 @@ impl State {
             conns_per_ip: HashMap::new(),
             conns_per_v6_site: HashMap::new(),
             joins: RateTable::new(c.max_tracked_ips),
+            lobby: rooms::RoomsState::new(&c.rooms, c.max_tracked_ips),
         }
     }
 
-    fn remove_room(&mut self, id: &str) -> Option<Room> {
+    /// Tests and tools: an IP → country table in place of `HUB_GEO_FILE`.
+    pub fn set_geo(&mut self, g: crate::geo::Geo) {
+        self.lobby.set_geo(g);
+    }
+
+    fn remove_room(&mut self, id: &str, m: &rooms::RoomMetrics) -> Option<Room> {
+        rooms::drop_ad_of_room(self, id, m);
         let room = self.rooms.remove(id)?;
         if let Some(n) = self.rooms_per_ip.get_mut(&room.owner) {
             *n -= 1;
@@ -113,11 +124,11 @@ impl State {
     }
 }
 
-struct Room {
+pub(crate) struct Room {
     secret_hash: [u8; 32],
     /// Who opened it: counts toward that client's room limit until the room is removed.
     owner: IpKey,
-    host: Option<Peer>,
+    pub(crate) host: Option<Peer>,
     host_signals: Window,
     hostless_since: Option<Instant>,
     guests: HashMap<String, Guest>,
@@ -125,6 +136,12 @@ struct Room {
     /// kept when its guest goes so that joining again does not refill them. Bounded: at most
     /// [`GUEST_CLIENTS_PER_SEAT`] per seat, and windows that ran out are dropped.
     guest_clients: HashMap<IpKey, Window>,
+    /// A lobby room (Play Rooms): may carry a card, takes knocks, guests get a `cid`.
+    pub(crate) lobby: bool,
+    /// The proof-of-work nonce for this room's next card.
+    pub(crate) pow: String,
+    /// Knocks per guest client in this lobby (bounded like `guest_clients`).
+    pub(crate) knock_clients: HashMap<IpKey, Bucket>,
 }
 
 /// Guest clients a room keeps a signal budget for, per seat (8 seats: 32 clients a minute).
@@ -138,10 +155,12 @@ struct Guest {
     /// Who it is (the address [`client_ip`] gave): its signals count toward that client's
     /// budget in the room too.
     client: IpKey,
+    /// In a lobby room: its knock (only knocks until its host lets it in).
+    knock: rooms::Knock,
 }
 
 #[derive(Clone)]
-struct Peer {
+pub(crate) struct Peer {
     conn: u64,
     tx: mpsc::Sender<Out>,
     kill: Arc<Notify>,
@@ -149,7 +168,7 @@ struct Peer {
 
 impl Peer {
     /// Queues a message; a peer that cannot take it is dropped.
-    fn send(&self, out: Out, m: &Metrics) {
+    pub(crate) fn send(&self, out: Out, m: &Metrics) {
         if self.tx.try_send(out).is_err() {
             m.error(ErrorKind::SlowPeer);
             self.kill.notify_one();
@@ -157,7 +176,7 @@ impl Peer {
     }
 }
 
-enum Out {
+pub(crate) enum Out {
     Text(String),
     Close(u16, &'static str),
 }
@@ -198,7 +217,11 @@ pub(crate) fn router(shared: Arc<Shared>, with_metrics: bool) -> Router {
         .route("/ws", any(ws_handler))
         .route("/ws/", any(ws_handler))
         .route("/health", get(|| async { "ok\n" }))
-        .route("/robots.txt", get(robots_handler));
+        .route("/robots.txt", get(robots_handler))
+        // Play Rooms (rooms.rs): the list, the friends lookup and relayed previews.
+        .route("/rooms", get(rooms::list_handler))
+        .route("/rooms/status", get(rooms::status_handler))
+        .route("/rooms/{id}/preview", get(rooms::preview_handler));
     let r = if with_metrics {
         r.route("/metrics", get(metrics_handler))
     } else {
@@ -229,6 +252,11 @@ pub(crate) fn metrics_router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok\n" }))
         .route("/metrics", get(metrics_handler))
+        // Run-time switches and the blocklist (only with HUB_ADMIN_TOKEN; never public).
+        .route(
+            "/admin/control",
+            get(rooms::admin_get).post(rooms::admin_post),
+        )
         .with_state(shared)
 }
 
@@ -313,9 +341,23 @@ impl ConnSlot {
         let cfg = &shared.config;
         let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let m = &shared.metrics;
-        if shared.connections.load(Ordering::Relaxed) >= cfg.max_connections {
+        if shared.connections.load(Ordering::Relaxed) >= cfg.max_connections
+            || st.lobby.refuse_sockets
+        {
             m.limited(Limit::Connections);
             return Err(ErrorKind::ServerFull);
+        }
+        // Blocklisted, temporarily blocked for a sustained flood, or opening sockets faster
+        // than any app does: refused before anything is counted (429).
+        if st.lobby.control.ip_blocked(ip)
+            || !st
+                .lobby
+                .throttle
+                .check(ip, Class::Connect, Instant::now())
+                .is_ok()
+        {
+            shared.rooms.throttled.inc("connect");
+            return Err(ErrorKind::TooManyConnections);
         }
         // Both limits are checked before either count moves, so a refusal leaves no entry.
         if st.conns_per_ip.get(&ip).copied().unwrap_or(0) >= cfg.max_connections_per_ip {
@@ -361,13 +403,13 @@ impl Drop for ConnSlot {
     }
 }
 
-fn random_b64(bytes: usize) -> String {
+pub(crate) fn random_b64(bytes: usize) -> String {
     let mut b = vec![0u8; bytes];
     getrandom::fill(&mut b).expect("OS randomness");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 
-fn is_b64url(s: &str, len: usize) -> bool {
+pub(crate) fn is_b64url(s: &str, len: usize) -> bool {
     s.len() == len
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -523,9 +565,12 @@ async fn connection(socket: WebSocket, slot: ConnSlot) {
 /// removed and its host told.
 fn disconnect(shared: &Shared, role: Role, conn: u64) {
     let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    st.lobby.conn_closed(conn);
     match role {
         Role::None => {}
         Role::Host { room } => {
+            // A card lives on its host's socket and dies with it (also when it was replaced).
+            rooms::drop_conn(&mut st, shared, &room, Some(conn));
             let Some(r) = st.rooms.get_mut(&room) else {
                 return;
             };
@@ -602,6 +647,33 @@ fn handle_text(
     if text.len() > cfg.max_frame_bytes {
         return Err(ErrorKind::TooLarge);
     }
+    // Messages per socket, any kind: far above what an engine or a page sends, so only a flood
+    // meets it (and counts toward its client's escalation).
+    {
+        let now = Instant::now();
+        let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !st.lobby.conn_message(&cfg.rooms, me.conn, now) {
+            st.lobby.throttle.strike(ip, now);
+            shared.rooms.throttled.inc("socket");
+            return Err(ErrorKind::RateLimited);
+        }
+    }
+    let res = handle_msg(shared, role, me, ip, text);
+    if let Ok(Action::Reply(lines) | Action::ReplyThenClose(lines)) = &res {
+        for l in lines {
+            shared.rooms.out("ws", l.len());
+        }
+    }
+    res
+}
+
+fn handle_msg(
+    shared: &Shared,
+    role: &mut Role,
+    me: &Peer,
+    ip: IpKey,
+    text: &str,
+) -> Result<Action, ErrorKind> {
     // Not an object (an array, a string, a number): no map, `bad_json` as before.
     let msg: Msg = serde_json::from_str(text).map_err(|_| ErrorKind::BadJson)?;
     let t = str_field(&msg, "t")?.ok_or(ErrorKind::BadJson)?;
@@ -621,8 +693,49 @@ fn handle_text(
         "join" => on_join(shared, role, me, ip, &msg),
         "signal" => on_signal(shared, role, &msg),
         "leave" => on_leave(shared, role, me, &msg),
+        "ad" | "unad" | "preview" => on_room_card(shared, role, me, ip, t, &msg),
         _ => Err(ErrorKind::UnknownType),
     }
+}
+
+/// Play Rooms messages on a host socket (`rooms.rs`): `ad` (create, update, renew), `unad`, and
+/// a `preview` answer. Only a host may send them; refusals are answers, never closes.
+fn on_room_card(
+    shared: &Shared,
+    role: &mut Role,
+    me: &Peer,
+    ip: IpKey,
+    t: &str,
+    msg: &Msg,
+) -> Result<Action, ErrorKind> {
+    let Role::Host { room } = role else {
+        return Err(ErrorKind::BadState);
+    };
+    let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    // Only the room's current host (not a replaced socket still closing).
+    if st
+        .rooms
+        .get(room.as_str())
+        .and_then(|r| r.host.as_ref())
+        .map(|h| h.conn)
+        != Some(me.conn)
+    {
+        return Ok(Action::Reply(Vec::new()));
+    }
+    let lines = match t {
+        "ad" => {
+            let ad = msg.get("ad").map(|raw| raw.get());
+            let pow = str_field(msg, "pow")?;
+            rooms::on_ad(shared, &mut st, room, me.conn, ip, ad, pow.as_deref())
+        }
+        "unad" => rooms::on_unad(shared, &mut st, room, me.conn),
+        _ => {
+            let pid = str_field(msg, "pid")?.unwrap_or_default();
+            let data = msg.get("data").map(|raw| raw.get());
+            rooms::on_preview_answer(shared, &mut st, room, &pid, data)
+        }
+    };
+    Ok(Action::Reply(lines))
 }
 
 fn on_host(
@@ -652,17 +765,37 @@ fn on_host(
     if is_bound_room(room_id) && room_for_secret(secret) != room_id {
         return Err(ErrorKind::RoomTaken);
     }
+    // A lobby (Play Rooms): bound ids only, so a card's room is always its host's.
+    let lobby = match msg.get("lobby").map(|raw| raw.get()) {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err(ErrorKind::BadJson),
+    };
+    if lobby && !is_bound_room(room_id) {
+        return Err(ErrorKind::BadRoom);
+    }
     let hash = hash_secret(secret);
     let now = Instant::now();
     let mut st = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if lobby && !st.lobby.control.knocks {
+        // Lobbies are switched off (HUB_KNOCKS=off): said once, then closed; invite rooms work.
+        let text = json!({"t": "error", "why": "no_lobby"}).to_string();
+        return Ok(Action::ReplyThenClose(vec![text]));
+    }
     let mut replies = vec![json!({"t": "hosted", "room": room_id}).to_string()];
     if let Some(room) = st.rooms.get_mut(room_id) {
         if !ct_eq(&room.secret_hash, &hash) {
             return Err(ErrorKind::RoomTaken);
         }
+        if room.lobby {
+            replies[0] = rooms::hosted_lobby(room_id, &room.pow, cfg.rooms.pow_bits);
+        }
         if let Some(old) = room.host.replace(me.clone()) {
             old.send(Out::Close(CLOSE_REPLACED, "replaced"), &shared.metrics);
+            // The old socket's card goes with it; the new one lists again.
+            rooms::drop_conn(&mut st, shared, room_id, Some(old.conn));
         }
+        let room = st.rooms.get_mut(room_id).expect("checked above");
         room.hostless_since = None;
         // The new socket learns about guests still waiting from the old one.
         for gid in room.guests.keys() {
@@ -680,6 +813,10 @@ fn on_host(
             return Err(ErrorKind::TooManyRooms);
         }
         *st.rooms_per_ip.entry(ip).or_insert(0) += 1;
+        let pow = random_b64(16);
+        if lobby {
+            replies[0] = rooms::hosted_lobby(room_id, &pow, cfg.rooms.pow_bits);
+        }
         st.rooms.insert(
             room_id.to_string(),
             Room {
@@ -690,6 +827,9 @@ fn on_host(
                 hostless_since: None,
                 guests: HashMap::new(),
                 guest_clients: HashMap::new(),
+                lobby,
+                pow,
+                knock_clients: HashMap::new(),
             },
         );
         Metrics::inc(&shared.metrics.hosts);
@@ -723,13 +863,19 @@ fn on_join(
     if !is_b64url(room_id, ROOM_LEN) {
         return Err(ErrorKind::BadRoom);
     }
+    let cid = st.lobby.cid(room_id, ip);
     let Some(room) = st.rooms.get_mut(room_id) else {
         return Err(ErrorKind::NoRoom);
     };
     let Some(host) = room.host.clone() else {
         return Err(ErrorKind::NoRoom);
     };
-    if room.guests.len() >= cfg.max_guests_per_room {
+    let seats = if room.lobby {
+        cfg.rooms.max_lobby_guests
+    } else {
+        cfg.max_guests_per_room
+    };
+    if room.guests.len() >= seats {
         return Err(ErrorKind::RoomFull);
     }
     // The client's signal budget here outlives its guests: before, each join came with a fresh
@@ -737,9 +883,7 @@ fn on_join(
     // a minute where one guest may send 20. A client that has used it up is refused now rather
     // than at its first signal. The table holds clients that joined within the window, at most
     // a few per seat: past that, a new client waits for windows to run out.
-    let cap = cfg
-        .max_guests_per_room
-        .saturating_mul(GUEST_CLIENTS_PER_SEAT);
+    let cap = seats.saturating_mul(GUEST_CLIENTS_PER_SEAT);
     if !room.guest_clients.contains_key(&ip) && room.guest_clients.len() >= cap {
         room.guest_clients
             .retain(|_, w| !w.expired(now, cfg.rate_window));
@@ -769,12 +913,19 @@ fn on_join(
             signals: Window::new(now),
             joined: now,
             client: ip,
+            knock: rooms::Knock::default(),
         },
     );
-    host.send(
-        Out::Text(json!({"t": "guest", "gid": gid}).to_string()),
-        &shared.metrics,
-    );
+    // A lobby host learns the guest's client id in this room (for its own per-client limits and
+    // blocks: a keyed hash, never the address).
+    let note = if room.lobby {
+        json!({"t": "guest", "gid": gid, "cid": cid})
+    } else {
+        json!({"t": "guest", "gid": gid})
+    };
+    let note = note.to_string();
+    shared.rooms.out("ws", note.len());
+    host.send(Out::Text(note), &shared.metrics);
     Metrics::inc(&shared.metrics.joins);
     let reply = json!({"t": "joined", "gid": gid}).to_string();
     *role = Role::Guest {
@@ -802,6 +953,7 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
             if to != "host" {
                 return Err(ErrorKind::BadTarget);
             }
+            let st = &mut *st;
             let Some(r) = st.rooms.get_mut(room.as_str()) else {
                 return Err(ErrorKind::NoPeer);
             };
@@ -825,10 +977,29 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
                 shared.metrics.limited(Limit::ClientSignals);
                 return Err(ErrorKind::RateLimited);
             }
+            // A lobby: only knocks until the host lets this guest in (rooms.rs).
+            if r.lobby {
+                let cap = cfg.rooms.max_lobby_guests * GUEST_CLIENTS_PER_SEAT;
+                let verdict = rooms::guest_signal(
+                    shared,
+                    &mut st.lobby,
+                    &mut g.knock,
+                    &mut r.knock_clients,
+                    cap,
+                    g.client,
+                    data_text,
+                    now,
+                )?;
+                if let rooms::KnockVerdict::Reply(text) = verdict {
+                    return Ok(Action::Reply(vec![text]));
+                }
+            }
             let Some(h) = &r.host else {
                 return Err(ErrorKind::NoPeer);
             };
-            h.send(Out::Text(forward(gid, data_text)), &shared.metrics);
+            let text = forward(gid, data_text);
+            shared.rooms.out("ws", text.len());
+            h.send(Out::Text(text), &shared.metrics);
             Metrics::inc(&shared.metrics.signals);
             Ok(Action::Reply(Vec::new()))
         }
@@ -851,11 +1022,16 @@ fn on_signal(shared: &Shared, role: &mut Role, msg: &Msg) -> Result<Action, Erro
                 shared.metrics.limited(Limit::HostSignals);
                 return Ok(Action::Reply(Vec::new()));
             }
-            let Some(g) = r.guests.get(to) else {
+            let lobby = r.lobby;
+            let Some(g) = r.guests.get_mut(to) else {
                 return Err(ErrorKind::NoPeer);
             };
-            g.peer
-                .send(Out::Text(forward("host", data_text)), &shared.metrics);
+            if lobby {
+                rooms::host_signal(&mut g.knock, data_text);
+            }
+            let text = forward("host", data_text);
+            shared.rooms.out("ws", text.len());
+            g.peer.send(Out::Text(text), &shared.metrics);
             Metrics::inc(&shared.metrics.signals);
             Ok(Action::Reply(Vec::new()))
         }
@@ -921,7 +1097,7 @@ fn on_leave(shared: &Shared, role: &mut Role, me: &Peer, msg: &Msg) -> Result<Ac
                 }
                 // Close the room for good.
                 None => {
-                    if let Some(r) = st.remove_room(&room) {
+                    if let Some(r) = st.remove_room(&room, &shared.rooms) {
                         Metrics::inc(&shared.metrics.rooms_closed);
                         for g in r.guests.values() {
                             close_guest(&g.peer, &shared.metrics);
@@ -960,7 +1136,7 @@ pub(crate) async fn sweeper(shared: Arc<Shared>, stun_table: Arc<Mutex<RateTable
                 .map(|(k, _)| k.clone())
                 .collect();
             for id in expired {
-                st.remove_room(&id);
+                st.remove_room(&id, &shared.rooms);
                 Metrics::inc(&shared.metrics.rooms_expired);
             }
             expire_guests(&mut st, now, cfg.guest_max_age, &shared.metrics);
@@ -1045,6 +1221,7 @@ mod tests {
         Shared {
             state: Mutex::new(State::new(&c)),
             metrics: Metrics::default(),
+            rooms: rooms::RoomMetrics::default(),
             shutdown,
             next_conn: AtomicU64::new(1),
             connections: AtomicUsize::new(0),
