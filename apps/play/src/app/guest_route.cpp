@@ -128,6 +128,17 @@ void Guest::set_routes(const route::Candidate *c, int n) noexcept
     pthread_mutex_unlock(&route_lock_);
 }
 
+bool Guest::route_in_use(route::Candidate &out) noexcept
+{
+    pthread_mutex_lock(&route_lock_);
+    const int i = sel_.active();
+    const bool have = n_routes_ > 0 && i >= 0 && i < n_routes_;
+    if (have)
+        out = sel_.at(i);
+    pthread_mutex_unlock(&route_lock_);
+    return have;
+}
+
 // Opens the guest socket on `way` (-1: the one in use; none set: start()'s address).
 bool Guest::route_open(net::WsClient &ws, int way, int *status) noexcept
 {

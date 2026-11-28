@@ -399,9 +399,20 @@ bool App::easy_choose(const EasyRow &r) noexcept
         JoinExtras x = default_extras();
         std::snprintf(x.resume, sizeof x.resume, "%s", resume_.token);
         std::snprintf(x.path, sizeof x.path, "%s", resume_.path);
+        // The way that game was played over first (through this home's PS5Upload, the bridge,
+        // it is the only one: start()'s address is that PS5Upload, not the host).
+        const bool way = resume_.has_way;
+        const route::Candidate w = resume_.way;
         resume_ = Resume{};
         for_host_ = false;
-        start_join_how("", x);
+        if (way)
+        {
+            log("app: back to the game the way it was played (%s%s)", route::kind_word(w.kind),
+                w.way == route::Way::bridge ? ", through this home's PS5Upload" : "");
+            start_join_how("", x, &w, 1);
+        }
+        else
+            start_join_how("", x);
         return true;
     }
     }

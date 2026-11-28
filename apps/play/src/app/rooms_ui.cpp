@@ -274,43 +274,37 @@ void App::load_supporters() noexcept
 void App::save_resume(const GuestView &v) noexcept
 {
     // Back to the game after the host restarts (or this app was closed): kept 5 minutes.
-    char path[160], text[400];
+    // The way the game is played over now goes with it: a game through this home's PS5Upload (the
+    // bridge) goes back through it, not to start()'s address.
+    char path[160], text[512];
     std::snprintf(path, sizeof path, "%s/resume.txt", platform::data_dir());
-    const int n = std::snprintf(text, sizeof text, "%s|%u|%s|%s|%s|%llu\n", addr_, static_cast<unsigned>(port_), v.token,
-                                last_extras_.path, engine_name_[0] ? engine_name_ : v.host,
-                                static_cast<unsigned long long>(net::wall_seconds()));
-    if (n > 0 && std::strchr(v.token, '|') == nullptr)
-        platform::write_file(path, text, static_cast<std::size_t>(n));
+    Resume r;
+    std::snprintf(r.addr, sizeof r.addr, "%s", addr_);
+    r.port = port_;
+    std::snprintf(r.token, sizeof r.token, "%s", v.token);
+    std::snprintf(r.path, sizeof r.path, "%s", last_extras_.path);
+    std::snprintf(r.name, sizeof r.name, "%s", engine_name_[0] ? engine_name_ : v.host);
+    r.at = net::wall_seconds();
+    r.has_way = guest_->route_in_use(r.way);
+    const std::size_t n = play::resume::write(r, text, sizeof text);
+    if (n)
+        platform::write_file(path, text, n);
 }
 
 bool App::load_resume() noexcept
 {
-    char path[160], text[400] = {};
+    char path[160], text[512] = {};
     std::snprintf(path, sizeof path, "%s/resume.txt", platform::data_dir());
     const long n = platform::read_file(path, text, sizeof text - 1);
     resume_ = Resume{};
     if (n <= 0)
         return false;
     text[n] = 0;
-    // addr|port|token|path|name|unix seconds (fields may be empty: split by hand)
-    char *f[6] = {};
-    char *p = text;
-    for (int k = 0; k < 6 && p; ++k)
+    if (!play::resume::parse(text, resume_))
     {
-        f[k] = p;
-        char *bar = k < 5 ? std::strchr(p, '|') : nullptr;
-        if (bar)
-            *bar = 0;
-        p = bar ? bar + 1 : nullptr;
-    }
-    if (!f[5] || !f[0][0] || !f[2][0])
+        resume_ = Resume{};
         return false;
-    std::snprintf(resume_.addr, sizeof resume_.addr, "%s", f[0]);
-    resume_.port = static_cast<std::uint16_t>(std::strtoul(f[1], nullptr, 10));
-    std::snprintf(resume_.token, sizeof resume_.token, "%s", f[2]);
-    std::snprintf(resume_.path, sizeof resume_.path, "%s", f[3]);
-    std::snprintf(resume_.name, sizeof resume_.name, "%s", f[4]);
-    resume_.at = std::strtoull(f[5], nullptr, 10);
+    }
     if (net::wall_seconds() - resume_.at > 300)
     {
         resume_ = Resume{};

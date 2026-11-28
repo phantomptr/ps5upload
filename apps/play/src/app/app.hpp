@@ -4,6 +4,7 @@
 #include "../core/chat.hpp"
 #include "../core/friends.hpp"
 #include "../core/invite.hpp"
+#include "../core/resume.hpp"
 #include "../core/rooms.hpp"
 #include "../core/seats.hpp"
 #include "../core/settings.hpp"
@@ -251,16 +252,10 @@ class App
     void load_device() noexcept;
     void save_resume(const GuestView &v) noexcept;
     void clear_resume() noexcept;
-    // resume.txt: a game to go back to (host restarted, or this app was closed): kept 5 minutes.
-    struct Resume
-    {
-        char addr[64] = {};
-        std::uint16_t port = 0;
-        char token[80] = {};
-        char path[80] = {};
-        char name[65] = {};
-        std::uint64_t at = 0;
-    } resume_;
+    // resume.txt: a game to go back to (host restarted, or this app was closed): kept 5 minutes,
+    // with the way it was played over (core/resume.hpp).
+    using Resume = play::resume::Record;
+    Resume resume_;
     bool load_resume() noexcept;
     // room_host.cpp: the host's My room / Remote Play / This PS5 tabs
     bool owner_here(const CompanionDoc &d) const noexcept;

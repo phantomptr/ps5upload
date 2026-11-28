@@ -7,6 +7,7 @@
 #include "../src/core/jitter.hpp"
 #include "../src/core/json.hpp"
 #include "../src/core/proto.hpp"
+#include "../src/core/resume.hpp"
 #include "../src/core/settings.hpp"
 #include "../src/core/ws.hpp"
 #include "../src/ui/i18n.hpp"
@@ -649,6 +650,54 @@ void test_friends_and_hello()
     const char *old = R"({"name":"Desk","port":19113,"version":"12.6.0","id":"x"})";
     CHECK(proto::parse_found(old, std::strlen(old), fd) && fd.together == 0);
 }
+
+// "Back to game" (resume.txt) keeps the way the game was played over (13.0.0 audit: a game played
+// through this home's PS5Upload went back to start()'s address, the wrong engine).
+void test_resume_record()
+{
+    resume::Record r;
+    std::snprintf(r.addr, sizeof r.addr, "%s", "192.168.1.20"); // this home's PS5Upload
+    r.port = 19113;
+    std::snprintf(r.token, sizeof r.token, "%s", "tok-AbC_123");
+    std::snprintf(r.name, sizeof r.name, "%s", "Alex's PC");
+    r.at = 1764300000;
+    r.has_way = true;
+    r.way.kind = route::Kind::internet;
+    r.way.way = route::Way::bridge;
+    std::snprintf(r.way.addr, sizeof r.way.addr, "%s", "192.168.1.20");
+    r.way.port = 19113;
+    std::snprintf(r.way.room, sizeof r.way.room, "%s", "AAAAAAAAAAAAAAAAAAAAAh");
+    std::snprintf(r.way.fp, sizeof r.way.fp, "%s", "AB:CD:EF");
+    char text[512];
+    const std::size_t n = resume::write(r, text, sizeof text);
+    CHECK(n > 0 && text[n - 1] == '\n');
+    resume::Record back;
+    CHECK(resume::parse(text, back));
+    CHECK(back.has_way && back.way.way == route::Way::bridge && back.way.kind == route::Kind::internet);
+    CHECK(!std::strcmp(back.way.room, r.way.room) && !std::strcmp(back.way.fp, "AB:CD:EF"));
+    CHECK(!std::strcmp(back.way.addr, "192.168.1.20") && back.way.port == 19113 && !back.way.lobby);
+    CHECK(!std::strcmp(back.token, r.token) && !std::strcmp(back.name, "Alex's PC") && back.at == r.at);
+    // a Tailscale way through the helper, with the invite's path
+    r.way = route::Candidate{};
+    r.way.kind = route::Kind::tailscale;
+    r.way.way = route::Way::helper;
+    std::snprintf(r.way.addr, sizeof r.way.addr, "%s", "100.101.102.103");
+    r.way.port = 19113;
+    std::snprintf(r.way.path, sizeof r.way.path, "%s", "/ps5/api/join/ws");
+    CHECK(resume::write(r, text, sizeof text) && resume::parse(text, back));
+    CHECK(back.has_way && back.way.way == route::Way::helper && !std::strcmp(back.way.path, "/ps5/api/join/ws"));
+    // a file from before the way was kept: the game, no way (start()'s address, as before)
+    CHECK(resume::parse("10.0.0.5|19113|tok1||Desk|1764300000\n", back));
+    CHECK(!back.has_way && !std::strcmp(back.addr, "10.0.0.5") && !std::strcmp(back.token, "tok1"));
+    // a bridge way without its room is no way
+    CHECK(resume::parse("10.0.0.5|19113|tok1||Desk|1764300000|2|2|10.0.0.5|19113||||0\n", back));
+    CHECK(!back.has_way);
+    // not a game: no token, too few fields; nothing written with a '|' in a field
+    CHECK(!resume::parse("10.0.0.5|19113||||1764300000\n", back));
+    CHECK(!resume::parse("garbage", back));
+    std::snprintf(r.name, sizeof r.name, "%s", "A|B");
+    CHECK(resume::write(r, text, sizeof text) == 0);
+}
 } // namespace
 
 void test_hdr()
@@ -728,6 +777,7 @@ int main()
     test_settings();
     test_i18n();
     test_hdr();
+    test_resume_record();
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

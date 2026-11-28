@@ -17,7 +17,7 @@ T := build/host-tests
 
 CORE := src/core/json.cpp src/core/ws.cpp src/core/proto.cpp src/core/jitter.cpp src/core/settings.cpp \
         src/core/invite.cpp src/core/friends.cpp src/core/hdr.cpp \
-        src/core/rooms.cpp src/core/chat.cpp src/core/voice.cpp src/core/textkb.cpp
+        src/core/rooms.cpp src/core/chat.cpp src/core/voice.cpp src/core/textkb.cpp src/core/resume.cpp
 NET := src/net/net.cpp src/net/hub.cpp src/net/tls.cpp src/net/seal.cpp src/net/route.cpp src/net/route_probe.cpp \
        src/app/guest.cpp src/app/guest_route.cpp src/app/route_pick.cpp src/app/companion.cpp src/app/helper.cpp \
        src/app/log.cpp src/app/waiting_room.cpp src/app/rooms_net.cpp

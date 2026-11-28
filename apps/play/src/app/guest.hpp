@@ -160,6 +160,9 @@ class Guest
     // The ways to the engine, best checked at connect and kept as backups during play
     // (docs/ROUTES.md). Set before start(); none: only start()'s address. Copied.
     void set_routes(const route::Candidate *c, int n) noexcept;
+    // The way in use now (false: no ways were set, or none picked yet): "Back to game" goes back
+    // the same way.
+    bool route_in_use(route::Candidate &out) noexcept;
     // Testing: let the socket go as a suspend does (the session then comes back with its token).
     void drop_socket() noexcept
     {
