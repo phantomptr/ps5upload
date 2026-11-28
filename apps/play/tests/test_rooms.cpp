@@ -3,6 +3,7 @@
 // Create, the notice gate, engine-id pairings, the on-screen keyboard, many controllers and the
 // sealed knock. make -C apps/play test.
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "../src/app/companion.hpp"
 #include "../src/core/chat.hpp"
 #include "../src/core/chord.hpp"
 #include "../src/core/invite.hpp"
@@ -203,6 +204,30 @@ void test_status_preview_push()
     const std::uint32_t rev = cs.refused_rev;
     CHECK(rooms::parse_room_push(rf, std::strlen(rf), cs) && cs.refused_rev == rev + 1 &&
           !std::strcmp(cs.refused_why, "slow_down") && cs.retry_ms == 2500 && !std::strcmp(cs.refused_what, "chat"));
+    // The host's ready check: the ask, then the room push says who is ready (this player by `you`).
+    rooms::RoomState rd;
+    const char *ask = R"({"ready":{"left_s":30}})";
+    CHECK(rooms::parse_room_push(ask, std::strlen(ask), rd) && rd.ready_rev == 1 && rd.ready_left_s == 30 &&
+          rd.ready_asked && !rd.ready_said);
+    const char *live = R"({"room":{"players":[{"name":"Alex","player":1,"host":true},{"name":"Sam","id":7,"you":true},)"
+                       R"({"name":"Mia","id":8}],"ready":{"left_s":21,"asked":[7,8],"ready":[8],"all":false}},"status":{}})";
+    CHECK(rooms::parse_room_push(live, std::strlen(live), rd) && rd.ready_left_s == 21 && rd.ready_asked &&
+          !rd.ready_said && !rd.ready_all && rd.ready_rev == 1);
+    const char *said = R"({"room":{"players":[{"name":"Sam","id":7,"you":true}],"ready":{"left_s":20,"asked":[7,8],"ready":[8,7],"all":true}}})";
+    CHECK(rooms::parse_room_push(said, std::strlen(said), rd) && rd.ready_said && rd.ready_all);
+    const char *over = R"({"room":{"players":[{"name":"Sam","id":7,"you":true}],"ready":null}})";
+    CHECK(rooms::parse_room_push(over, std::strlen(over), rd) && rd.ready_left_s == -1 && !rd.ready_asked);
+    // The host's TV: an ask from the host's own device ("It's me") and the ready check's ✓s.
+    CompanionDoc doc;
+    const char *hd = R"({"doc":{"paired":true,"together":{"open":true,"pending":[{"id":5,"name":"Alex","own":true}],)"
+                     R"("guests":[{"id":7,"player":2,"name":"Sam"},{"id":8,"player":3,"name":"Mia"}],)"
+                     R"("room":{"name":"Couch","ready":{"left_s":12,"asked":[7,8],"ready":[8],"all":false}}}}})";
+    CHECK(parse_companion_doc(hd, std::strlen(hd), doc) && doc.n_asks == 1 && doc.asks[0].own && doc.n_guests == 2);
+    CHECK(doc.room.ready_left_s == 12 && doc.room.ready_asked == 2 && doc.room.ready_n == 1 && !doc.room.ready_all &&
+          !doc.guests[0].ready && doc.guests[1].ready);
+    CompanionDoc none;
+    const char *nd = R"({"doc":{"paired":true,"together":{"open":true,"room":{"name":"Couch","ready":null}}}})";
+    CHECK(parse_companion_doc(nd, std::strlen(nd), none) && none.room.known && none.room.ready_left_s == -1);
 }
 
 void test_names()
@@ -563,6 +588,16 @@ void test_seats()
     s.set_full(true);
     CHECK(!s.hold(12, true, 100) && !s.hold(12, true, 2000000) && s.at(2).state == seats::State::idle);
     CHECK(s.playing() == 1);
+    // a new controller's group: the first player's token, or once they left (release) a seat's
+    seats::Seats g;
+    g.pad(11, "Sam", true, 0);
+    g.pad(12, "Mia", true, 0);
+    CHECK(!std::strcmp(seats::group_token(g, "tokAlex", false), "tokAlex"));
+    CHECK(!seats::group_token(g, "tokAlex", true)[0]); // released, nobody else plays: none
+    CHECK(g.hold(11, true, 1) == false && g.hold(11, true, 1500000));
+    g.joined(11, 2, "tokSam");
+    CHECK(!std::strcmp(seats::group_token(g, "tokAlex", true), "tokSam"));
+    CHECK(!std::strcmp(seats::group_token(g, "tokAlex", false), "tokAlex"));
 }
 
 void test_seal()

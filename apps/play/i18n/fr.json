@@ -501,5 +501,20 @@
   "chat_too_long": "Cette ligne est trop longue (140 caractères au maximum).",
   "voice_ptt_only": "Appuyer pour parler uniquement dans cette salle : maintenez Create.",
   "home_host_auto": "Héberger depuis cette PS5 avec PS5Upload sur %s",
-  "pair_grant_failed": "L'association via l'assistant n'a pas marché. Affichez plutôt un code."
+  "pair_grant_failed": "L'association via l'assistant n'a pas marché. Affichez plutôt un code.",
+  "hint_its_me": "C'est moi",
+  "ask_own": "%s · votre propre appareil",
+  "ready_check": "Appel « Prêts ? »",
+  "ready_running": "Prêts ? %d prêts · %d s",
+  "ready_all": "Tout le monde est prêt",
+  "ready_yes": "Prêt",
+  "ready_banner": "Prêts ? Répondez dans le menu de la salle (maintenez OPTIONS + TOUCHPAD, puis △) · %d s",
+  "ov_ready": "Je suis prêt · %d s",
+  "ready_sent": "Vous êtes prêt. L'hôte le voit.",
+  "ov_leave_again": "Appuyez encore sur ✕ pour quitter le jeu",
+  "err_slow": "Trop tôt : réessayez dans une minute.",
+  "err_nobody": "Personne dans votre salle pour l'instant.",
+  "err_ready_running": "Un appel « Prêts ? » est déjà en cours.",
+  "err_not_own": "Cette demande ne vient pas de votre propre appareil.",
+  "host_said_no": "PS5Upload ne l'a pas fait (%s)."
 }

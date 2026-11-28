@@ -394,6 +394,12 @@ bool Guest::release() noexcept
     return true;
 }
 
+bool Guest::send_ready() noexcept
+{
+    // The host's ready check: this player is ready (one who released has no place to answer for).
+    return joined_.load() && !released_.load() && ws_.send_text("{\"ready\":true}");
+}
+
 bool Guest::send_flag(int sid) noexcept
 {
     char m[48];
@@ -510,7 +516,8 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
     route_heard();
     proto::GuestEvent e;
     if (first_key(t, n, "room") || first_key(t, n, "chat") || first_key(t, n, "voice") || first_key(t, n, "muted") ||
-        first_key(t, n, "comms") || first_key(t, n, "comms_refused") || first_key(t, n, "chat_history"))
+        first_key(t, n, "comms") || first_key(t, n, "comms_refused") || first_key(t, n, "chat_history") ||
+        first_key(t, n, "ready"))
     {
         handle_room_text(t, n);
         // The engine's status every second carries the room beside it, in one message

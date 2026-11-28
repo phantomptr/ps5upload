@@ -792,7 +792,7 @@ void App::draw_rooms(Canvas &c) noexcept
             if (static_cast<int>(it.c.group) != last_group)
             {
                 last_group = static_cast<int>(it.c.group);
-                c.text(Font::small, kLeft + 6, y, tr(group_label(it.c.group)), col::muted);
+                c.text(Font::small, kLeft + 6, y, tr(group_label(it.c.group)), col::muted, w - 12);
                 y += 38;
             }
             draw_card(c, kLeft, y, w, ch, sel_ == i, it.c);

@@ -501,5 +501,20 @@
   "pair_auto": "Pairing through the helper…",
   "pair_moved": "%s now uses a new address. Confirm it in PS5Upload.",
   "pick_yours": "Your PS5Upload",
-  "pick_friends": "Friends' games"
+  "pick_friends": "Friends' games",
+  "hint_its_me": "It's me",
+  "ask_own": "%s · your own device",
+  "ready_check": "Ready check",
+  "ready_running": "Ready? %d ready · %d s",
+  "ready_all": "Everyone's ready",
+  "ready_yes": "Ready",
+  "ready_banner": "Ready? Answer in the Room menu (hold OPTIONS + TOUCHPAD, then △) · %d s",
+  "ov_ready": "I'm ready · %d s",
+  "ready_sent": "You're ready. The host can see it.",
+  "ov_leave_again": "Press ✕ again to leave the game",
+  "err_slow": "Too soon: try again in a minute.",
+  "err_nobody": "Nobody is in your room yet.",
+  "err_ready_running": "A ready check is already on.",
+  "err_not_own": "That ask isn't from your own device.",
+  "host_said_no": "PS5Upload didn't do that (%s)."
 }

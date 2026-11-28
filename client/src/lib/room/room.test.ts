@@ -202,7 +202,8 @@ describe("room state", () => {
     expect(readRoom({ listed: { state: "not_listed", why: "old_hub" } }).listed.state).toBe("old_hub");
     expect(r.blocked).toEqual([{ name: "Jo", tag: "9C11", at: 5 }]);
     expect(r.hostLink).toEqual({ rttMs: 2, tier: "excellent" });
-    expect(r.ready).toEqual({ leftS: 20, ready: [2, 3] });
+    expect(r.ready).toEqual({ leftS: 20, ready: [2, 3], all: false });
+    expect(readRoom({ ready: { left_s: 3, ready: [2], all: true } }).ready).toEqual({ leftS: 3, ready: [2], all: true });
     expect(r.game).toEqual({ title: "ASTRO BOT", id: "PPSA01234", from: "auto" });
   });
   it("player and ask facts; `via` lan/internet is not a source", () => {
@@ -215,7 +216,10 @@ describe("room state", () => {
       tag: "9C11",
       rttHint: 70,
       group: null,
+      own: false,
     });
+    // From the host's own device: "It's me" (Player 1).
+    expect(readRoomAsk({ came: "invite", own: true }).own).toBe(true);
     // Another controller of a PS5 already in: `players` counts that PS5's players, `group` is an id.
     expect(readRoomAsk({ came: "group", group: 17, players: ["Alex", "Sam"] })).toMatchObject({ source: "group", group: 2 });
     expect(readRoomAsk({ came: "invite", group: 17 }).group).toBeNull();

@@ -62,6 +62,19 @@ describe("Guests play as: the host's panel", () => {
     expect(renderToStaticMarkup(<JoinAsks addr="c" asks={asks} />)).not.toContain("pt-ask-profile");
   });
 
+  it("the Allow prompt offers It's me for the host's own device, and Let all in for a PS5's group", () => {
+    const room = { source: null, passwordOk: null, tag: null, rttHint: null, group: null, own: false };
+    const own = renderToStaticMarkup(<JoinAsks addr="c" asks={[{ id: 11, name: "Sam", room: { ...room, own: true } }]} />);
+    expect(own).toContain('data-testid="pt-allow-its-me"');
+    expect(own).toContain('data-testid="pt-allow"');
+    const group = renderToStaticMarkup(<JoinAsks addr="c" asks={[{ id: 12, name: "Mia", room: { ...room, group: 2 } }]} />);
+    expect(group).toContain('data-testid="pt-allow-group"');
+    expect(group).not.toContain('data-testid="pt-allow-its-me"');
+    const plain = renderToStaticMarkup(<JoinAsks addr="c" asks={[{ id: 13, name: "Dee" }]} />);
+    expect(plain).not.toContain("pt-allow-its-me");
+    expect(plain).not.toContain("pt-allow-group");
+  });
+
   it("the Allow prompt starts at the top of a phone's small picture, so Allow and No stay inside it", () => {
     // 7rem down (clear of the stream bar on a computer), a wrapped prompt ran out of the bottom of
     // a phone's picture and "No" was cut off.

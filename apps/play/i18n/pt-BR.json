@@ -501,5 +501,20 @@
   "chat_too_long": "Essa linha é longa demais (no máximo 140 caracteres).",
   "voice_ptt_only": "Só apertar para falar nesta sala: segure Create.",
   "home_host_auto": "Hospede deste PS5 com o PS5Upload em %s",
-  "pair_grant_failed": "O pareamento pelo auxiliar não funcionou. Mostre um código."
+  "pair_grant_failed": "O pareamento pelo auxiliar não funcionou. Mostre um código.",
+  "hint_its_me": "Sou eu",
+  "ask_own": "%s · seu próprio aparelho",
+  "ready_check": "Checar se estão prontos",
+  "ready_running": "Prontos? %d pronto(s) · %d s",
+  "ready_all": "Todos prontos",
+  "ready_yes": "Pronto",
+  "ready_banner": "Prontos? Responda no menu da sala (segure OPTIONS + TOUCHPAD e depois △) · %d s",
+  "ov_ready": "Estou pronto · %d s",
+  "ready_sent": "Você está pronto. O anfitrião vê isso.",
+  "ov_leave_again": "Aperte ✕ de novo para sair do jogo",
+  "err_slow": "Cedo demais: tente de novo em um minuto.",
+  "err_nobody": "Ainda não há ninguém na sua sala.",
+  "err_ready_running": "Já há uma checagem em andamento.",
+  "err_not_own": "Esse pedido não vem do seu próprio aparelho.",
+  "host_said_no": "O PS5Upload não fez isso (%s)."
 }

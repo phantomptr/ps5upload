@@ -501,5 +501,20 @@
   "chat_too_long": "Tin nhắn quá dài (tối đa 140 ký tự).",
   "voice_ptt_only": "Phòng này chỉ cho nhấn để nói: giữ Create.",
   "home_host_auto": "Làm chủ phòng từ PS5 này với PS5Upload trên %s",
-  "pair_grant_failed": "Ghép đôi qua trình trợ giúp không thành công. Hãy hiện mã."
+  "pair_grant_failed": "Ghép đôi qua trình trợ giúp không thành công. Hãy hiện mã.",
+  "hint_its_me": "Là tôi",
+  "ask_own": "%s · thiết bị của bạn",
+  "ready_check": "Kiểm tra sẵn sàng",
+  "ready_running": "Sẵn sàng? %d đã sẵn sàng · %d giây",
+  "ready_all": "Mọi người đã sẵn sàng",
+  "ready_yes": "Sẵn sàng",
+  "ready_banner": "Sẵn sàng? Trả lời trong menu Phòng (giữ OPTIONS + TOUCHPAD, rồi △) · %d giây",
+  "ov_ready": "Tôi sẵn sàng · %d giây",
+  "ready_sent": "Bạn đã sẵn sàng. Chủ phòng thấy điều đó.",
+  "ov_leave_again": "Nhấn ✕ lần nữa để rời trò chơi",
+  "err_slow": "Quá sớm: thử lại sau một phút.",
+  "err_nobody": "Chưa có ai trong phòng của bạn.",
+  "err_ready_running": "Một lượt kiểm tra sẵn sàng đang diễn ra.",
+  "err_not_own": "Yêu cầu đó không đến từ thiết bị của bạn.",
+  "host_said_no": "PS5Upload đã không làm việc đó (%s)."
 }

@@ -540,6 +540,43 @@ bool parse_room_push(const char *text, std::size_t len, RoomState &st) noexcept
         }
         else if (d.type(m) == json::Type::boolean)
             st.muted_voice = st.muted_chat = d.boolean(m);
+        // The ready check as everyone sees it ({left_s, asked: [ids], ready: [ids], all} or null).
+        const int rd = d.get(r, "ready");
+        if (d.type(rd) == json::Type::object)
+        {
+            int me = -1;
+            for (int i = 0; i < st.n_players; ++i)
+                if (st.players[i].you)
+                    me = st.players[i].id;
+            auto has = [&](int arr) {
+                for (std::uint32_t i = 0; i < d.count(arr); ++i)
+                    if (me >= 0 && num_or(d, d.item(arr, i), -2) == me)
+                        return true;
+                return false;
+            };
+            st.ready_left_s = num_or(d, d.get(rd, "left_s"), 0);
+            st.ready_all = d.boolean(d.get(rd, "all"));
+            if (me >= 0)
+            {
+                st.ready_asked = has(d.get(rd, "asked"));
+                st.ready_said = has(d.get(rd, "ready"));
+            }
+        }
+        else if (rd >= 0)
+        {
+            st.ready_left_s = -1;
+            st.ready_all = st.ready_asked = st.ready_said = false;
+        }
+    }
+    // The host asks "Ready?" ({"ready": {"left_s"}}): this player is asked, not ready yet.
+    const int ra = d.get(0, "ready");
+    if (d.type(ra) == json::Type::object && r < 0)
+    {
+        any = true;
+        st.ready_left_s = num_or(d, d.get(ra, "left_s"), 30);
+        st.ready_all = st.ready_said = false;
+        st.ready_asked = true;
+        ++st.ready_rev;
     }
     const int cm = d.get(0, "comms");
     if (d.type(cm) == json::Type::object)

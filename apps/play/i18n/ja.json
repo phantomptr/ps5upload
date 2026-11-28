@@ -501,5 +501,20 @@
   "chat_too_long": "長すぎます（最大 140 文字）。",
   "voice_ptt_only": "このルームはプッシュトゥトークのみ：Create を長押ししてください。",
   "home_host_auto": "%s の PS5Upload を使って、この PS5 でホストする",
-  "pair_grant_failed": "ヘルパー経由のペアリングがうまくいきませんでした。代わりにコードを表示してください。"
+  "pair_grant_failed": "ヘルパー経由のペアリングがうまくいきませんでした。代わりにコードを表示してください。",
+  "hint_its_me": "自分です",
+  "ask_own": "%s · 自分のデバイス",
+  "ready_check": "準備確認",
+  "ready_running": "準備OK？ %d人準備完了 · %d秒",
+  "ready_all": "全員準備完了",
+  "ready_yes": "準備完了",
+  "ready_banner": "準備OK？ ルームメニューで答えてね（OPTIONS + TOUCHPAD を長押しして △） · %d秒",
+  "ov_ready": "準備OK · %d秒",
+  "ready_sent": "準備完了。ホストに表示されています。",
+  "ov_leave_again": "もう一度 ✕ でゲームから抜けます",
+  "err_slow": "早すぎます。1分後にもう一度どうぞ。",
+  "err_nobody": "まだルームに誰もいません。",
+  "err_ready_running": "準備確認はすでに実行中です。",
+  "err_not_own": "このリクエストは自分のデバイスからではありません。",
+  "host_said_no": "PS5Upload はそれを行いませんでした（%s）。"
 }

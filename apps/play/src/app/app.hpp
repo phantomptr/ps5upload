@@ -88,6 +88,7 @@ class App
         screen_ = s;
         dirty_ = true;
         ov_open_ = f.overlay;
+        ov_sel_ = f.overlay && ready_pending(f.guest.room) ? kOvReady : 0;
         rv_ = f.rooms;
         mic_on_ = f.mic_on;
         if (f.notice_accepted >= 0)
@@ -267,8 +268,9 @@ class App
     // Drawing
     void draw_frame(ui::Canvas &c, const char *title) noexcept;
     void draw_hints(ui::Canvas &c, const int *glyphs, const ui::S *labels, int n, int y = 990) noexcept;
+    // reserve: room kept beside the value for something drawn after (a player's ping bars).
     void draw_row(ui::Canvas &c, int x, int y, int w, int h, bool sel, const char *title, const char *sub,
-                  const char *value = nullptr) noexcept;
+                  const char *value = nullptr, int reserve = 0) noexcept;
     void draw_home(ui::Canvas &c) noexcept;
     void draw_pick(ui::Canvas &c) noexcept;
     void draw_way(ui::Canvas &c) noexcept;
@@ -314,6 +316,7 @@ class App
             room_blocked,
             room_mute_all,
             room_name,
+            room_ready, // "Ready check" (everyone in gets "Ready?" for 30 s)
             tab_hint, // a line saying the room is closed / easier in PS5Upload
         } kind;
         long long id;
@@ -372,6 +375,15 @@ class App
     // in game
     bool ov_open_ = false;
     int ov_sel_ = 0;
+    static constexpr int kOvReady = -1;     // the Room menu's "I'm ready" row (a ready check)
+    std::uint64_t ov_leave_until_ = 0;      // "Leave room" pressed once: ✕ again before this leaves
+    std::uint32_t ready_rev_seen_ = 0;      // the last ready check asked
+    bool ready_sent_ = false;               // this PS5 answered it
+    bool ready_pending(const rooms::RoomState &rs) const noexcept
+    {
+        return rs.ready_left_s > 0 && rs.ready_asked && !rs.ready_said && !rs.ready_all && !ready_sent_;
+    }
+    void say_ready() noexcept;
     bool mic_on_ = false;
     voice::Ptt ptt_;
     bool password_asked_ = false;

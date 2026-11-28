@@ -34,7 +34,7 @@ import { clock } from "../../lib/clockText";
 import { tierLabel } from "../../join/routeTier";
 import { PingBars } from "../../components/PingBars";
 import { RoomChatBox, type ChatBoxLine } from "../../components/RoomChatBox";
-import { peopleIn } from "../../lib/room/room";
+import { peopleIn, roomApi } from "../../lib/room/room";
 import { useLangStore } from "../../state/lang";
 import { PlayerMenu } from "./PlayRoom/PlayerMenu";
 import { RoomHeader } from "./PlayRoom/RoomHeader";
@@ -786,6 +786,16 @@ export function PlayTogetherPanel({
                         {codecWarningText(tr, a.codecWarning)}
                       </span>
                     )}
+                    {a.room?.own && (
+                      <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-xs font-medium" data-testid="pt-ask-own">
+                        {tr("room_ask_own", undefined, "Your device")}
+                      </span>
+                    )}
+                    {a.room?.own && (
+                      <Button size="sm" variant="primary" onClick={() => void actions.itsMe(a.id)} data-testid="pt-ask-its-me">
+                        {tr("room_its_me", undefined, "It's me (Player 1)")}
+                      </Button>
+                    )}
                     {a.room?.group && a.room.group > 1 ? (
                       <Button size="sm" variant="primary" onClick={() => void actions.allowGroup(a.id)} data-testid="pt-ask-allow-group">
                         {tr("room_let_all_in", undefined, "Let all from that PS5 in")}
@@ -1087,14 +1097,37 @@ export function JoinAsks({
       {!seatNext && nextProfile && (
         <ProfileNextNote name={friendName(tr, a.name)} profile={nextProfile} className="order-last w-full text-xs text-white/75" />
       )}
-      <button
-        type="button"
-        className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"
-        onClick={() => void joinApi.decide(addr, a.id, true)}
-        data-testid="pt-allow"
-      >
-        {tr("room_let_in", undefined, "Let in")}
-      </button>
+      {a.room?.own && (
+        // The host's own device (another screen of theirs): in as Player 1.
+        <button
+          type="button"
+          className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"
+          onClick={() => void roomApi.itsMe(addr, a.id)}
+          data-testid="pt-allow-its-me"
+        >
+          {tr("room_its_me", undefined, "It's me (Player 1)")}
+        </button>
+      )}
+      {a.room?.group && a.room.group > 1 ? (
+        // Another controller of a PS5 already in: the same choice as in the panel.
+        <button
+          type="button"
+          className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"
+          onClick={() => void roomApi.allowGroup(addr, a.id)}
+          data-testid="pt-allow-group"
+        >
+          {tr("room_let_all_in", undefined, "Let all from that PS5 in")}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className={`rounded-full px-3 py-1 text-xs font-medium ${a.room?.own ? "bg-white/15 text-white" : "bg-white text-black"}`}
+          onClick={() => void joinApi.decide(addr, a.id, true)}
+          data-testid="pt-allow"
+        >
+          {tr("room_let_in", undefined, "Let in")}
+        </button>
+      )}
       <button
         type="button"
         className="rounded-full bg-white/15 px-3 py-1 text-xs"

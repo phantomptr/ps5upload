@@ -148,7 +148,9 @@ export function RoomHeader({
           )}
           {room.ready && (
             <span className="text-xs" data-testid="room-ready-running">
-              {tr("room_ready_running", { n: room.ready.ready.length, s: Math.ceil(room.ready.leftS) }, `Ready? ${room.ready.ready.length} ready · ${Math.ceil(room.ready.leftS)} s`)}
+              {room.ready.all
+                ? tr("room_ready_all", undefined, "Everyone's ready")
+                : tr("room_ready_running", { n: room.ready.ready.length, s: Math.ceil(room.ready.leftS) }, `Ready? ${room.ready.ready.length} ready · ${Math.ceil(room.ready.leftS)} s`)}
             </span>
           )}
           <Button size="sm" variant="secondary" leftIcon={<X size={14} />} onClick={() => void close()} data-testid="pt-close">

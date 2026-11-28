@@ -1692,6 +1692,46 @@ impl Party {
         found
     }
 
+    /// Many controllers: the group of the player (still in) holding `token`, as the console and
+    /// the group's first player's id (that player's own id when they are the first).
+    fn group_by_token(&self, token: &str) -> Option<(String, u64)> {
+        let id = self.by_token(token)?;
+        let lead = self
+            .guests
+            .iter()
+            .find(|g| g.id == id)
+            .and_then(|g| g.meta.group)
+            .unwrap_or(id);
+        Some((self.console.clone(), lead))
+    }
+
+    /// Many controllers: a further controller of group `lead`'s PS5 asks. Whether the host let
+    /// every player from that PS5 in, and whether it came as a stranger: from the first player,
+    /// or (once they left with `release`) from another player of that PS5 still in. None: nobody
+    /// from it plays any more.
+    fn group_answer(&self, lead: u64) -> Option<(bool, bool)> {
+        if let Some(g) = self.guests.iter().find(|g| g.id == lead && g.active()) {
+            return Some((g.group_ok, g.meta.stranger()));
+        }
+        let mut members = self
+            .guests
+            .iter()
+            .filter(|g| g.active() && g.meta.group == Some(lead));
+        let first = members.next()?;
+        let ok = first.group_ok || members.any(|g| g.group_ok);
+        Some((ok, first.meta.stranger()))
+    }
+
+    /// The host let every player from group `lead`'s PS5 in: kept on each of them still in, so
+    /// it outlives the first player's `release`.
+    fn allow_group(&mut self, lead: u64) {
+        for g in self.guests.iter_mut() {
+            if g.active() && (g.id == lead || g.meta.group == Some(lead)) {
+                g.group_ok = true;
+            }
+        }
+    }
+
     /// A new guest takes Player `player` (its pad not made yet).
     fn admit(&mut self, name: &str, player: u8, now: Instant) -> Option<&Guest> {
         let token = random_key()?;
@@ -3991,12 +4031,11 @@ fn own_device(client: &ClientInfo, ip: IpAddr) -> bool {
             && crate::play_app::is_paired(&crate::play_app::console_of(ip)))
 }
 
-/// The player (still in) whose resume token this is: their console and guest id.
+/// The group of the player (still in) whose resume token this is: their console and the group's
+/// first player's id. Another controller of that PS5 may come along with any player's token from
+/// it, so one who joins after the first player left (`release`) still finds the group.
 fn group_leader(token: &str) -> Option<(String, u64)> {
-    with_parties(|m| {
-        m.values()
-            .find_map(|p| p.by_token(token).map(|id| (p.console.clone(), id)))
-    })
+    with_parties(|m| m.values().find_map(|p| p.group_by_token(token)))
 }
 
 /// A guest coming back with `token`: None when the socket closed while waiting for the host.
@@ -4455,13 +4494,8 @@ async fn ask<S: GuestSocket>(
     // Many controllers: beside a player still in; the host may have let that PS5's players in.
     let mut group_ok = false;
     if let Entry::Group(_, leader) = &entry {
-        let found = with_party(&key, |p| {
-            p.guests
-                .iter()
-                .find(|g| g.id == *leader && g.active())
-                .map(|g| (g.group_ok, g.meta.stranger()))
-        })
-        .flatten();
+        // The first player, or (after they left with `release`) whoever of that PS5 still plays.
+        let found = with_party(&key, |p| p.group_answer(*leader)).flatten();
         let Some((ok, stranger)) = found else {
             return Some(Admit::Refused("expired"));
         };
@@ -4614,16 +4648,15 @@ async fn ask<S: GuestSocket>(
             // "Let all from that PS5 in": the first player's group (or this one's, if first).
             if let (Decision::AllowGroup, Admit::New(_, gid)) = (d, &a) {
                 let lead = leader.unwrap_or(*gid);
-                with_party(&key, |p| {
-                    if let Some(g) = p.guest_mut(lead) {
-                        g.group_ok = true;
-                    }
-                });
+                with_party(&key, |p| p.allow_group(lead));
                 crate::log_at!(
                     Info,
                     "together",
                     "join: the host lets every player from guest {lead}'s PS5 in on {console}"
                 );
+            } else if let (true, Some(lead)) = (group_ok, leader) {
+                // In without asking as one of a PS5 the host let in: kept on them too.
+                with_party(&key, |p| p.allow_group(lead));
             }
             Some(a)
         }
@@ -8832,6 +8865,46 @@ mod tests {
         assert!(p.group_playing(lead), "Mia plays on");
         p.leave(mia, "left", t);
         assert!(!p.group_playing(lead));
+    }
+
+    /// Many controllers: a new controller of that PS5 comes along after the first player left
+    /// (`release`): it asks with a player still in's token, lands in the same group, and the
+    /// host's "let all from that PS5 in" still holds (it was kept on everyone of that PS5).
+    #[test]
+    fn a_new_controller_joins_after_the_first_player_left() {
+        let mut p = party();
+        let t = Instant::now();
+        let lead = admit(&mut p, "Sam", t);
+        let (tx, _rx) = conn();
+        p.attach(lead, 1, tx);
+        let mia = admit(&mut p, "Mia", t);
+        p.guest_mut(mia).unwrap().meta.group = Some(lead);
+        p.allow_group(lead);
+        let mia_token = p.guest_mut(mia).unwrap().token.clone();
+        let lead_token = p.guest_mut(lead).unwrap().token.clone();
+        assert_eq!(
+            p.group_by_token(&mia_token),
+            Some((p.console.clone(), lead)),
+            "a member's token names the first player's group"
+        );
+        assert!(p.release(lead, t).is_some());
+        assert_eq!(
+            p.group_by_token(&lead_token),
+            None,
+            "the first player's token is done"
+        );
+        assert_eq!(
+            p.group_by_token(&mia_token),
+            Some((p.console.clone(), lead)),
+            "Mia's still finds the group"
+        );
+        assert_eq!(
+            p.group_answer(lead),
+            Some((true, false)),
+            "let in as a PS5 before: still let in"
+        );
+        p.leave(mia, "left", t);
+        assert_eq!(p.group_answer(lead), None, "nobody of it plays any more");
     }
 
     /// The ready check: everyone in is asked, answers count once, it ends early when all are

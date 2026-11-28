@@ -65,6 +65,7 @@ struct CompanionDoc
         bool from_rooms = false;
         bool muted_voice = false, muted_chat = false;
         long long group = 0; // the guest id of the first player from the same PS5 (0 none)
+        bool ready = false;  // said ready in the ready check shown now
     } guests[4];
     // Play Rooms (docs/ROOMS.md): the room block (GET /api/join `room`)
     struct Room
@@ -86,6 +87,9 @@ struct CompanionDoc
         char game[72] = {};
         int link_rtt = -1;
         char link_tier[12] = {};
+        // the ready check: seconds left (-1 none), how many were asked and said ready, all ready
+        int ready_left_s = -1, ready_asked = 0, ready_n = 0;
+        bool ready_all = false;
         struct Block
         {
             char name[40] = {};
@@ -129,6 +133,7 @@ struct CompanionView
     std::uint64_t pair_until_us = 0;
     char auth[16] = {}; // "invalid", "other_console", "revoked" (the token stopped working)
     char last_error[32] = {}; // the last intent's error
+    std::uint64_t last_error_us = 0; // when it came (the TV says it for a few seconds)
     CompanionDoc doc;
 };
 

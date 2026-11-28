@@ -501,5 +501,20 @@
   "chat_too_long": "Pesan terlalu panjang (maksimal 140 karakter).",
   "voice_ptt_only": "Hanya tekan untuk bicara di room ini: tahan Create.",
   "home_host_auto": "Jadi host dari PS5 ini dengan PS5Upload di %s",
-  "pair_grant_failed": "Pemasangan lewat helper tidak berhasil. Tampilkan kode saja."
+  "pair_grant_failed": "Pemasangan lewat helper tidak berhasil. Tampilkan kode saja.",
+  "hint_its_me": "Ini aku",
+  "ask_own": "%s · perangkatmu sendiri",
+  "ready_check": "Cek siap",
+  "ready_running": "Siap? %d siap · %d dtk",
+  "ready_all": "Semua siap",
+  "ready_yes": "Siap",
+  "ready_banner": "Siap? Jawab di menu Room (tahan OPTIONS + TOUCHPAD, lalu △) · %d dtk",
+  "ov_ready": "Aku siap · %d dtk",
+  "ready_sent": "Kamu siap. Host bisa melihatnya.",
+  "ov_leave_again": "Tekan ✕ lagi untuk keluar dari game",
+  "err_slow": "Terlalu cepat: coba lagi semenit lagi.",
+  "err_nobody": "Belum ada siapa pun di room-mu.",
+  "err_ready_running": "Cek siap sudah berjalan.",
+  "err_not_own": "Permintaan itu bukan dari perangkatmu sendiri.",
+  "host_said_no": "PS5Upload tidak melakukannya (%s)."
 }

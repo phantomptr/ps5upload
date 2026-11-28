@@ -501,5 +501,20 @@
   "chat_too_long": "Ten wiersz jest za długi (najwyżej 140 znaków).",
   "voice_ptt_only": "W tym pokoju tylko naciśnij i mów: przytrzymaj Create.",
   "home_host_auto": "Hostuj z tej PS5 przez PS5Upload na %s",
-  "pair_grant_failed": "Parowanie przez pomocnika nie zadziałało. Pokaż zamiast tego kod."
+  "pair_grant_failed": "Parowanie przez pomocnika nie zadziałało. Pokaż zamiast tego kod.",
+  "hint_its_me": "To ja",
+  "ask_own": "%s · Twoje urządzenie",
+  "ready_check": "Sprawdź gotowość",
+  "ready_running": "Gotowi? Gotowych: %d · %d s",
+  "ready_all": "Wszyscy gotowi",
+  "ready_yes": "Gotowy",
+  "ready_banner": "Gotowi? Odpowiedz w menu pokoju (przytrzymaj OPTIONS + TOUCHPAD, potem △) · %d s",
+  "ov_ready": "Jestem gotowy · %d s",
+  "ready_sent": "Jesteś gotowy. Host to widzi.",
+  "ov_leave_again": "Naciśnij ✕ jeszcze raz, aby opuścić grę",
+  "err_slow": "Za wcześnie: spróbuj za minutę.",
+  "err_nobody": "W Twoim pokoju jeszcze nikogo nie ma.",
+  "err_ready_running": "Sprawdzanie gotowości już trwa.",
+  "err_not_own": "Ta prośba nie pochodzi z Twojego urządzenia.",
+  "host_said_no": "PS5Upload tego nie zrobił (%s)."
 }

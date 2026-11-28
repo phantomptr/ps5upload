@@ -179,6 +179,7 @@ class Guest
     // from this PS5 (integration design (d), item 3). The pad stops going.
     bool release() noexcept;
     bool send_flag(int sid) noexcept;
+    bool send_ready() noexcept; // {"ready": true} in the host's ready check
     // A copy of the chat (the guest thread adds to it).
     void chat_copy(chat::Log &out) noexcept;
     void chat_read() noexcept;

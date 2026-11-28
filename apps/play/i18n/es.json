@@ -501,5 +501,20 @@
   "chat_too_long": "Esa línea es demasiado larga (140 caracteres como máximo).",
   "voice_ptt_only": "Solo pulsar para hablar en esta sala: mantén Create.",
   "home_host_auto": "Sé anfitrión desde esta PS5 con PS5Upload en %s",
-  "pair_grant_failed": "La vinculación a través del ayudante no ha funcionado. Muestra un código en su lugar."
+  "pair_grant_failed": "La vinculación a través del ayudante no ha funcionado. Muestra un código en su lugar.",
+  "hint_its_me": "Soy yo",
+  "ask_own": "%s · tu propio dispositivo",
+  "ready_check": "Comprobar si están listos",
+  "ready_running": "¿Listos? %d listos · %d s",
+  "ready_all": "Todos están listos",
+  "ready_yes": "Listo",
+  "ready_banner": "¿Listos? Responde en el menú de la sala (mantén OPTIONS + TOUCHPAD y luego △) · %d s",
+  "ov_ready": "Estoy listo · %d s",
+  "ready_sent": "Estás listo. El anfitrión lo ve.",
+  "ov_leave_again": "Pulsa ✕ otra vez para salir del juego",
+  "err_slow": "Demasiado pronto: inténtalo dentro de un minuto.",
+  "err_nobody": "Todavía no hay nadie en tu sala.",
+  "err_ready_running": "Ya hay una comprobación en marcha.",
+  "err_not_own": "Esa solicitud no viene de tu propio dispositivo.",
+  "host_said_no": "PS5Upload no lo hizo (%s)."
 }

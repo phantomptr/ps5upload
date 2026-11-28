@@ -501,5 +501,20 @@
   "chat_too_long": "너무 길어요 (최대 140자).",
   "voice_ptt_only": "이 룸에서는 눌러서 말하기만 돼요: Create를 길게 누르세요.",
   "home_host_auto": "%s의 PS5Upload로 이 PS5에서 호스트하기",
-  "pair_grant_failed": "헬퍼로 페어링하지 못했어요. 대신 코드를 표시하세요."
+  "pair_grant_failed": "헬퍼로 페어링하지 못했어요. 대신 코드를 표시하세요.",
+  "hint_its_me": "나예요",
+  "ask_own": "%s · 내 기기",
+  "ready_check": "준비 확인",
+  "ready_running": "준비됐어? %d명 준비 완료 · %d초",
+  "ready_all": "모두 준비 완료",
+  "ready_yes": "준비 완료",
+  "ready_banner": "준비됐어? 룸 메뉴에서 답하세요 (OPTIONS + TOUCHPAD를 길게 누르고 △) · %d초",
+  "ov_ready": "준비 완료 · %d초",
+  "ready_sent": "준비 완료. 호스트에게 보입니다.",
+  "ov_leave_again": "게임에서 나가려면 ✕를 한 번 더 누르세요",
+  "err_slow": "너무 빨라요. 1분 뒤에 다시 해 보세요.",
+  "err_nobody": "아직 룸에 아무도 없습니다.",
+  "err_ready_running": "준비 확인이 이미 진행 중입니다.",
+  "err_not_own": "이 요청은 내 기기에서 온 것이 아닙니다.",
+  "host_said_no": "PS5Upload가 그 작업을 하지 않았습니다 (%s)."
 }

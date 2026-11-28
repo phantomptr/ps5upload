@@ -501,5 +501,20 @@
   "chat_too_long": "Ez a sor túl hosszú (legfeljebb 140 karakter).",
   "voice_ptt_only": "Ebben a szobában csak nyomd és beszélj: tartsd nyomva a Create gombot.",
   "home_host_auto": "Hostolás erről a PS5-ről, PS5Upload itt: %s",
-  "pair_grant_failed": "A párosítás a segédprogramon át nem sikerült. Mutass inkább egy kódot."
+  "pair_grant_failed": "A párosítás a segédprogramon át nem sikerült. Mutass inkább egy kódot.",
+  "hint_its_me": "Én vagyok",
+  "ask_own": "%s · a saját eszközöd",
+  "ready_check": "Készenlét-ellenőrzés",
+  "ready_running": "Kész? %d kész · %d mp",
+  "ready_all": "Mindenki kész",
+  "ready_yes": "Kész",
+  "ready_banner": "Kész? Válaszolj a Szoba menüben (tartsd nyomva az OPTIONS + TOUCHPAD gombot, majd △) · %d mp",
+  "ov_ready": "Kész vagyok · %d mp",
+  "ready_sent": "Kész vagy. A házigazda látja.",
+  "ov_leave_again": "Nyomd meg újra a ✕ gombot a játék elhagyásához",
+  "err_slow": "Túl korán: próbáld újra egy perc múlva.",
+  "err_nobody": "Még senki sincs a szobádban.",
+  "err_ready_running": "Már fut egy készenlét-ellenőrzés.",
+  "err_not_own": "Ez a kérés nem a saját eszközödről jön.",
+  "host_said_no": "A PS5Upload ezt nem tette meg (%s)."
 }

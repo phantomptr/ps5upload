@@ -185,4 +185,16 @@ class Seats
     int n_ = 0;
     bool full_ = false;
 };
+
+// The token a new controller proves its group with: the first player's while they play; once
+// they left (`release`: the engine ends their token) a seat still playing's. "" when none.
+inline const char *group_token(const Seats &s, const char *first, bool released) noexcept
+{
+    if (!released && first && *first)
+        return first;
+    for (int i = 0; i < s.count(); ++i)
+        if ((s.at(i).state == State::playing || s.at(i).state == State::away) && s.at(i).token[0])
+            return s.at(i).token;
+    return "";
+}
 } // namespace play::seats

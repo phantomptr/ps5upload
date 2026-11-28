@@ -424,6 +424,13 @@ int main(int argc, char **argv)
     r.overlay = true;
     shot("playing-room-menu", App::Screen::playing, r);
     r.overlay = false;
+    // the host's ready check: the banner over the game, then "I'm ready" first in the Room menu
+    rs.ready_left_s = 24, rs.ready_asked = true, rs.ready_rev = 1;
+    shot("playing-ready", App::Screen::playing, r);
+    r.overlay = true;
+    shot("playing-ready-menu", App::Screen::playing, r);
+    r.overlay = false;
+    rs.ready_left_s = -1, rs.ready_asked = false;
     r.mic_on = false;
     // the host's My room: a public room, an ask from Rooms with the password right, two players
     App::Fake h = f;
@@ -458,6 +465,19 @@ int main(int argc, char **argv)
     std::snprintf(hd.guests[1].route, sizeof hd.guests[1].route, "internet");
     hd.guests[1].from_rooms = true;
     shot("host-room", App::Screen::host, h);
+    // an ask from the host's own device ("It's me") and a ready check running
+    {
+        App::Fake m = h;
+        CompanionDoc &md = m.host.doc;
+        md.n_asks = 1;
+        md.asks[0] = CompanionDoc::Ask{};
+        md.asks[0].id = 9;
+        std::snprintf(md.asks[0].name, sizeof md.asks[0].name, "Sam");
+        md.asks[0].own = true;
+        md.room.ready_left_s = 18, md.room.ready_asked = 2, md.room.ready_n = 1;
+        md.guests[1].ready = true;
+        shot("host-room-me-ready", App::Screen::host, m);
+    }
     app.fake_page(0, 2);
     shot("host-this-ps5", App::Screen::host, h);
     app.fake_page(0, 0);

@@ -199,13 +199,18 @@ struct RoomState
         bool host = false, muted = false, paused = false, mic = false, speaking = false;
     } people[8];
     int n_people = 0;
+    // The host's ready check (design 7.5): seconds left (-1 none), everyone ready, this player
+    // asked and said ready; ready_rev bumps on each new {"ready": {"left_s"}} ask.
+    int ready_left_s = -1;
+    bool ready_all = false, ready_asked = false, ready_said = false;
+    std::uint32_t ready_rev = 0;
     // the last refusal ({"comms_refused": {what, why, notice?, retry_ms?}}); rev bumps on each
     char refused_what[8] = {}, refused_why[16] = {};
     int retry_ms = 0;
     std::uint32_t refused_rev = 0;
 };
-// Reads any of {"room"}, {"comms"}, {"voice"}, {"muted"}, {"comms_refused"} into `st` (the parts a
-// message does not carry stay); false when the message is none of them.
+// Reads any of {"room"}, {"comms"}, {"voice"}, {"muted"}, {"comms_refused"}, {"ready"} into `st`
+// (the parts a message does not carry stay); false when the message is none of them.
 bool parse_room_push(const char *text, std::size_t len, RoomState &st) noexcept;
 
 // Names (the design's 3.5): 1-24 characters of letters, digits, spaces and basic punctuation;

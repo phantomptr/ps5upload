@@ -509,7 +509,22 @@ namespace play::ui
     X(pair_auto, "Pairing through the helper…") \
     X(pair_moved, "%s now uses a new address. Confirm it in PS5Upload.") \
     X(pick_yours, "Your PS5Upload") \
-    X(pick_friends, "Friends' games")
+    X(pick_friends, "Friends' games") \
+    X(hint_its_me, "It's me") \
+    X(ask_own, "%s · your own device") \
+    X(ready_check, "Ready check") \
+    X(ready_running, "Ready? %d ready · %d s") \
+    X(ready_all, "Everyone's ready") \
+    X(ready_yes, "Ready") \
+    X(ready_banner, "Ready? Answer in the Room menu (hold OPTIONS + TOUCHPAD, then △) · %d s") \
+    X(ov_ready, "I'm ready · %d s") \
+    X(ready_sent, "You're ready. The host can see it.") \
+    X(ov_leave_again, "Press ✕ again to leave the game") \
+    X(err_slow, "Too soon: try again in a minute.") \
+    X(err_nobody, "Nobody is in your room yet.") \
+    X(err_ready_running, "A ready check is already on.") \
+    X(err_not_own, "That ask isn't from your own device.") \
+    X(host_said_no, "PS5Upload didn't do that (%s).")
 
 enum class S : int
 {

@@ -171,7 +171,32 @@ void App::overlay_frame(std::uint64_t now) noexcept
             ov_note_until_ = note_until_;
         }
     }
+    if (rs.ready_rev != ready_rev_seen_)
+    {
+        // a new ready check: ask again (the answer before was for the last one)
+        ready_rev_seen_ = rs.ready_rev;
+        ready_sent_ = false;
+        dirty_ = true;
+        platform::blip(platform::Blip::choose);
+    }
     voice_tick(v);
+}
+
+void App::say_ready() noexcept
+{
+    // One TV, everyone in front of it: the answer goes for every player of this PS5.
+    bool sent = guest_->send_ready();
+    for (int i = 0; i < platform::kLocalPads; ++i)
+        if (seat_[i] && seat_user_[i] >= 0)
+            sent = seat_[i]->send_ready() || sent;
+    ready_sent_ = sent;
+    platform::blip(sent ? platform::Blip::choose : platform::Blip::bad);
+    if (sent)
+    {
+        std::snprintf(note_, sizeof note_, "%s", tr(S::ready_sent));
+        note_until_ = net::now_us() + 3000000;
+        ov_note_until_ = note_until_;
+    }
 }
 
 void App::input_overlay(std::uint32_t p) noexcept
@@ -189,6 +214,25 @@ void App::input_overlay(std::uint32_t p) noexcept
         guest_->chat_read();
         return;
     }
+    const bool ready_row = ready_pending(rs);
+    if (ov_sel_ == kOvReady && !ready_row)
+        ov_sel_ = 0;
+    if (ov_sel_ == kOvReady)
+    {
+        if (p & pad::kCross)
+        {
+            say_ready();
+            ov_open_ = false; // back to the game
+            return;
+        }
+        if (p & kDown)
+            ov_sel_ = 0, platform::blip(platform::Blip::move);
+        else if (p & kUp)
+            ov_sel_ = r_leave, platform::blip(platform::Blip::move);
+        return;
+    }
+    if (p & (kUp | kDown | kLeftB | kRight))
+        ov_leave_until_ = 0; // moved away: "Leave room" asks again
     // the quick grid: 4 x 4, then the rows below
     if (ov_sel_ < kQuickCells)
     {
@@ -197,7 +241,7 @@ void App::input_overlay(std::uint32_t p) noexcept
         if (p & kRight)
             ov_sel_ = ov_sel_ % 4 == 3 ? ov_sel_ - 3 : ov_sel_ + 1;
         if (p & kUp)
-            ov_sel_ = ov_sel_ < 4 ? r_leave : ov_sel_ - 4;
+            ov_sel_ = ov_sel_ < 4 ? (ready_row ? kOvReady : r_leave) : ov_sel_ - 4;
         else if (p & kDown)
             ov_sel_ = ov_sel_ + 4 >= kQuickCells ? r_type : ov_sel_ + 4;
     }
@@ -206,7 +250,7 @@ void App::input_overlay(std::uint32_t p) noexcept
         if (p & kUp)
             ov_sel_ = ov_sel_ == r_type ? kQuickCells - 4 : ov_sel_ - 1;
         else if (p & kDown)
-            ov_sel_ = ov_sel_ + 1 >= n ? 0 : ov_sel_ + 1;
+            ov_sel_ = ov_sel_ + 1 >= n ? (ready_row ? kOvReady : 0) : ov_sel_ + 1;
     }
     if (p & (kUp | kDown | kLeftB | kRight))
         platform::blip(platform::Blip::move);
@@ -300,6 +344,15 @@ void App::input_overlay(std::uint32_t p) noexcept
         }
         else if (ov_sel_ == r_leave && cross)
         {
+            // Leaving ends this game for this PS5: a second ✕ says so (Up from the top wraps here).
+            const std::uint64_t t = net::now_us();
+            if (t > ov_leave_until_)
+            {
+                ov_leave_until_ = t + 4000000;
+                platform::blip(platform::Blip::choose);
+                break;
+            }
+            ov_leave_until_ = 0;
             ov_open_ = false;
             log("app: leave from the Room menu");
             leave_game();
@@ -429,11 +482,23 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
             l.text(Font::small, ui::kW - w - 16, 96 + (48 - ui::font_height(Font::small)) / 2, line, col::text);
             used = 160;
         }
+        // The host's ready check, top centre, until this PS5 answers (in the Room menu).
+        if (ready_pending(rs) && !ov_open_)
+        {
+            char rb[220];
+            std::snprintf(rb, sizeof rb, tr(S::ready_banner), rs.ready_left_s);
+            const int w = Canvas::text_width(Font::body, rb) + 56;
+            const int bx = (ui::kW - (w > 1500 ? 1500 : w)) / 2;
+            panel(l, bx, 30, w > 1500 ? 1500 : w, 60, col::accent, 235);
+            l.text(Font::body, bx + 28, 30 + (60 - ui::font_height(Font::body)) / 2, rb, col::on_accent, 1450);
+            used = used < 110 ? 110 : used;
+        }
     }
     if (!ov_open_)
         return used;
-    // The Room menu: a panel on the right half.
-    const int x = 900, y = 160, w = 960, h = 890;
+    // The Room menu: a panel on the right two thirds (wide enough for the quick messages and the
+    // values in every language).
+    const int x = 620, y = 130, w = 1240, h = 920;
     panel(l, x, y, w, h, col::bg, 232);
     char b[200];
     l.text(Font::title, x + 40, y + 24, rs.name[0] ? rs.name : tr(S::ov_title), col::text, w - 80);
@@ -455,16 +520,30 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
         }
         yy += 54;
     }
+    // the host's ready check: "I'm ready" above everything else
+    if (ready_pending(rs))
+    {
+        const bool s = ov_sel_ == kOvReady;
+        std::snprintf(b, sizeof b, tr(S::ov_ready), rs.ready_left_s);
+        panel(l, x + 30, yy, w - 60, 52, s ? col::accent : col::panel, 240);
+        l.text(Font::body, x + 52, yy + (52 - ui::font_height(Font::body)) / 2, b, s ? col::on_accent : col::text, w - 100);
+        yy += 62;
+    }
     // quick messages: 4 x 4
     const bool chat_ok = std::strcmp(rs.chat, "off") != 0 && !rs.muted_chat && rs.chat[0];
-    const int cw = 214, chh = 48;
+    const int cw = (w - 80 - 24) / 4, chh = 72;
     for (int i = 0; i < kQuickCells; ++i)
     {
         const int cx = x + 40 + (i % 4) * (cw + 8), cy = yy + (i / 4) * (chh + 8);
         const bool s = ov_sel_ == i;
         panel(l, cx, cy, cw, chh, s ? col::accent : col::panel, 240);
-        l.text(Font::small, cx + 14, cy + (chh - ui::font_height(Font::small)) / 2, quick_text(i + 1),
-               s ? col::on_accent : chat_ok ? col::text : col::muted, cw - 20);
+        const char *q = quick_text(i + 1);
+        const std::uint32_t qc = s ? col::on_accent : chat_ok ? col::text : col::muted;
+        // one line when it fits, else two (longer words in other languages)
+        if (Canvas::text_width(Font::small, q) <= cw - 28)
+            l.text(Font::small, cx + 14, cy + (chh - ui::font_height(Font::small)) / 2, q, qc, cw - 20);
+        else
+            l.text_wrap(Font::small, cx + 14, cy + 4, cw - 28, q, qc, 0);
     }
     yy += 4 * (chh + 8) + 14;
     if (!chat_ok)
@@ -476,7 +555,12 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
     Other people[8];
     const int np = others(rs, people, 8);
     const int rows_n = r_people + np + 2;
-    for (int r = r_type; r < rows_n && yy < y + h - 90; ++r)
+    // the rows scroll so the one chosen is always on screen (Leave room is last)
+    const int fit = (y + h - 90 - yy) / 47;
+    int first = r_type;
+    if (fit > 0 && ov_sel_ >= r_type && ov_sel_ - r_type >= fit)
+        first = ov_sel_ - fit + 1;
+    for (int r = first; r < rows_n && yy + 42 <= y + h - 80; ++r)
     {
         const bool s = ov_sel_ == r;
         const char *title = "", *value = nullptr;
@@ -506,13 +590,13 @@ int App::draw_overlay(Canvas &l, const GuestView &v, std::uint64_t now) noexcept
         else if (r == r_people + np)
             title = tr(S::ov_rules);
         else
-            title = tr(S::ov_leave);
+            title = tr(net::now_us() < ov_leave_until_ ? S::ov_leave_again : S::ov_leave);
         panel(l, x + 30, yy, w - 60, 42, s ? col::panel_hi : col::panel, 235);
         if (s)
             panel(l, x + 30, yy, 6, 42, col::accent, 255);
-        l.text(Font::small, x + 52, yy + (42 - ui::font_height(Font::small)) / 2, title, col::text, w - 340);
+        l.text(Font::small, x + 52, yy + (42 - ui::font_height(Font::small)) / 2, title, col::text, w - 540);
         if (value)
-            l.text(Font::small, x + w - 300, yy + (42 - ui::font_height(Font::small)) / 2, value, s ? col::accent : col::muted, 260);
+            l.text(Font::small, x + w - 470, yy + (42 - ui::font_height(Font::small)) / 2, value, s ? col::accent : col::muted, 430);
         yy += 47;
     }
     // what works here

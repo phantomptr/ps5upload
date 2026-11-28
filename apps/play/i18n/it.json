@@ -501,5 +501,20 @@
   "chat_too_long": "Questa riga è troppo lunga (al massimo 140 caratteri).",
   "voice_ptt_only": "Solo premi per parlare in questa stanza: tieni premuto Create.",
   "home_host_auto": "Ospita da questa PS5 con PS5Upload su %s",
-  "pair_grant_failed": "L'abbinamento tramite l'helper non ha funzionato. Mostra invece un codice."
+  "pair_grant_failed": "L'abbinamento tramite l'helper non ha funzionato. Mostra invece un codice.",
+  "hint_its_me": "Sono io",
+  "ask_own": "%s · il tuo dispositivo",
+  "ready_check": "Controllo pronti",
+  "ready_running": "Pronti? %d pronti · %d s",
+  "ready_all": "Tutti pronti",
+  "ready_yes": "Pronto",
+  "ready_banner": "Pronti? Rispondi nel menu della stanza (tieni premuto OPTIONS + TOUCHPAD, poi △) · %d s",
+  "ov_ready": "Sono pronto · %d s",
+  "ready_sent": "Sei pronto. L'host lo vede.",
+  "ov_leave_again": "Premi di nuovo ✕ per uscire dal gioco",
+  "err_slow": "Troppo presto: riprova tra un minuto.",
+  "err_nobody": "Ancora nessuno nella tua stanza.",
+  "err_ready_running": "Un controllo pronti è già in corso.",
+  "err_not_own": "Questa richiesta non arriva dal tuo dispositivo.",
+  "host_said_no": "PS5Upload non l'ha fatto (%s)."
 }

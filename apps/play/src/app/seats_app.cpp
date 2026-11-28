@@ -67,7 +67,10 @@ void App::seats_frame(std::uint64_t now) noexcept
         for (int i = 0; i < platform::kLocalPads && place < 0; ++i)
             if (seat_user_[i] < 0)
                 place = i;
-        if (place < 0 || !gv.token[0])
+        // The group is proven by a player of this PS5 still in: the first player's token, or once
+        // they left (`release`, their token is done) another seat's.
+        const char *group = seats::group_token(seats_, gv.token, released_);
+        if (place < 0 || !group[0])
         {
             seats_.left(p.user);
             continue;
@@ -86,7 +89,7 @@ void App::seats_frame(std::uint64_t now) noexcept
         JoinExtras x;
         x.remember = false;
         x.no_media = true;
-        std::snprintf(x.group, sizeof x.group, "%s", gv.token);
+        std::snprintf(x.group, sizeof x.group, "%s", group);
         std::snprintf(x.device, sizeof x.device, "%s", device_);
         std::snprintf(x.via, sizeof x.via, "%s", "group");
         std::snprintf(x.path, sizeof x.path, "%s", last_extras_.path);

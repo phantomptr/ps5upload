@@ -501,5 +501,20 @@
   "chat_too_long": "這句話太長了（最多 140 個字元）。",
   "voice_ptt_only": "這個房間只能按鍵說話：按住 Create。",
   "home_host_auto": "用 %s 上的 PS5Upload，在這台 PS5 上當房主",
-  "pair_grant_failed": "透過助手配對沒有成功。請改為顯示代碼。"
+  "pair_grant_failed": "透過助手配對沒有成功。請改為顯示代碼。",
+  "hint_its_me": "是我",
+  "ask_own": "%s · 你自己的裝置",
+  "ready_check": "準備確認",
+  "ready_running": "準備好了嗎？%d 人已準備 · %d 秒",
+  "ready_all": "大家都準備好了",
+  "ready_yes": "已準備",
+  "ready_banner": "準備好了嗎？在房間選單裡回答（按住 OPTIONS + TOUCHPAD，再按 △） · %d 秒",
+  "ov_ready": "我準備好了 · %d 秒",
+  "ready_sent": "你已準備好，房主看得到。",
+  "ov_leave_again": "再按一次 ✕ 離開遊戲",
+  "err_slow": "太快了：一分鐘後再試。",
+  "err_nobody": "你的房間裡還沒有人。",
+  "err_ready_running": "準備確認已經在進行中。",
+  "err_not_own": "這個請求不是來自你自己的裝置。",
+  "host_said_no": "PS5Upload 沒有執行這個操作（%s）。"
 }

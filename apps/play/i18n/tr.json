@@ -501,5 +501,20 @@
   "chat_too_long": "Bu satır çok uzun (en fazla 140 karakter).",
   "voice_ptt_only": "Bu odada yalnızca bas-konuş: Create'i basılı tut.",
   "home_host_auto": "Bu PS5'ten ev sahibi ol, PS5Upload: %s",
-  "pair_grant_failed": "Yardımcı üzerinden eşleştirme olmadı. Bunun yerine bir kod göster."
+  "pair_grant_failed": "Yardımcı üzerinden eşleştirme olmadı. Bunun yerine bir kod göster.",
+  "hint_its_me": "Benim",
+  "ask_own": "%s · kendi cihazın",
+  "ready_check": "Hazır kontrolü",
+  "ready_running": "Hazır mısınız? %d hazır · %d sn",
+  "ready_all": "Herkes hazır",
+  "ready_yes": "Hazır",
+  "ready_banner": "Hazır mısınız? Oda menüsünden yanıt ver (OPTIONS + TOUCHPAD'i basılı tut, sonra △) · %d sn",
+  "ov_ready": "Hazırım · %d sn",
+  "ready_sent": "Hazırsın. Ev sahibi bunu görüyor.",
+  "ov_leave_again": "Oyundan çıkmak için ✕'e tekrar bas",
+  "err_slow": "Çok erken: bir dakika sonra tekrar dene.",
+  "err_nobody": "Odanda henüz kimse yok.",
+  "err_ready_running": "Bir hazır kontrolü zaten sürüyor.",
+  "err_not_own": "Bu istek kendi cihazından değil.",
+  "host_said_no": "PS5Upload bunu yapmadı (%s)."
 }

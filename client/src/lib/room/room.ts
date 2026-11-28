@@ -60,6 +60,8 @@ export interface ReadyCheck {
   leftS: number;
   /** Players who said ready. */
   ready: number[];
+  /** Everyone asked said ready (shown for a moment before the check ends). */
+  all: boolean;
 }
 
 export interface RoomInfo {
@@ -215,7 +217,14 @@ export function readRoom(v: unknown): RoomInfo {
     },
     // The engine keeps it in preview_shows.check (join_room.rs PreviewShows).
     checkBefore: o.check_before === true || ps?.check === true,
-    ready: rd && num(rd.left_s) != null ? { leftS: num(rd.left_s)!, ready: Array.isArray(rd.ready) ? rd.ready.filter((x): x is number => typeof x === "number") : [] } : null,
+    ready:
+      rd && num(rd.left_s) != null
+        ? {
+            leftS: num(rd.left_s)!,
+            ready: Array.isArray(rd.ready) ? rd.ready.filter((x): x is number => typeof x === "number") : [],
+            all: rd.all === true,
+          }
+        : null,
     watchers: Math.max(0, Math.min(2, num(o.watchers) ?? 2)),
     lang: str(o.lang),
     region: readRegion(o.region),
@@ -299,6 +308,9 @@ export interface RoomAsk {
   rttHint: number | null;
   /** Several controllers from one PS5 asking once (integration P2). */
   group: number | null;
+  /** From the host's own device (this computer, or a PS5 whose PS5Upload Play is paired here):
+   *  "It's me" lets it in as Player 1. */
+  own: boolean;
 }
 
 export function readRoomAsk(a: Record<string, unknown>): RoomAsk {
@@ -310,6 +322,7 @@ export function readRoomAsk(a: Record<string, unknown>): RoomAsk {
     // Another controller of a PS5 already in: `players` names everyone from that PS5 (with the one
     // asking); `group` is the first player's id, not a count.
     group: Array.isArray(a.players) && a.players.length > 1 ? a.players.length : null,
+    own: a.own === true,
   };
 }
 
@@ -441,6 +454,8 @@ export const roomApi = {
   ready: (addr: string) => post("/api/join/ready", { addr, start: true }),
   /** Let everyone from one PS5 in at once (a group ask). */
   allowGroup: (addr: string, id: number) => post("/api/join/decide", { addr, id, allow: "group" }),
+  /** An ask from the host's own device: in as Player 1 (the stream's controller). */
+  itsMe: (addr: string, id: number) => post("/api/join/decide", { addr, id, allow: "me" }),
 };
 
 /** One of the host's recent players (GET /api/join/history; never in bug reports). */

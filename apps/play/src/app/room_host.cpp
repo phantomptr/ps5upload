@@ -175,6 +175,8 @@ int App::host_rows(const CompanionView &v, Row *rows, int cap) const noexcept
         }
         for (int i = 0; i < d.n_guests; ++i)
             add(Row::guest, d.guests[i].id, d.guests[i].player);
+        if (d.room.known && d.n_guests)
+            add(Row::room_ready);
         if (d.room.known)
         {
             add(Row::room_vis);
@@ -317,8 +319,14 @@ void App::input_host(std::uint32_t p) noexcept
             ok(host_->decide(r.id, false));
         if (p & pad::kTriangle)
             for (int k = 0; k < d.n_asks; ++k)
-                if (d.asks[k].id == r.id && d.asks[k].group_size > 1)
-                    ok(host_->allow_group(r.id));
+                if (d.asks[k].id == r.id)
+                {
+                    // the host's own device: "It's me" puts it on Player 1 (the stream's controller)
+                    if (d.asks[k].own)
+                        ok(host_->its_me(r.id));
+                    else if (d.asks[k].group_size > 1)
+                        ok(host_->allow_group(r.id));
+                }
         break;
     case Row::open:
         if (cross)
@@ -490,6 +498,18 @@ void App::input_host(std::uint32_t p) noexcept
     case Row::room_name:
         if (cross)
             open_keyboard(Kb::room_name, tr(S::kb_title_room), d.room.name, 32, false);
+        break;
+    case Row::room_ready:
+        if (cross)
+        {
+            // one at a time, at most one a minute (the engine says why it didn't start one)
+            if (d.room.ready_left_s >= 0)
+            {
+                platform::blip(platform::Blip::bad);
+                break;
+            }
+            ok(host_->ready_check());
+        }
         break;
     case Row::sw_block:
         if (change)
@@ -684,13 +704,14 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
     const CompanionDoc &d = v.doc;
     const char *name = d.engine_name[0] ? d.engine_name : engine_name_[0] ? engine_name_ : addr_;
     c.text(Font::small, kLeft, kTop + 66, name, col::muted);
-    // the tabs, top right: L1 [ My room | Remote Play | This PS5 ] R1
+    // the tabs, top right: L1 [ My room | Remote Play | This PS5 ] R1 (top left in a right-to-left
+    // language, where the title sits on the right)
     {
         const S tabs[] = {S::tab_room, S::tab_rp, S::tab_ps5};
         int tw = 0;
         for (const S t : tabs)
             tw += Canvas::text_width(Font::body, tr(t)) + 48;
-        int x = ui::kW - 140 - tw - 120;
+        int x = ui::i18n::right_to_left() ? kLeft : ui::kW - 140 - tw - 120;
         x += c.button(Canvas::Glyph::l1, x, kTop + 2, 40) + 12;
         for (int i = 0; i < 3; ++i)
         {
@@ -878,7 +899,9 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
                 {
                     const auto &a = d.asks[k];
                     const char *who = a.name[0] ? a.name : tr(S::host_friend);
-                    if (a.group_size > 1)
+                    if (a.own)
+                        std::snprintf(title, sizeof title, tr(S::ask_own), who);
+                    else if (a.group_size > 1)
                         std::snprintf(title, sizeof title, tr(S::ask_group), who, a.group_size);
                     else if (a.via[0] || a.tag[0])
                         std::snprintf(title, sizeof title, tr(S::ask_from), who, a.tag[0] ? a.tag : "-", src_text(a.via));
@@ -911,7 +934,8 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
                 if (g->from_rooms)
                     o += std::snprintf(title + o, sizeof title - static_cast<std::size_t>(o), " · %s", tr(S::pl_from_rooms));
                 if (g->muted_voice)
-                    std::snprintf(title + o, sizeof title - static_cast<std::size_t>(o), " · %s", tr(S::ov_muted));
+                    o += std::snprintf(title + o, sizeof title - static_cast<std::size_t>(o), " · %s", tr(S::ov_muted));
+
                 bars = g->tier[0] ? rooms::bars_of(g->tier) : g->rtt_ms >= 0 ? rooms::bars_for_ms(g->rtt_ms) : -1;
                 vbuf[0] = 0;
                 if (g->rtt_ms >= 0)
@@ -919,6 +943,14 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
                     char way[64];
                     route_ui::guest_line(g->route, "", way, sizeof way);
                     std::snprintf(vbuf, sizeof vbuf, "%d ms%s%s", g->rtt_ms, way[0] ? " · " : "", way);
+                    value = vbuf;
+                }
+                // said ready in the ready check shown now: first thing on the right
+                if (g->ready && d.room.ready_left_s >= 0)
+                {
+                    char rv[96];
+                    std::snprintf(rv, sizeof rv, "✓ %s%s%s", tr(S::ready_yes), vbuf[0] ? " · " : "", vbuf);
+                    std::snprintf(vbuf, sizeof vbuf, "%s", rv);
                     value = vbuf;
                 }
             }
@@ -980,6 +1012,16 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
             std::snprintf(title, sizeof title, "%s", tr(S::set_room_name));
             value = d.room.name;
             break;
+        case Row::room_ready:
+            std::snprintf(title, sizeof title, "%s", tr(S::ready_check));
+            if (d.room.ready_left_s >= 0 && d.room.ready_all)
+                value = tr(S::ready_all);
+            else if (d.room.ready_left_s >= 0)
+            {
+                std::snprintf(vbuf, sizeof vbuf, tr(S::ready_running), d.room.ready_n, d.room.ready_left_s);
+                value = vbuf;
+            }
+            break;
         case Row::sw_block:
             std::snprintf(title, sizeof title, "%s", tr(S::host_sw_block));
             value = tr(d.block_system_buttons ? S::on : S::off);
@@ -1016,13 +1058,16 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
             y += row_h;
             continue;
         }
-        draw_row(c, kLeft, y, row_w, row_h - 10, s, title, nullptr, value);
+        const bool with_bars = r.kind == Row::guest && bars >= 0;
+        draw_row(c, kLeft, y, row_w, row_h - 10, s, title, nullptr, value, with_bars ? 80 : 0);
         if (r.kind == Row::ask)
             c.circle(kLeft + 14, y + (row_h - 10) / 2, 7, col::warn);
-        if (r.kind == Row::guest && bars >= 0)
+        if (with_bars)
         {
+            // beside the value: left of it, or right of it in a right-to-left language
             const int vw = value ? Canvas::text_width(Font::body, value) : 0;
-            draw_bars(c, kLeft + row_w - 32 - vw - 70, y + (row_h - 10) / 2 - 16, bars, false);
+            const int bx = ui::i18n::right_to_left() ? kLeft + 32 + vw + 14 : kLeft + row_w - 32 - vw - 70;
+            draw_bars(c, bx, y + (row_h - 10) / 2 - 16, bars, false);
         }
         y += row_h;
     }
@@ -1074,12 +1119,13 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
     const Row *r = n ? &rows[sel_] : nullptr;
     if (r && r->kind == Row::ask)
     {
-        bool group = false;
+        bool group = false, own = false;
         for (int k = 0; k < d.n_asks; ++k)
-            group = group || (d.asks[k].id == r->id && d.asks[k].group_size > 1);
+            if (d.asks[k].id == r->id)
+                own = d.asks[k].own, group = !own && d.asks[k].group_size > 1;
         const int g[] = {G_CROSS, G_SQUARE, G_TRIANGLE, G_CIRCLE};
-        const S l[] = {S::hint_allow, S::hint_deny, S::hint_allow_all, S::hint_back};
-        if (group)
+        const S l[] = {S::hint_allow, S::hint_deny, own ? S::hint_its_me : S::hint_allow_all, S::hint_back};
+        if (group || own)
             draw_hints(c, g, l, 4);
         else
         {
@@ -1097,11 +1143,30 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
     else
     {
         const int g[] = {G_CROSS, G_L1, G_CIRCLE};
-        const S l[] = {r && r->kind >= Row::sw_block && r->kind != Row::close && r->kind != Row::new_code ? S::hint_change
-                                                                                                           : S::hint_choose,
+        const S l[] = {r && r->kind >= Row::sw_block && r->kind != Row::close && r->kind != Row::new_code &&
+                               r->kind != Row::room_ready
+                           ? S::hint_change
+                           : S::hint_choose,
                        S::hint_tabs, S::hint_back};
         draw_hints(c, g, l, 3);
     }
-    c.text(Font::small, kLeft, 940, tr(S::host_game_note), col::muted);
+    // What PS5Upload refused just now (the last action), else the note about games.
+    if (v.last_error[0] && net::now_us() - v.last_error_us < 6000000)
+    {
+        const char *e = v.last_error;
+        if (!std::strcmp(e, "slow_down"))
+            std::snprintf(buf, sizeof buf, "%s", tr(S::err_slow));
+        else if (!std::strcmp(e, "nobody"))
+            std::snprintf(buf, sizeof buf, "%s", tr(S::err_nobody));
+        else if (!std::strcmp(e, "running"))
+            std::snprintf(buf, sizeof buf, "%s", tr(S::err_ready_running));
+        else if (!std::strcmp(e, "not_own"))
+            std::snprintf(buf, sizeof buf, "%s", tr(S::err_not_own));
+        else
+            std::snprintf(buf, sizeof buf, tr(S::host_said_no), e);
+        c.text(Font::small, kLeft, 940, buf, col::warn, 1700);
+    }
+    else
+        c.text(Font::small, kLeft, 940, tr(S::host_game_note), col::muted);
 }
 } // namespace play

@@ -501,5 +501,20 @@
   "chat_too_long": "Die Zeile ist zu lang (höchstens 140 Zeichen).",
   "voice_ptt_only": "In diesem Raum nur Push-to-Talk: Create halten.",
   "home_host_auto": "Von dieser PS5 aus hosten mit PS5Upload auf %s",
-  "pair_grant_failed": "Kopplung über den Helfer hat nicht geklappt. Zeig stattdessen einen Code."
+  "pair_grant_failed": "Kopplung über den Helfer hat nicht geklappt. Zeig stattdessen einen Code.",
+  "hint_its_me": "Das bin ich",
+  "ask_own": "%s · dein eigenes Gerät",
+  "ready_check": "Bereitschaftscheck",
+  "ready_running": "Bereit? %d bereit · %d s",
+  "ready_all": "Alle sind bereit",
+  "ready_yes": "Bereit",
+  "ready_banner": "Bereit? Antworte im Raummenü (OPTIONS + TOUCHPAD halten, dann △) · %d s",
+  "ov_ready": "Ich bin bereit · %d s",
+  "ready_sent": "Du bist bereit. Der Host sieht es.",
+  "ov_leave_again": "Noch einmal ✕ drücken, um das Spiel zu verlassen",
+  "err_slow": "Zu früh: in einer Minute noch einmal.",
+  "err_nobody": "Noch niemand in deinem Raum.",
+  "err_ready_running": "Ein Bereitschaftscheck läuft schon.",
+  "err_not_own": "Diese Anfrage kommt nicht von deinem eigenen Gerät.",
+  "host_said_no": "PS5Upload hat das nicht gemacht (%s)."
 }

@@ -158,6 +158,20 @@ bool parse_companion_doc(const char *text, std::size_t len, CompanionDoc &doc) n
             jstr(d, d.get(b, "tag"), r.blocked[r.n_blocked].tag, sizeof r.blocked[0].tag);
             ++r.n_blocked;
         }
+        // The ready check (or null): {left_s, asked: [ids], ready: [ids], all}; each guest's ✓.
+        const int rd = d.get(rm, "ready");
+        if (d.type(rd) == json::Type::object)
+        {
+            r.ready_left_s = static_cast<int>(d.integer(d.get(rd, "left_s")));
+            r.ready_asked = static_cast<int>(d.count(d.get(rd, "asked")));
+            r.ready_all = d.boolean(d.get(rd, "all"));
+            const int ids = d.get(rd, "ready");
+            r.ready_n = static_cast<int>(d.count(ids));
+            for (std::uint32_t i = 0; i < d.count(ids); ++i)
+                for (int k = 0; k < doc.n_guests; ++k)
+                    if (doc.guests[k].id == d.integer(d.item(ids, i)))
+                        doc.guests[k].ready = true;
+        }
     }
     jstr(d, d.get(ses, "user"), doc.stream_user, sizeof doc.stream_user);
     jstr(d, d.get(con, "owner"), doc.console_owner, sizeof doc.console_owner);
@@ -383,14 +397,18 @@ void Companion::handle(const char *t, std::size_t n) noexcept
         {
             pthread_mutex_lock(&lock_);
             jstr(d, d.get(0, "error"), view_.last_error, sizeof view_.last_error);
+            view_.last_error_us = net::now_us();
             pthread_mutex_unlock(&lock_);
+            log("companion: PS5Upload said no: %s", view_.last_error);
         }
     }
     else if ((v = d.get(0, "error")) >= 0)
     {
         pthread_mutex_lock(&lock_);
         jstr(d, v, view_.last_error, sizeof view_.last_error);
+        view_.last_error_us = net::now_us();
         pthread_mutex_unlock(&lock_);
+        log("companion: PS5Upload said no: %s", view_.last_error);
     }
 }
 

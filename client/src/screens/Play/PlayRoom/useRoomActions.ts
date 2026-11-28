@@ -74,6 +74,7 @@ export function useRoomActions(addr: string, onState: (s: JoinHostState) => void
     comms: (m: { chat?: "off" | "quick" | "on"; voice?: "off" | "ptt" | "open"; start_muted?: boolean }) => roomApi.comms(addr, m).then(after),
     ready: () => roomApi.ready(addr).then(after),
     allowGroup: (id: number) => roomApi.allowGroup(addr, id).then(after),
+    itsMe: (id: number) => roomApi.itsMe(addr, id).then(after),
   };
 }
 

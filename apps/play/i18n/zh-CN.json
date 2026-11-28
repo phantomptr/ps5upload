@@ -501,5 +501,20 @@
   "chat_too_long": "这句话太长了（最多 140 个字符）。",
   "voice_ptt_only": "这个房间只能按键说话：按住 Create。",
   "home_host_auto": "用 %s 上的 PS5Upload，在这台 PS5 上当房主",
-  "pair_grant_failed": "通过助手配对没有成功。请改为显示代码。"
+  "pair_grant_failed": "通过助手配对没有成功。请改为显示代码。",
+  "hint_its_me": "是我",
+  "ask_own": "%s · 你自己的设备",
+  "ready_check": "准备确认",
+  "ready_running": "准备好了吗？%d 人已准备 · %d 秒",
+  "ready_all": "大家都准备好了",
+  "ready_yes": "已准备",
+  "ready_banner": "准备好了吗？在房间菜单里回答（按住 OPTIONS + TOUCHPAD，再按 △） · %d 秒",
+  "ov_ready": "我准备好了 · %d 秒",
+  "ready_sent": "你已准备好，房主能看到。",
+  "ov_leave_again": "再按一次 ✕ 离开游戏",
+  "err_slow": "太快了：一分钟后再试。",
+  "err_nobody": "你的房间里还没有人。",
+  "err_ready_running": "准备确认已经在进行中。",
+  "err_not_own": "这个请求不是来自你自己的设备。",
+  "host_said_no": "PS5Upload 没有执行这个操作（%s）。"
 }

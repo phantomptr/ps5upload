@@ -1075,7 +1075,9 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
         if (ch.room_menu && screen_ == Screen::playing)
         {
             ov_open_ = !ov_open_;
-            ov_sel_ = 0;
+            // the host's ready check waiting for this player: "I'm ready" first
+            ov_sel_ = ready_pending(guest_view().room) ? kOvReady : 0;
+            ov_leave_until_ = 0;
             if (ov_open_)
             {
                 guest_->chat_read();
@@ -1267,7 +1269,7 @@ void App::draw_hints(Canvas &c, const int *glyphs, const S *labels, int n, int y
 }
 
 void App::draw_row(Canvas &c, int x, int y, int w, int h, bool sel, const char *title, const char *sub,
-                   const char *value) noexcept
+                   const char *value, int reserve) noexcept
 {
     c.round_rect(x, y, w, h, 18, sel ? col::panel_hi : col::panel, sel ? 245 : 200);
     if (sel)
@@ -1277,8 +1279,9 @@ void App::draw_row(Canvas &c, int x, int y, int w, int h, bool sel, const char *
     const int vw = value ? Canvas::text_width(Font::body, value) : 0;
     // A right-to-left language mirrors the row: the value on the left, the words on the right.
     const bool rtl = ui::i18n::right_to_left();
-    const int box = w - 64 - (vw ? vw + 40 : 0);
-    const int tx = rtl && vw ? x + 32 + vw + 40 : x + 32;
+    const int side = (vw ? vw + 40 : 0) + reserve;
+    const int box = w - 64 - side;
+    const int tx = rtl && side ? x + 32 + side : x + 32;
     c.text(Font::body, tx, ty, title, col::text, box);
     if (sub && *sub)
         c.text(Font::small, tx, y + h / 2 + 8, sub, col::muted, box);
