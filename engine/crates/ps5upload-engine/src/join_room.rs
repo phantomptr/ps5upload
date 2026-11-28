@@ -844,9 +844,11 @@ impl Via {
         self == Via::Rooms
     }
 
-    /// This way in needs the room password when one is set.
+    /// This way in needs the room password when one is set. Not an invite (a personal
+    /// invitation), and not Play again: its friend pass is the proof (the host let them in before),
+    /// and a sealed knock carries one secret.
     pub(crate) fn needs_password(self) -> bool {
-        matches!(self, Via::Again | Via::Nearby | Via::Friends | Via::Rooms)
+        matches!(self, Via::Nearby | Via::Friends | Via::Rooms)
     }
 }
 
@@ -1021,7 +1023,7 @@ pub(crate) enum Listed {
     Off,
     Listing,
     /// Known to the hub until (unix seconds).
-    Listed(u64),
+    Until(u64),
     /// Not listed, and why (`internet_off`, `hub`, `name`, `busy`, `limit`, `old_hub`, `locked`,
     /// `host_away`, …).
     Not(String),
@@ -1032,7 +1034,7 @@ impl Listed {
         match self {
             Listed::Off => json!({"state": "off", "why": null}),
             Listed::Listing => json!({"state": "listing", "why": null}),
-            Listed::Listed(u) => json!({"state": "listed", "until_unix": u, "why": null}),
+            Listed::Until(u) => json!({"state": "listed", "until_unix": u, "why": null}),
             Listed::Not(w) => json!({"state": "not_listed", "why": w}),
         }
     }
@@ -1156,7 +1158,7 @@ pub(crate) fn preview(p: &PreviewIn) -> Value {
             "name": p.host_name,
             "tag": p.host_tag,
             "ver": env!("CARGO_PKG_VERSION"),
-            "playing_for_min": show.time.then(|| p.open_for.as_secs() / 60),
+            "playing_for_min": show.time.then_some(p.open_for.as_secs() / 60),
         },
         "room": {
             "name": p.cfg.name_for(&p.host_name),

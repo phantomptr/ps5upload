@@ -71,7 +71,7 @@ Every operation in the document carries `x-ps5upload.access`:
 | `loopback` | Most routes. This computer and the `PS5UPLOAD_ALLOW_IP` addresses. |
 | `strict-local` | Also tagged `strict-local`. Remote Play start, stop, frame, input, passcode, keyboard, microphone, the live feed, virtual keyboard and mouse. This computer alone, unless `PS5UPLOAD_ALLOW_AUTOMATION=1`. |
 | `host-checked` | Play Together's and Go live's host routes. This computer, addressed by a loopback name or one in `PS5UPLOAD_ALLOW_HOST`, and the `PS5UPLOAD_ALLOW_IP` addresses. |
-| `lan-open` | `/pkg-host/*` (package bytes for the console), `/pad`, `/api/pad/ws`, `/join`, `/api/join/ws`, `/api/join/signal`, `/api/join/bridge`, `/api/play/app`, `/share`, `/api/share/ws` (a phone or a friend, which check their own key or invite; a Share serves only what the sender allowed; PS5Upload Play on the TV gets only "the engine is there" until it is paired; the bridge joins a friend's internet room for PS5Upload Play through the hub in the settings only, checked against the link's fingerprint). |
+| `lan-open` | `/pkg-host/*` (package bytes for the console), `/pad`, `/api/pad/ws`, `/join`, `/api/join/ws`, `/api/join/preview`, `/api/join/signal`, `/api/join/bridge`, `/api/play/app`, `/share`, `/api/share/ws` (a phone or a friend, which check their own key or invite; a Share serves only what the sender allowed; PS5Upload Play on the TV gets only "the engine is there" until it is paired; the bridge joins a friend's internet room for PS5Upload Play through the hub in the settings only, checked against the link's fingerprint). |
 | `mcp` | `/mcp`. Like `loopback`, and a browser may reach it only from this computer. |
 
 Two routes are left out of the document and refused by the MCP tools, because they hand out the
@@ -491,6 +491,92 @@ carried over), and `GET /api/share/receive/{id}/data/{item}` reads the small dat
 
 Transfers show in `GET /api/activity` (kinds `share` and `receive`), and each change is an event
 named `share` on `GET /api/events`. Read through MCP, `/api/share` leaves the links out.
+
+## Play Rooms
+
+Play Together's session for one console is the **room**. It starts Private (invite only, as
+before) and can be made Friends (people you've played with see it's open) or Public (a card in
+Rooms on the hub). Changing who can see a room never removes anyone, and invite links keep working.
+
+**Host routes** (this computer, or a peer `PS5UPLOAD_ALLOW_IP` admits):
+
+- `GET /api/join?addr=` adds `room`: `{name, name_custom, visibility, size, password (true when one
+  is set; never the password), approval: {friends, password, household}, lock, chat, voice,
+  start_muted, watchers, lang, region, nearby, preview_shows, public_ok, game, listed: {state, why},
+  blocked: [{name, tag, at_unix, always}], many_wrong_passwords, open_for_s, host_tag, lobby,
+  proto, caps}`. Each guest adds `came` (`invite`, `again`, `nearby`, `friends`, `rooms`), `tag`
+  (their device's 4 characters), `from_rooms`, `proto`, `caps`; each ask adds `came`, `tag`,
+  `password_ok`, `from_rooms`. `listed.state` is `off`, `listing`, `listed` (`until_unix`) or
+  `not_listed` with `why`: `internet_off`, `hub`, `name`, `busy`, `limit`, `old_hub`, `off`,
+  `locked`, `host_away`, `blocked`, `old`.
+- `POST /api/join/room {addr, name?, visibility?, size? (2-4, you count), password? ("" removes),
+  approval?, chat?, voice?, start_muted?, watchers?, lang?, region?, nearby?, preview?, lock?, game?
+  ({title, id} or null), public_ok?}` → the state. 409 `name` (with `why`), `public_needs_anywhere`,
+  `size_below_players` (with `in`), `password_short` (4 characters at least), `password_long`;
+  400 `bad`. Removing the password turns "the password lets people in without asking" off.
+- `POST /api/join/kick {addr, player, block?: "room" | "always"}`: removes a player; `room` keeps
+  them out of this room (by device, address and hub id), `always` keeps their device out on this
+  computer too. They hear `{"bye": "removed"}` (older pages `kicked`), never that they are blocked.
+- `POST /api/join/unblock {addr?, tag}` → `{ok}`.
+- `POST /api/join/seat {addr, player, to}`: `to` 2-4 moves them to another pad, `1` gives them
+  Player 1 (needs "Friends may get Player 1", never for someone from Rooms), `"back"` takes Player
+  1 back. 409 `not_free`, `stranger`, `no_stream_seat`, `no_guest`, `not_on_seat`, `failed`.
+- `POST /api/join/close {addr, confirm_friends?}`: with friends in, 409 `friends_playing` (their
+  names) unless confirmed (see Friends playing); the answer lists who left in `left`.
+- `GET /api/join/rooms?<the hub's /rooms query>` (the Rooms list), `?status=<lobby ids>` (friends
+  lookup), `?preview=<lobby id>` (Details through the hub): the hub in the settings, cached a few
+  seconds. A hub's 429 comes back with `Retry-After`, and further asks wait it out here.
+- Mutes and chat/voice: see Play Rooms chat and voice; `POST /api/join/room` hands the room's chat
+  and voice modes over too.
+
+**Who may ask** (every way is checked by this engine): locked rooms answer `locked` to everyone;
+Rooms knocks need Public, Friends knocks Friends or Public, Nearby knocks "Show on this network";
+a set password is needed by every way but your own invite; people you've played with (a friend pass)
+get in without asking unless the host turns that off; "the password lets people in without asking"
+and "PS5s of this household" are opt-in. Asks waiting don't count against the room size (four wait
+at most, one per device). Blocked people hear `denied`. Refusals on the guest socket:
+`{"stage": "refused", "why": …}` with `denied`, `full` (`allowed`, `in`), `locked`, `password`
+(`tries_left`), `locked_out` (`wait_s`; 5 wrong passwords per address or hub id in 10 minutes),
+`host_away` (no host page for 5 minutes), `not_listed`, `old`, `name_taken` (`suggest`),
+`already_asking`, `expired` (a link this room gave out before), `code` (a wrong typed code).
+
+**Guest hello** gains `device` (16 random bytes, base64url: the tag and blocks), `proto` (2),
+`caps`, and for a knock from the home network or Tailscale `knock: {via, password?}`. Names are
+unique in a room (case, spaces and look-alikes ignored); an older page that gives a taken name plays
+as the suggestion. `joined` adds `lobby` (the room's lobby id for friends), `proto` and `caps`; the
+status every second adds `room: {name, size, players, you: {rtt_ms, tier}, chat, voice, locked,
+playing_for_min, proto, caps}`. People from the public list never get Player 1 or the host's own
+profile, and PS & Create are always blocked for them once playing.
+
+**Preview** (`GET /api/join/preview`, reachable like `/api/join/ws`, also on the Tailscale guest
+port): what the host chose to show (players with seat, kind, tier and round trip; stream codec,
+bitrate, HDR; session time; approval; language, region), never an address, a way, or a guest's
+tag. One per address every 10 s and 30 a minute in all (429 `slow_down` with `Retry-After`); 404
+`{"why": "no_room"}`.
+
+**The lobby** (Friends/Public rooms, and Play again over the internet): a second hub room made from
+the room's own secret. The engine publishes the card (with the hub's proof of work), renews it,
+withdraws it when the room turns Private, locks, or the host's device is away, answers the hub's
+relayed previews, and runs knocks before any WebRTC: `{"knock": {via, name, device?, proto?, caps?,
+client?, remember?}}` → `{"knock": "challenge", c, pk}` when a password or friend pass is needed →
+`{"knock": "sealed", blob}` (P-256 ECDH + HKDF-SHA256 + AES-128-GCM; format in
+`room_seal.rs`) → `{"knock": "wait"}` / `{"knock": "no", why, …}` / `{"knock": "ok", token, friend?,
+lobby}`. Only an approved guest's offer reaches WebRTC; on its data channel it says
+`{"hello": {"resume": token}}`.
+
+**PS5Upload Play** (`/api/play/app`, paired): the status's `room` carries the room (chat and voice
+as modes and counts, never lines); intents `room {set: {…}}`, `kick {player, block?}`, `mute
+{player | all, voice?, chat?}`, `seat {player, to}`, `unblock {tag}`, and `close {confirm_friends}`
+(with friends in, without it: `friends_playing`).
+
+**On the console**: while a room is open the engine tells the helper about it (`play.room`, every
+change and every 30 s; `{room: null}` when it closes) for Minion and PS5Upload Play.
+
+**Limits that leave people alone**: the guest socket, the route probe, the preview, the bridge,
+PS5Upload Play's socket and the LAN discovery probe take per-client token buckets (an IPv4 address
+or IPv6 /64) with a burst well above what a person does; past one the answer is 429 with
+`Retry-After`; only a client that keeps going for 30 s after being told is blocked for 2 minutes,
+doubling up to 30. This computer is never limited.
 
 ## Play Rooms chat and voice
 

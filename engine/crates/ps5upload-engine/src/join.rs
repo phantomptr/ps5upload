@@ -2357,9 +2357,23 @@ impl Party {
 pub(crate) fn diag_summary() -> serde_json::Value {
     let now = Instant::now();
     let parties: Vec<_> = with_parties(|m| m.values().map(|p| p.diag(now)).collect());
+    let mut s = serde_json::to_value(settings()).unwrap_or_default();
+    // A bug report holds no field named like a secret: the approval switch (never a password
+    // itself) goes by another name here, and whether a password is set is said plainly.
+    if let Some(a) = s
+        .pointer_mut("/room/approval")
+        .and_then(|a| a.as_object_mut())
+    {
+        if let Some(v) = a.remove("password") {
+            a.insert("pw_lets_in".into(), v);
+        }
+    }
+    if let Some(r) = s.get_mut("room").and_then(|r| r.as_object_mut()) {
+        r.insert("pw_set".into(), crate::join_room::has_password().into());
+    }
     serde_json::json!({
         "parties": parties,
-        "settings": settings(),
+        "settings": s,
         // Play Rooms chat and voice: counts only (join_comms.rs).
         "comms": crate::join_comms::diag(),
     })
@@ -3377,6 +3391,33 @@ async fn read_hello<S: GuestSocket>(socket: &mut S) -> Option<Hello> {
     }
 }
 
+/// The guest's `{"knock": "sealed", "blob"}` after a challenge (None: anything else, or nothing in
+/// time).
+async fn read_sealed<S: GuestSocket>(socket: &mut S) -> Option<String> {
+    let deadline = tokio::time::sleep(HELLO_WAIT);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => return None,
+            m = socket.recv() => match m {
+                Some(Ok(Message::Text(t))) => {
+                    let v: serde_json::Value = serde_json::from_str(t.as_str()).ok()?;
+                    if v.get("knock").and_then(|k| k.as_str()) != Some("sealed") {
+                        return None;
+                    }
+                    return v
+                        .get("blob")
+                        .and_then(|b| b.as_str())
+                        .filter(|b| b.len() <= crate::room_seal::BLOB_MAX * 2)
+                        .map(str::to_string);
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
+                _ => {}
+            },
+        }
+    }
+}
+
 /// Waits for the socket to close (or anything that ends it), for selects that only need that.
 async fn closed<S: GuestSocket>(socket: &mut S) {
     loop {
@@ -3467,7 +3508,43 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             cid: socket.hub_cid(),
         },
     };
-    let knock_password = hello.knock_field("password");
+    let mut knock_password = hello.knock_field("password");
+    // A knock that needs the room password and didn't say it: the password sealed to the room
+    // key (PS5Upload Play, the secure page), `{"knock": "challenge", "c", "pk"}` → `{"knock":
+    // "sealed", "blob"}` (room_seal.rs; no hub id on this socket).
+    let knock_via = hello
+        .knock_field("via")
+        .and_then(|v| crate::join_room::Via::from_word(&v));
+    if knock_password.is_none()
+        && !socket.knock_only()
+        && knock_via.is_some_and(|v| v.needs_password())
+        && crate::join_room::has_password()
+    {
+        let Some(c) = crate::room_seal::challenge() else {
+            let _ = socket.send(refused("closed")).await;
+            return;
+        };
+        let pk = crate::join_room::with_secrets(|s| s.key.public()).unwrap_or_default();
+        if socket
+            .send(say(
+                serde_json::json!({"knock": "challenge", "c": c, "pk": pk}),
+            ))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        match read_sealed(&mut socket).await {
+            Some(blob) => {
+                knock_password = crate::join_room::with_secrets(|s| s.key.open(&blob, "", &c))
+                    .flatten()
+                    .map(|x| x.secret)
+                    // A blob that doesn't open counts as a wrong password.
+                    .or_else(|| Some("\u{0}".to_string()));
+            }
+            None => return,
+        }
+    }
     let t0 = Instant::now();
     let sock = GUEST_SOCKETS.fetch_add(1, Ordering::Relaxed);
     // What the guest came with, never the credential itself.

@@ -379,7 +379,7 @@ async fn session(
                         card.live = true;
                         card.creating = false;
                         let until = v.get("until").and_then(Value::as_u64).unwrap_or(0);
-                        crate::join::room_api::set_listed(Listed::Listed(until));
+                        crate::join::room_api::set_listed(Listed::Until(until));
                     }
                     "ad_refused" => {
                         card.creating = false;
@@ -756,12 +756,12 @@ fn start_knock(
         "remember": r.get("remember").and_then(Value::as_bool).unwrap_or(false),
         "knock": {"via": via},
     });
-    if let Some(s) = sealed {
-        if let Some(pw) = s.pw {
-            hello["knock"]["password"] = pw.into();
-        }
-        if let Some(pass) = s.pass {
-            hello["again"] = pass.into();
+    // The one sealed secret: the friend pass for Play again, else the room password.
+    if let Some(sl) = sealed.filter(|x| !x.secret.is_empty()) {
+        if via == "again" {
+            hello["again"] = sl.secret.into();
+        } else {
+            hello["knock"]["password"] = sl.secret.into();
         }
     }
     if via == "again" && hello.get("again").is_none() {

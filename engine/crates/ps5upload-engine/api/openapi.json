@@ -28030,28 +28030,6 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/Error"
-                    },
-                    {
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "type": "object"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Conflict"
-          },
           "500": {
             "$ref": "#/components/responses/Error",
             "description": "Engine error"
@@ -33342,7 +33320,29 @@
             "description": "Switches to a WebSocket."
           },
           "429": {
-            "$ref": "#/components/responses/Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "retry_s": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "why": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
             "description": "Too many requests"
           },
           "default": {

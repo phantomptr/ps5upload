@@ -210,13 +210,49 @@ async fn knocks_passwords_blocks() {
     .await;
     assert_eq!(code, StatusCode::OK, "{v}");
     assert_eq!(v["room"]["password"], true);
-    // No password, a wrong one (tries left), the right one (the host decides).
+    // No password said: a challenge, answered sealed to the room key (a wrong one: tries left);
+    // then the right one in the clear (the home network), and the host decides.
     let mut g = guest(&url, knock(None, "rooms", "devJo-0000000001")).await;
-    let v = next(&mut g).await;
-    assert_eq!((&v["why"], &v["tries_left"]), (&"password".into(), &serde_json::Value::Null));
-    let mut g = guest(&url, knock(Some("nope"), "rooms", "devJo-0000000001")).await;
+    let c = next(&mut g).await;
+    assert_eq!(c["knock"], "challenge", "{c}");
+    let blob = crate::room_seal::seal(
+        c["pk"].as_str().unwrap(),
+        "",
+        c["c"].as_str().unwrap(),
+        "nope",
+    )
+    .unwrap();
+    g.send(TMsg::Text(
+        serde_json::json!({"knock": "sealed", "blob": blob}).to_string().into(),
+    ))
+    .await
+    .unwrap();
     let v = next(&mut g).await;
     assert_eq!((&v["why"], &v["tries_left"]), (&"password".into(), &4.into()), "{v}");
+    let mut g = guest(&url, knock(Some("nope"), "rooms", "devJo-0000000001")).await;
+    let v = next(&mut g).await;
+    assert_eq!((&v["why"], &v["tries_left"]), (&"password".into(), &3.into()), "{v}");
+    // Sealed right: asking (then given up, so the plain one below asks again).
+    let mut g = guest(&url, knock(None, "rooms", "devJo-0000000001")).await;
+    let c = next(&mut g).await;
+    let blob = crate::room_seal::seal(
+        c["pk"].as_str().unwrap(),
+        "",
+        c["c"].as_str().unwrap(),
+        "couch42",
+    )
+    .unwrap();
+    g.send(TMsg::Text(
+        serde_json::json!({"knock": "sealed", "blob": blob}).to_string().into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next(&mut g).await["stage"], "asking");
+    drop(g);
+    until("the sealed ask given up", || {
+        with_party(&host_key(console), |p| p.pending.is_empty()).unwrap_or(false)
+    })
+    .await;
     let mut g = guest(&url, knock(Some("couch42"), "rooms", "devJo-0000000001")).await;
     assert_eq!(next(&mut g).await["stage"], "asking");
     let s = host_state(console).await;
@@ -441,7 +477,7 @@ async fn the_lobby_lists_the_room_and_runs_a_sealed_knock() {
     assert!(listed, "the card reached the hub");
     until("listed", || {
         with_party(&host_key(console), |p| {
-            matches!(p.room.listed, jr::Listed::Listed(_))
+            matches!(p.room.listed, jr::Listed::Until(_))
         })
         .unwrap_or(false)
     })
@@ -483,8 +519,7 @@ async fn the_lobby_lists_the_room_and_runs_a_sealed_knock() {
         c["data"]["pk"].as_str().unwrap(),
         &gid,
         c["data"]["c"].as_str().unwrap(),
-        Some("couch42"),
-        None,
+        "couch42",
     )
     .unwrap();
     ws.send(send(serde_json::json!({"v": 1, "t": "signal", "to": "host",

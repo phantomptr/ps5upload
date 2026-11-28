@@ -11,16 +11,16 @@
 //! * the engine first sends the guest a fresh 16-byte challenge `c` (base64url);
 //! * the guest makes an ephemeral P-256 key pair `E`, takes the ECDH shared secret (the 32-byte
 //!   x coordinate) with `pk`, and derives a 16-byte key with HKDF-SHA256 (salt = the challenge's
-//!   16 bytes, info = `"ps5upload room knock v1"` followed by E's 65-byte public point);
-//! * the plaintext is JSON `{"gid": <the guest's hub id>, "c": <the challenge as sent>, "pw"?:
-//!   <password>, "pass"?: <friend pass>}`;
-//! * `blob` = base64url( E public (65) ‖ nonce (12, random) ‖ AES-128-GCM(key, nonce, plaintext,
-//!   aad = the gid's UTF-8 bytes) ).
+//!   bytes, info = `"ps5upload room knock v1"`);
+//! * the plaintext is JSON `{"secret": <the password, or the friend pass for a Play again knock>,
+//!   "gid": <the guest's hub id; "" on the guest socket>, "challenge": <the challenge as sent>}`;
+//! * `blob` = base64url( 0x01 ‖ E public (65) ‖ nonce (12, random) ‖ AES-128-GCM(key, nonce,
+//!   plaintext) with its 16-byte tag ) — the same as PS5Upload Play's `src/net/seal.cpp`.
 //!
 //! The engine opens a blob only for the challenge it sent that gid, once: a captured blob can't be
 //! replayed to another gid or for another challenge.
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use base64::Engine as _;
 use hmac::Hmac;
@@ -141,49 +141,43 @@ impl RoomKey {
         b64(self.0.public_key().to_sec1_point(false).as_bytes())
     }
 
-    /// Opens a guest's sealed knock for `gid` and the `challenge` sent to it (base64url).
+    /// Opens a guest's sealed knock for `gid` ("" on the guest socket) and the `challenge` sent to
+    /// it (base64url): the secret it carries.
     pub(crate) fn open(&self, blob: &str, gid: &str, challenge: &str) -> Option<Sealed> {
         if blob.len() > BLOB_MAX * 2 {
             return None;
         }
         let raw = unb64(blob)?;
-        if raw.len() < 65 + 12 + 16 {
+        if raw.len() < 1 + 65 + 12 + 16 || raw[0] != 1 {
             return None;
         }
-        let (epk, rest) = raw.split_at(65);
+        let (epk, rest) = raw[1..].split_at(65);
         let (nonce, ct) = rest.split_at(12);
         let their = PublicKey::from_sec1_bytes(epk).ok()?;
         let shared = p256::ecdh::diffie_hellman(self.0.to_nonzero_scalar(), their.as_affine());
-        let key = knock_key(shared.raw_secret_bytes().as_slice(), challenge, epk)?;
+        let key = knock_key(shared.raw_secret_bytes().as_slice(), challenge)?;
         let plain = Aes128Gcm::new_from_slice(&key)
             .ok()?
-            .decrypt(
-                &Nonce::try_from(nonce).ok()?,
-                Payload {
-                    msg: ct,
-                    aad: gid.as_bytes(),
-                },
-            )
+            .decrypt(&Nonce::try_from(nonce).ok()?, ct)
             .ok()?;
         let v: serde_json::Value = serde_json::from_slice(&plain).ok()?;
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
-        if s("gid").as_deref() != Some(gid) || !same_key(&s("c").unwrap_or_default(), challenge) {
+        if s("gid").as_deref() != Some(gid)
+            || !same_key(&s("challenge").unwrap_or_default(), challenge)
+        {
             return None;
         }
         Some(Sealed {
-            pw: s("pw"),
-            pass: s("pass"),
+            secret: s("secret").unwrap_or_default(),
         })
     }
 }
 
-fn knock_key(shared: &[u8], challenge: &str, epk: &[u8]) -> Option<[u8; 16]> {
-    let salt = unb64(challenge).filter(|c| c.len() == 16)?;
-    let mut info = INFO.to_vec();
-    info.extend_from_slice(epk);
+fn knock_key(shared: &[u8], challenge: &str) -> Option<[u8; 16]> {
+    let salt = unb64(challenge).filter(|c| !c.is_empty() && c.len() <= 64)?;
     let mut key = [0u8; 16];
     hkdf::Hkdf::<Sha256>::new(Some(&salt), shared)
-        .expand(&info, &mut key)
+        .expand(INFO, &mut key)
         .ok()?;
     Some(key)
 }
@@ -191,8 +185,8 @@ fn knock_key(shared: &[u8], challenge: &str, epk: &[u8]) -> Option<[u8; 16]> {
 /// What a sealed knock carried.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Sealed {
-    pub pw: Option<String>,
-    pub pass: Option<String>,
+    /// The password, or the friend pass for a Play again knock.
+    pub secret: String,
 }
 
 /// A fresh knock challenge (16 random bytes, base64url).
@@ -200,44 +194,23 @@ pub(crate) fn challenge() -> Option<String> {
     random::<16>().map(|b| b64(&b))
 }
 
-/// What a guest does (the web page and the apps do the same; here for tests and the engine's
-/// own bridge): seals `pw`/`pass` for `gid` to the room key `pk` with `challenge`.
+/// What a guest does (the web page and the apps do the same; here for tests): seals `secret`
+/// for `gid` to the room key `pk` with `challenge`.
 #[cfg(test)]
-pub(crate) fn seal(
-    pk: &str,
-    gid: &str,
-    challenge: &str,
-    pw: Option<&str>,
-    pass: Option<&str>,
-) -> Option<String> {
+pub(crate) fn seal(pk: &str, gid: &str, challenge: &str, secret: &str) -> Option<String> {
     let host = PublicKey::from_sec1_bytes(&unb64(pk)?).ok()?;
     let eph = RoomKey::generate()?;
     let epk = eph.0.public_key().to_sec1_point(false);
     let shared = p256::ecdh::diffie_hellman(eph.0.to_nonzero_scalar(), host.as_affine());
-    let key = knock_key(
-        shared.raw_secret_bytes().as_slice(),
-        challenge,
-        epk.as_bytes(),
-    )?;
-    let mut body = serde_json::json!({"gid": gid, "c": challenge});
-    if let Some(p) = pw {
-        body["pw"] = p.into();
-    }
-    if let Some(p) = pass {
-        body["pass"] = p.into();
-    }
+    let key = knock_key(shared.raw_secret_bytes().as_slice(), challenge)?;
+    let body = serde_json::json!({"secret": secret, "gid": gid, "challenge": challenge});
     let nonce = random::<12>()?;
     let ct = Aes128Gcm::new_from_slice(&key)
         .ok()?
-        .encrypt(
-            &Nonce::from(nonce),
-            Payload {
-                msg: body.to_string().as_bytes(),
-                aad: gid.as_bytes(),
-            },
-        )
+        .encrypt(&Nonce::from(nonce), body.to_string().as_bytes())
         .ok()?;
-    let mut out = epk.as_bytes().to_vec();
+    let mut out = vec![1u8];
+    out.extend_from_slice(epk.as_bytes());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
     Some(b64(&out))
@@ -274,14 +247,17 @@ mod tests {
         let pk = k.public();
         assert_eq!(pk.len(), 87);
         let c = challenge().unwrap();
-        let blob = seal(&pk, "gid1", &c, Some("couch42"), Some("pass1")).unwrap();
+        let blob = seal(&pk, "gid1", &c, "couch42").unwrap();
         assert_eq!(
             k.open(&blob, "gid1", &c),
             Some(Sealed {
-                pw: Some("couch42".into()),
-                pass: Some("pass1".into())
+                secret: "couch42".into()
             })
         );
+        // The guest socket's knocks have no hub id.
+        let lan = seal(&pk, "", &c, "couch42").unwrap();
+        assert!(k.open(&lan, "", &c).is_some());
+        assert!(k.open(&lan, "gid1", &c).is_none());
         // Another gid, another challenge, another key: nothing.
         assert_eq!(k.open(&blob, "gid2", &c), None);
         assert_eq!(k.open(&blob, "gid1", &challenge().unwrap()), None);

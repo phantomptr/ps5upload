@@ -47,6 +47,10 @@ changed for agents:
 - `together_routes` (read-only) explains each friend's connection: the tier lines, what their
   app measured on its way (round trip, jitter, loss), how often it changed way during play, its
   backups, and the checks socket's counts.
+- `together_room` (read-only) shows the Play Room: who can see it, its size, lock, whether a
+  password is set (never the password), why it is or isn't listed in Rooms, how many are blocked,
+  each player's seat, how they came and connection tier, the asks waiting, and chat and voice as
+  modes and counts only. Neither tool ever returns what anyone said in chat.
 
 **Finding and checking consoles.** `tailnet_consoles` lists the PS5Upload consoles on this
 device's Tailscale network (or probes one `addr`): tailnet and home address, whether its helper

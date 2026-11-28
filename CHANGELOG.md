@@ -6,6 +6,17 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Play Rooms**
+- **Your Play Together is now your room.** Keep it Private (only people you invite), make it Friends (people you've played with see it's open) or Public (anyone can find it in Rooms). Changing who can see it never removes anyone, and your invite links keep working.
+- **An optional password** for people who find your room. Five wrong tries and they wait 10 minutes.
+- **You still decide who plays.** People you've played with can get in without asking (you can turn that off); the password can let people in too, if you want.
+- **Host controls:** remove someone (and keep them out of the room, or off this computer), move players between seats, give Player 1 and take it back, lock the room, close it (it asks first while friends are in).
+- **Names are unique in a room.** Two "Sam"s? The second is offered "Sam (2)".
+- **Details before joining:** who's playing, the game, the picture quality and how long it's been going. Never anyone's address.
+- **People from the public list never get your PS5 user,** and PS & Create stay off for them.
+- **Friends keep their controllers** while your stream restarts: nobody picks a user again.
+- Minion and PS5Upload Play show the room the computer is hosting.
+
 **Play Together: friends keep playing**
 - **The app asks before ending friends' game.** While friends are in, stopping Remote Play, putting the PS5 in rest mode, restarting or turning it off, closing or switching the game, and replacing or stopping the helper first ask "Friends are playing on this PS5. Stop anyway?" with their names.
 - **Friends keep playing when your phone sleeps or you close the app.** The game goes on for up to 4 hours without you, then ends as before.

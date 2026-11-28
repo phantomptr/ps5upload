@@ -154,7 +154,12 @@ fn conflict(err: &str, extra: serde_json::Value) -> Response {
 }
 
 /// Applies a room change to the settings (checked first, nothing applied on a refusal).
-pub(crate) fn apply_room(b: &RoomBody) -> Result<(), Response> {
+pub(crate) fn apply_room(b: &RoomBody) -> Result<(), Box<Response>> {
+    apply_room_checked(b).map_err(Box::new)
+}
+
+#[allow(clippy::result_large_err)]
+fn apply_room_checked(b: &RoomBody) -> Result<(), Response> {
     let mut s = settings();
     let mut room = s.room.clone();
     if let Some(n) = &b.name {
@@ -310,7 +315,7 @@ pub async fn room(
     let r = tokio::task::spawn_blocking(move || apply_room(&b)).await;
     match r {
         Ok(Ok(())) => Json(state_json(&addr)).into_response(),
-        Ok(Err(resp)) => resp,
+        Ok(Err(resp)) => *resp,
         Err(_) => bad(StatusCode::INTERNAL_SERVER_ERROR, "failed"),
     }
 }
