@@ -468,12 +468,6 @@ impl Secrets {
         self.pw.is_some()
     }
 
-    pub(crate) fn password_ok(&self, pw: &str) -> bool {
-        self.pw
-            .as_ref()
-            .is_some_and(|h| room_seal::password_ok(h, pw))
-    }
-
     /// The lobby room's id on the hub (made from its secret).
     pub(crate) fn lobby_id(&self) -> String {
         ps5upload_hub::hub::room_for_secret(&self.lobby_secret)
@@ -775,9 +769,11 @@ pub(crate) fn check_password(
     let Some(pw) = given.filter(|p| !p.is_empty()) else {
         return PwCheck::Missing;
     };
-    // Off the lock: PBKDF2 takes a while.
+    // Off the locks: PBKDF2 takes a while, and the room's secrets are read with the parties
+    // locked (every view says whether a password is set), so the hash is checked on a copy.
     drop(g);
-    if with_secrets(|s| s.password_ok(pw)).unwrap_or(false) {
+    let hash = with_secrets(|s| s.pw.clone()).flatten();
+    if hash.is_some_and(|h| room_seal::password_ok(&h, pw)) {
         return PwCheck::Ok;
     }
     PW_TRIES_ALL

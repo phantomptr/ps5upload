@@ -1241,8 +1241,8 @@ pub(crate) struct Meta {
     pub who: crate::join_room::Who,
     /// Many controllers: the guest id of the first player from the same PS5 (the media holder).
     pub group: Option<u64>,
-    /// Many controllers: that first player came from the public Rooms list, so this one is a
-    /// stranger too.
+    /// A stranger though not from Rooms: another controller of a PS5 whose first player came from
+    /// the public Rooms list, or a "friends" knock over the hub (nothing proves it).
     pub group_stranger: bool,
     /// The host's own device ("It's me"): this computer, or a PS5 whose PS5Upload Play is paired
     /// with this engine. Shown on the ask; only such an ask may be answered "It's me" (Player 1).
@@ -1275,6 +1275,11 @@ enum SeatMove {
 }
 
 impl Guest {
+    /// Can be asked "Ready?": connected now, and their page or app knows the ready check.
+    pub(crate) fn can_answer_ready(&self) -> bool {
+        self.conn.is_some() && self.meta.caps.iter().any(|c| c == "ready")
+    }
+
     /// Their connection, as the host's panel and together_status show it: `path` ("lan",
     /// "tailscale", "internet") and `rtt_ms`. An internet guest's is its peer connection's (the
     /// pair ICE selected, with its numbers); a LAN guest's socket says only where it comes from
@@ -3923,23 +3928,20 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
                 }
             }
             Some(e) => {
+                let over_hub = socket.knock_only();
                 meta.via = Some(match &e {
-                    Entry::Nearby => hello
-                        .knock_field("via")
-                        .and_then(|v| crate::join_room::Via::from_word(&v))
-                        .filter(|v| {
-                            matches!(
-                                v,
-                                crate::join_room::Via::Rooms
-                                    | crate::join_room::Via::Friends
-                                    | crate::join_room::Via::Nearby
-                            )
-                        })
-                        .unwrap_or(crate::join_room::Via::Nearby),
+                    Entry::Nearby => knock_way(hello.knock_field("via").as_deref(), over_hub),
                     Entry::Again(_) => crate::join_room::Via::Again,
                     Entry::Group(..) => crate::join_room::Via::Group,
                     Entry::Key(_) | Entry::Code(_) => crate::join_room::Via::Invite,
                 });
+                // "Friends" said over the hub proves nothing (anyone who ever played here, strangers
+                // from Rooms included, holds the lobby id): treated as a stranger for the host's
+                // identity (never Player 1 or the host's profile, PS & Create blocked). Play again
+                // (a friend pass) is the proven way.
+                if over_hub && meta.via == Some(crate::join_room::Via::Friends) {
+                    meta.group_stranger = true;
+                }
                 match ask(
                     &mut socket,
                     e,
@@ -4029,6 +4031,19 @@ fn own_device(client: &ClientInfo, ip: IpAddr) -> bool {
     ip.is_loopback()
         || (client.kind.as_deref() == Some("ps5")
             && crate::play_app::is_paired(&crate::play_app::console_of(ip)))
+}
+
+/// How a knock without an invite came: the word it says when it is one a knock may say, else
+/// Nearby (this home network). A knock over the hub is never from this home network, so it is
+/// never Nearby there (that would open a Private room's Nearby path to anyone with the lobby id).
+fn knock_way(word: Option<&str>, over_hub: bool) -> crate::join_room::Via {
+    use crate::join_room::Via;
+    match word.and_then(Via::from_word) {
+        Some(v @ (Via::Rooms | Via::Friends)) => v,
+        Some(Via::Nearby) | None if !over_hub => Via::Nearby,
+        _ if over_hub => Via::Rooms,
+        _ => Via::Nearby,
+    }
 }
 
 /// The group of the player (still in) whose resume token this is: their console and the group's
@@ -4571,6 +4586,17 @@ async fn ask<S: GuestSocket>(
             proto: meta.proto,
         };
         match crate::join_room::gate(&now_room, &asker) {
+            // The host let every player from that PS5 in: nobody has to answer, so neither the
+            // host being away nor a queue of other asks stops another controller of it (a full
+            // room still does).
+            crate::join_room::Gate::Refuse(crate::join_room::Refusal::HostAway) if group_ok => {
+                Ok(false)
+            }
+            crate::join_room::Gate::Refuse(crate::join_room::Refusal::Full { allowed, in_ })
+                if group_ok && in_ < allowed =>
+            {
+                Ok(false)
+            }
             crate::join_room::Gate::Refuse(r) => Err(r.json()),
             crate::join_room::Gate::LetIn => Ok(false),
             // The host let every player from that PS5 in (`allow: "group"`).
@@ -8867,6 +8893,40 @@ mod tests {
         assert!(!p.group_playing(lead));
     }
 
+    /// The ready check asks only those who can answer: connected, with a page or app that knows
+    /// it (an older one, or a released first player, would keep "Everyone's ready" from coming).
+    #[test]
+    fn only_those_who_can_answer_are_asked_ready() {
+        let mut p = party();
+        let t = Instant::now();
+        let a = admit(&mut p, "A", t);
+        let (tx, _rx) = conn();
+        p.attach(a, 1, tx);
+        assert!(
+            !p.guest_mut(a).unwrap().can_answer_ready(),
+            "no caps: an older page"
+        );
+        p.guest_mut(a).unwrap().meta.caps = vec!["rooms".into(), "ready".into()];
+        assert!(p.guest_mut(a).unwrap().can_answer_ready());
+        p.guest_mut(a).unwrap().conn = None;
+        assert!(!p.guest_mut(a).unwrap().can_answer_ready(), "not connected");
+    }
+
+    /// A knock says how it came; over the hub it is never "nearby" (a Private room's Nearby path
+    /// would open to anyone holding the lobby id), and an unknown word is Rooms there.
+    #[test]
+    fn a_knock_over_the_hub_is_never_nearby() {
+        use crate::join_room::Via;
+        assert_eq!(knock_way(Some("nearby"), false), Via::Nearby);
+        assert_eq!(knock_way(None, false), Via::Nearby);
+        assert_eq!(knock_way(Some("friends"), false), Via::Friends);
+        assert_eq!(knock_way(Some("nearby"), true), Via::Rooms);
+        assert_eq!(knock_way(None, true), Via::Rooms);
+        assert_eq!(knock_way(Some("invite"), true), Via::Rooms);
+        assert_eq!(knock_way(Some("rooms"), true), Via::Rooms);
+        assert_eq!(knock_way(Some("friends"), true), Via::Friends);
+    }
+
     /// The room push a guest gets every second names the room's lobby (null while it has none):
     /// what web and app guests keep for "Alex's room is open" and Rooms › Friends.
     #[test]
@@ -12005,9 +12065,21 @@ mod tests {
         tokio::time::sleep(crate::join_friends::AGAIN_GAP).await;
         let mut sam = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
         assert_eq!(next(&mut sam).await["stage"], "asking");
-        // Straight away again from another socket: too soon.
+        // Straight away again from other sockets: a few are a person (a retry, a double press)...
+        let mut extra = Vec::new();
+        for _ in 1..crate::join_friends::AGAIN_BURST {
+            let mut q = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
+            assert_eq!(next(&mut q).await["stage"], "asking");
+            extra.push(q);
+        }
+        // ...more are too soon.
         let mut quick = guest(&url, serde_json::json!({"hello": {"again": pass}})).await;
         assert_eq!(next(&mut quick).await["why"], "slow_down");
+        drop(extra);
+        until("the extra asks are gone", || {
+            with_party(&host_key(console), |p| p.pending.len()) == Some(1)
+        })
+        .await;
         allow_next(console, false).await;
         assert_eq!(next(&mut sam).await["why"], "denied");
         until("Play Together closed again", || {

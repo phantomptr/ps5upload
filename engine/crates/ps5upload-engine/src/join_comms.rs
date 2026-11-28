@@ -1428,8 +1428,14 @@ pub async fn set_mute(
                 .into_response()
         }
     };
+    let all = matches!(target, Target::All);
     match mute(&b.addr, target, b.voice, b.chat) {
-        Ok(n) => Json(serde_json::json!({"ok": true, "changed": n})).into_response(),
+        Ok(n) => {
+            if let (true, Some(v)) = (all, b.voice) {
+                crate::join::room_api::keep_mute_all(&b.addr, v).await;
+            }
+            Json(serde_json::json!({"ok": true, "changed": n})).into_response()
+        }
         Err(e) => {
             let code = if e == "host" {
                 StatusCode::CONFLICT

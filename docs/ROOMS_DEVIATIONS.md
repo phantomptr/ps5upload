@@ -217,8 +217,14 @@ Checked end to end by `make -C apps/play e2e-engine`: the real engine's routes i
 
 - The parsers that share token buffers (the room push, the chat history) take one reader at a
   time: every controller's socket has its own thread.
-- The app has the `allow: "me"` and `ready` intents (`Companion::its_me`, `ready_check`); the TV
-  screens don't offer them yet (new words in 21 languages): open item.
+- The TV offers them (13.0.0 audit): an ask from the host's own device says so and △ is "It's me"
+  (Player 1); My room has a Ready check row with each player's ✓; the player menu moves seats,
+  gives Player 1 (the owner only) and takes it back. As a guest the app shows the host's "Ready?"
+  over the game and puts "I'm ready" first in the Room menu (it answers for every player of that
+  PS5). PS5Upload's own asks (panel and the prompt over the picture) offer "It's me" too.
+- Many controllers: a new controller after the first player left (`release`) proves its group
+  with another seat's token; the engine finds the group through any player of it
+  (`group_by_token`) and keeps "let all from that PS5 in" on each of them (`allow_group`).
 
 # Play Rooms: where the clients (rooms-ui) differ from the design or assume
 
@@ -275,8 +281,8 @@ those don't spell out, or where they read something two ways.
   `{"name_taken": {"suggest"}}`), and `bye: "removed"`.
 - **Room push to a guest**: `{"room": {name, size, players: [{name, player|seat, host?, you, color?,
   id?}], you {rtt_ms, tier}, host_link?, chat, voice, locked, caps, lobby?, visibility?}}`. `lobby`
-  is what a friend keeps to see "Alex's room is open" later; when the push has none, the knock's
-  `ok.lobby` is not stored yet (open item).
+  is what a friend keeps to see "Alex's room is open" later (the engine's push carries it since
+  the 13.0.0 audit; before, only `joined` had it and the page read the push).
 - **Chat and voice**: exactly `API.md` (notice, comms, voice state with `people`/`you`, chat lines
   with `id`/`x`, `chat_history`, `comms_refused`, `muted`, binary `0x0A` up / `0x0B` down, mic key
   `mic`, `{"flag": sid}`). Lost voice frames are a short gap (the wasm Opus decoder has no
@@ -299,13 +305,17 @@ those don't spell out, or where they read something two ways.
 - **Friends playing** (`together_guard.rs`): one `fetch` wrapper in the app asks once and sends the
   same request again with `X-Confirm-Friends: 1`; the Stop buttons' own question counts for 5 s and
   the Remote Play socket's stop then carries `confirm_friends: true`. Calls the app makes through a
-  Tauri command (not `fetch`) get the 409 as an error, unchanged. The engine update path
-  (`GET /api/engine/update` `friends_playing`) is not asked yet (open item).
+  Tauri command (not `fetch`) get the 409 as an error, unchanged. Installing a desktop update
+  (it quits the app) reads `GET /api/engine/update` `friends_playing` and asks the same way; the
+  web UI's update note says friends are playing.
 - **Closing the desktop window while friends play**: asks; Keep running minimizes the window (the
   safe default), Quit ends their game. Needs `core:window:allow-destroy`.
 - **Rest after uploads** is skipped while friends play on that PS5 (said in a notification).
-- **Host's own mic** (voice from the host page's Remote Play socket, `room_mic`): not built in the
-  client yet. Hosts hear and talk through a phone guest page for now (open item).
+- **Host's own mic** (voice from the host page's Remote Play socket, `room_mic`):
+  `screens/Play/PlayRoom/HostVoice.tsx` (mic, push-to-talk on the backquote key, volumes).
+- **PS5Upload Play pairing**: one click ("Does the TV of <PS5> show K7M-2QX? Yes, pair",
+  `POST /api/play/app/pair_confirm`) and "Is it the same PS5?" for a paired PS5 at a new address
+  (`POST /api/play/app/moved`), before a room starts and inside an open one.
 - **GET /api/support** lives in `engine/.../support_api.rs` (this branch), routed in `lib.rs`, public
   like the guest pages. It reads `client/src/data/{supporters,support}.json`; the Dockerfile copies
   them.

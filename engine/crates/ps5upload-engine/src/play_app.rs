@@ -1507,7 +1507,11 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
             };
             let voice = b["voice"].as_bool().or(b["all"].as_bool());
             let chat = b["chat"].as_bool();
+            let all = matches!(target, crate::join_comms::Target::All);
             crate::join_comms::mute(console, target, voice, chat).map_err(str::to_string)?;
+            if let (true, Some(v)) = (all, voice) {
+                crate::join::room_api::keep_mute_all(console, v).await;
+            }
             Ok(json!({}))
         }
         // Move to Player N, Give Player 1, Take Player 1 back.

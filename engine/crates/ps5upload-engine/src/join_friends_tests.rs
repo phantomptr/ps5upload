@@ -22,7 +22,7 @@ fn room(c: char) -> String {
 }
 
 #[test]
-fn a_pass_asks_again_once_per_gap_and_unknown_ones_are_refused() {
+fn a_pass_asks_a_few_times_per_gap_and_unknown_ones_are_refused() {
     let mut s = Store::open(None);
     let t0 = Instant::now();
     s.issue("a1", "pass-one", "192.168.1.50", "Sam", None, 1_000);
@@ -30,7 +30,11 @@ fn a_pass_asks_again_once_per_gap_and_unknown_ones_are_refused() {
     assert_eq!(k.console, host_key("192.168.1.50"));
     assert_eq!(k.name, "Sam");
     assert_eq!(s.friends[0].last_unix, 1_100);
-    // Again at once: too soon.
+    // A retry at once (Join as "Sam (2)", a double press) is a person: it goes through...
+    for _ in 1..AGAIN_BURST {
+        assert!(s.again("pass-one", None, t0, 1_101).is_ok());
+    }
+    // ...more within the gap is not.
     assert_eq!(
         s.again("pass-one", None, t0, 1_101),
         Err(AgainErr::SlowDown)

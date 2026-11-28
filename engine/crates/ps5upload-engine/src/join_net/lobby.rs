@@ -183,7 +183,11 @@ pub(crate) fn changed() {
     let mut g = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
     match (want, g.as_ref()) {
         (None, Some(_)) => {
-            *g = None; // the task ends with its stop sender
+            let ended = g.take(); // the task ends with its stop sender
+                                  // The parties' lock is taken by set_listed: never while RUNNING is held (a guest's
+                                  // status push reads lobby_id() with the parties locked, the other way round).
+            drop(g);
+            drop(ended);
             crate::join::room_api::set_listed(Listed::Off);
         }
         (Some(url), Some(r)) if r.url == url => r.notify.notify_one(),
@@ -657,16 +661,13 @@ fn on_signal(
                 let _ = sig.send((gid.to_string(), json!({"knock": "no", "why": "busy"})));
                 return;
             }
+            // Over the hub a knock is never from this home network: "nearby" is not taken from
+            // it (it would open a Private room's Nearby path to anyone with the lobby id).
             let via = k
                 .get("via")
                 .and_then(Value::as_str)
                 .and_then(jr::Via::from_word)
-                .filter(|v| {
-                    matches!(
-                        v,
-                        jr::Via::Rooms | jr::Via::Friends | jr::Via::Again | jr::Via::Nearby
-                    )
-                })
+                .filter(|v| matches!(v, jr::Via::Rooms | jr::Via::Friends | jr::Via::Again))
                 .unwrap_or(jr::Via::Rooms);
             let needs = (jr::has_password() && via.needs_password()) || via == jr::Via::Again;
             let mut st = KnockSt {

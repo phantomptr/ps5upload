@@ -171,6 +171,17 @@ pub(crate) fn apply_room(b: &RoomBody) -> Result<(), Box<Response>> {
     apply_room_checked(b).map_err(Box::new)
 }
 
+/// "Mute all" / "Unmute all" also sets "New players start muted" in the room's settings, so a
+/// later room change (lock, unlock, visibility…) hands the same to chat and voice instead of
+/// undoing it.
+pub(crate) async fn keep_mute_all(console: &str, on: bool) {
+    let body = serde_json::json!({"addr": console, "start_muted": on});
+    let Ok(b) = serde_json::from_value::<RoomBody>(body) else {
+        return;
+    };
+    let _ = tokio::task::spawn_blocking(move || apply_room(&b)).await;
+}
+
 #[allow(clippy::result_large_err)]
 fn apply_room_checked(b: &RoomBody) -> Result<(), Response> {
     let mut s = settings();
@@ -458,10 +469,12 @@ pub async fn ready(
 pub(crate) fn ready_start(addr: &str) -> Result<serde_json::Value, &'static str> {
     let now = Instant::now();
     let (v, fx, console) = with_party(&host_key(addr), |p| {
+        // Only those who can answer: connected now, with a page or app that knows the check (an
+        // older one never would, and "Everyone's ready" could never come).
         let players: Vec<u64> = p
             .guests
             .iter()
-            .filter(|g| g.active())
+            .filter(|g| g.active() && g.can_answer_ready())
             .map(|g| g.id)
             .collect();
         p.room.ready_start(players, now)?;
@@ -476,7 +489,7 @@ pub(crate) fn ready_start(addr: &str) -> Result<serde_json::Value, &'static str>
         let fx: Vec<Effect> = p
             .guests
             .iter()
-            .filter(|g| g.active())
+            .filter(|g| g.active() && g.can_answer_ready())
             .filter_map(|g| g.conn.as_ref())
             .map(|c| Effect::Say(c.tx.clone(), Out::Text(ask.clone())))
             .collect();
@@ -724,8 +737,18 @@ pub(crate) async fn move_seat(
             });
             let r = open_slot(&console, to, &token, seat.as_ref()).await;
             let ok = r.is_ok();
+            // Removed or left while the pad was being made: nobody to move, so the new pad goes
+            // again (nothing else would close it) and the old one stays closed.
+            let gone = !with_party(&key, |p| p.guests.iter().any(|g| g.id == id && g.active()))
+                .unwrap_or(false);
+            if gone {
+                if ok {
+                    link::send(&console, link::Cmd::Close { slot: to, token });
+                }
+                return Err("no_guest");
+            }
             let fx = with_party(&key, |p| {
-                let g = p.guest_mut(id)?;
+                let g = p.guest_mut(id).filter(|g| g.active())?;
                 if ok {
                     g.player = to;
                     g.slot_open = true;

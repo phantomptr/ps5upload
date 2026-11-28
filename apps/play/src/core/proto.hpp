@@ -78,7 +78,7 @@ struct HelloExtras
     const char *group = nullptr;
 };
 // The rooms features this app has (the design's 10.5).
-constexpr const char *kRoomFeatures = "\"rooms\",\"knock\",\"sealed\",\"chat\",\"voice\",\"group\",\"ps5app\"";
+constexpr const char *kRoomFeatures = "\"rooms\",\"knock\",\"sealed\",\"chat\",\"voice\",\"ready\",\"group\",\"ps5app\"";
 std::size_t hello_ex(char *out, std::size_t cap, const char *code, const char *resume, const char *name,
                      const ClientCaps &caps, const HelloExtras &extras) noexcept;
 

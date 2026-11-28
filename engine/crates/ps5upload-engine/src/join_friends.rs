@@ -48,6 +48,9 @@ pub(crate) const MAX_FRIENDS: usize = 64;
 pub(crate) const UNUSED_FOR: Duration = Duration::from_secs(180 * 24 * 3600);
 /// One "again" ask per pass this often at most.
 pub(crate) const AGAIN_GAP: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 20 });
+/// Asks one pass may make within [`AGAIN_GAP`] (limits never stop a person: a retry with a
+/// suggested name or a double press goes through).
+pub(crate) const AGAIN_BURST: u8 = 3;
 /// How long the friend's app has to take a sent invite.
 const SEND_WAIT: Duration = Duration::from_secs(10);
 
@@ -75,8 +78,8 @@ struct FriendsFile {
 struct Store {
     path: Option<PathBuf>,
     friends: Vec<Friend>,
-    /// When each pass last asked (by id).
-    asked: std::collections::HashMap<String, Instant>,
+    /// Each pass's asks (by id): when the first of the last [`AGAIN_GAP`] came, and how many.
+    asked: std::collections::HashMap<String, (Instant, u8)>,
 }
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
@@ -307,16 +310,15 @@ impl Store {
         self.prune(t);
         let i = self.find(pass).ok_or(AgainErr::Unknown)?;
         let id = self.friends[i].id.clone();
-        if self
-            .asked
-            .get(&id)
-            .is_some_and(|at| now.saturating_duration_since(*at) < AGAIN_GAP)
-        {
+        // A few asks close together are a person (a retry as "Sam (2)", a double press); more
+        // within the gap are not.
+        self.asked
+            .retain(|_, (at, _)| now.saturating_duration_since(*at) < AGAIN_GAP);
+        let seen = self.asked.entry(id).or_insert((now, 0));
+        if seen.1 >= AGAIN_BURST {
             return Err(AgainErr::SlowDown);
         }
-        self.asked
-            .retain(|_, at| now.saturating_duration_since(*at) < AGAIN_GAP);
-        self.asked.insert(id, now);
+        seen.1 += 1;
         let f = &mut self.friends[i];
         f.last_unix = t;
         if let Some((r, h)) = inbox {
