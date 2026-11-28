@@ -13,8 +13,9 @@ import type {
 } from "../../api/saveSync";
 import { hostOf } from "../../lib/addr";
 
-/** A PS5 save on one side only can't be sent: the game must make a save there first. An
- *  emulator's goes into the same place on the other console. */
+/** A PS5 save on one side only isn't sent by Sync: the game makes a save there first, or the user
+ *  asks for the one-time first copy (`firstCopy`). An emulator's goes into the same place on the
+ *  other console. The side with no save. */
 export function needsFirstStart(row: SyncRow): "a" | "b" | null {
   if (row.kind !== "ps5") return null;
   if (row.status === "only_on_a") return "b";
@@ -212,11 +213,29 @@ export function autoConsole(
   return consoleName(v.side === "a" ? pair.a.host : pair.b.host, profiles);
 }
 
-/** Turning on is offered for a save that can go both ways: not a PS4 save, and a PS5 save only
- *  where both users have one. (The engine checks again, and says why when it refuses.) */
+/** Turning on is offered for every save but a PS4 one. A PS5 save the other user has none of
+ *  waits for the first copy or the game's own first save there. (The engine checks again, and
+ *  says why when it refuses.) */
 export function canTurnOn(row: SyncRow): boolean {
-  if (row.kind === "ps4" || row.reason === "ps4") return false;
-  return needsFirstStart(row) === null;
+  return row.kind !== "ps4" && row.reason !== "ps4";
+}
+
+export type FirstCopyCode = "old_helper" | "no_saved_data" | "no_backup_place";
+
+/** A PS5 save on one side only: the side the one-time first copy goes to, and whether it can be
+ *  made (`code`, else `why`: the engine's words, when not). Null when there is nothing to copy that
+ *  way. */
+export function firstCopyOf(
+  row: SyncRow,
+): { to: "a" | "b"; ok: boolean; why: string | null; code: FirstCopyCode | null } | null {
+  const to = needsFirstStart(row);
+  if (!to || row.reason) return null;
+  return {
+    to,
+    ok: row.first_copy?.ok === true,
+    why: row.first_copy?.why ?? null,
+    code: row.first_copy?.code ?? null,
+  };
 }
 
 /** The side of the pair that is not the console shown: "Keep in step on <console> (<user>)". */

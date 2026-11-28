@@ -8,15 +8,15 @@
  *   be down-levelled and is rejected by the client lint rule.
  * - The PC app's theme tokens (dark, light, peach, OLED, high contrast) come from src/index.css itself (pcTokens),
  *   not a copy, so the page follows the app's colours.
- * - Size budget: the build FAILS over 800 KiB raw or 224 KiB gzip. Ruling R19 raised the gzip
+ * - Size budget: the build FAILS over 800 KiB raw or 228 KiB gzip. Ruling R19 raised the gzip
  *   cap from 150 KiB when all 21 locales were inlined; since then only English is (consoleStrings).
  *   The page is served gzipped, so the gzip cap is the one that matters; the raw cap went from 640 to
  *   768 KiB when the Games, Fan, Processes and Clean up sections landed together (7.1.18). The
  *   gzip cap went from 220 to 224 KiB when the converter's own failure and stage sentences landed
  *   (the page was within 0.1 KiB of 220). The raw cap went from 768 to 784 KiB when Uninstall
  *   learned to delete a game's folder or image (the page was 2.8 KiB over; gzip had room), and from
- *   784 to 800 KiB when Extract learned to delete the archive as it unpacks (0.1 KiB over; gzip had
- *   room).
+ *   784 to 800 KiB when Extract learned to delete the archive as it unpacks and Saves showed save
+ *   sync (13.0.0); the gzip cap went from 224 to 228 KiB with save sync (224.0 gzip).
  * - Strings: every other locale is emitted next to the page as strings/<code>.json (minified, cw_*
  *   keys only); payload/Makefile gzips each into the ELF (build/webui_strings.c) and the helper
  *   serves them at GET /strings/<code>.json. The page fetches them with ?v=<hash of these files>
@@ -40,8 +40,8 @@ import react from "@vitejs/plugin-react";
 import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
-const RAW_BUDGET = 800 * 1024; // 784 until Extract could delete the archive as it unpacks
-const GZIP_BUDGET = 224 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences
+const RAW_BUDGET = 800 * 1024; // 784 until Extract's free-space option and save sync (13.0.0)
+const GZIP_BUDGET = 228 * 1024; // ruling R19 (was 150 KiB), 224 until save sync, 220 until the converter's sentences
 const TOKENS_ID = "virtual:pc-tokens.css";
 
 /** The `{…}` body that starts at `open` (the index of a "{"), braces balanced. */

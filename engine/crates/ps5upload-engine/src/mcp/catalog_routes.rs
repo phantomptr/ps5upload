@@ -800,6 +800,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/save-sync/apply"),
     ("PUT", "/api/save-sync/auto"),
     ("POST", "/api/save-sync/dismiss"),
+    ("POST", "/api/save-sync/first-copy"),
     ("GET", "/api/save-sync/games"),
     ("PUT", "/api/save-sync/pair"),
     ("POST", "/api/save-sync/pair/remove"),

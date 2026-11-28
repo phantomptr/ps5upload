@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { AutoView, SyncGame, SyncPair, SyncRow } from "../../api/saveSync";
-import { autoConsole, autoOf, autoTone, canTurnOn, keptInStep, newCopies, otherSide } from "./saveSync";
+import { autoConsole, autoOf, autoTone, canTurnOn, firstCopyOf, keptInStep, newCopies, otherSide } from "./saveSync";
 import { AutoSyncPanel } from "./SaveSyncAuto";
 
 function row(key: string, status: SyncRow["status"], kind = "ps5", auto: AutoView | null = null): SyncRow {
@@ -84,14 +84,30 @@ describe("save sync: keeping a game in step", () => {
     expect(autoOf(row("PPSA01234", "both_changed", "ps5", known), pair)).toBe(known);
   });
 
-  it("is offered only for saves that can go both ways", () => {
+  it("is offered for every save but a PS4 one", () => {
     expect(canTurnOn(row("A", "in_step"))).toBe(true);
     expect(canTurnOn(row("A", "both_changed"))).toBe(true);
     expect(canTurnOn(row("A", "unavailable", "ps4"))).toBe(false);
-    // A PS5 save the other user has none of yet.
-    expect(canTurnOn(row("A", "only_on_a"))).toBe(false);
+    // A PS5 save the other user has none of yet: it waits for the first copy or their own save.
+    expect(canTurnOn(row("A", "only_on_a"))).toBe(true);
     // An emulator's goes into the same place there.
     expect(canTurnOn(row("A", "only_on_a", "ps2"))).toBe(true);
+  });
+
+  it("offers the first copy of a PS5 save only one side has, with the engine's answer", () => {
+    expect(firstCopyOf(row("A", "only_on_a"))).toEqual({ to: "b", ok: false, why: null, code: null });
+    expect(firstCopyOf({ ...row("A", "only_on_b"), first_copy: { ok: true } })).toEqual({
+      to: "a",
+      ok: true,
+      why: null,
+      code: null,
+    });
+    const old = firstCopyOf({ ...row("A", "only_on_a"), first_copy: { ok: false, why: "too old", code: "old_helper" } });
+    expect([old?.why, old?.code]).toEqual(["too old", "old_helper"]);
+    // Both have it, an emulator's save, or a console away: nothing to copy that way.
+    expect(firstCopyOf(row("A", "a_newer"))).toBeNull();
+    expect(firstCopyOf(row("A", "only_on_a", "ps2"))).toBeNull();
+    expect(firstCopyOf({ ...row("A", "only_on_a"), reason: "offline" })).toBeNull();
   });
 
   it("names the other console from the one shown, and the console a state is about", () => {

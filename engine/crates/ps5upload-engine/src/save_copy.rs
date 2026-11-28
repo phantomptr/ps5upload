@@ -1883,10 +1883,36 @@ pub fn copy_to_console(
     })
 }
 
+/// What a copy to a user with no save of the game yet (save sync's one-time "first copy") would
+/// refuse, read only. The copy itself is [`copy_to_console`]'s, which sends such a save whole and
+/// makes each image theirs (`restore_owned`, the helper's `save.owner`: their account and user
+/// in its param.sfo, its row in their save database; a game shows Continue after it, measured on
+/// FW 13.60, #809). Refused: no place to keep a copy of the save sent, a helper there that can't
+/// change a save's owner, or a user who has never saved any PS5 game there (they have no save
+/// database yet, and making one has never been tried).
+pub fn first_copy_check(to: &dyn Console, to_user: u32) -> Result<(), String> {
+    to.can_back_up()?;
+    if !to.can_make_owner() {
+        return Err(NO_OWNER_HELPER.into());
+    }
+    if !to.user_has_saves(to_user)? {
+        return Err(NO_SAVE_DATABASE.into());
+    }
+    Ok(())
+}
+
+/// [`first_copy_check`]'s words when the helper there is too old.
+pub const NO_OWNER_HELPER: &str =
+    "The PS5Upload helper on that PS5 is too old to make a save another user's. Update it there, then try again.";
+/// [`first_copy_check`]'s words for a user with no saved data at all on that PS5.
+pub const NO_SAVE_DATABASE: &str =
+    "That user has never saved a PS5 game on that PS5, so a save can't be added for them yet. Start any PS5 game once as that user and save, then try again.";
+
 /// What [`copy_to_console`] would refuse before changing anything, for save sync to say up front
 /// (`save_sync_auto`): no place to keep the target's save first, no PS5 save of the game for
-/// `from_user`, none of it for `to_user` yet (save sync never makes someone's first save of a
-/// game), or images the target lacks that this helper can't make theirs (#809). Reads only.
+/// `from_user`, none of it for `to_user` yet (that is the one-time first copy, checked by
+/// [`first_copy_check`]), or images the target lacks that this helper can't make theirs (#809).
+/// Reads only.
 pub fn copy_check(
     from: &dyn Console,
     to: &dyn Console,
