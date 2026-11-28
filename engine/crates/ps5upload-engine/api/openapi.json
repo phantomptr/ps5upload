@@ -583,6 +583,10 @@
               "host"
             ]
           },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
+          },
           "title_id": {
             "type": "string"
           }
@@ -660,6 +664,10 @@
           "app_id": {
             "minimum": 0,
             "type": "integer"
+          },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2223,6 +2231,10 @@
       },
       "CheckBody": {
         "properties": {
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
+          },
           "helper": {
             "description": "The file is a ps5upload helper: sending it stops the helper that runs now.",
             "type": "boolean"
@@ -5167,6 +5179,42 @@
         ],
         "type": "object"
       },
+      "FriendsPlaying": {
+        "description": "The engine's \"friends playing\" guard: friends are in through Play Together on the console, and the request would end their game. Send it again with the header `X-Confirm-Friends: 1`, the query `confirm_friends=1` or `\"confirm_friends\": true` in the body to go ahead.",
+        "properties": {
+          "code": {
+            "const": "friends_playing"
+          },
+          "console": {
+            "description": "The console, as the request named it; null for all of them.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "const": "friends_playing"
+          },
+          "friends": {
+            "description": "The names of the friends in (\"Friend\" for one who gave none).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "message": {
+            "description": "\"Friends are playing on this PS5. Stop anyway?\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "friends",
+          "console",
+          "message"
+        ],
+        "type": "object"
+      },
       "From": {
         "description": "Where a folder backup is kept: the network share, the backup folder here, a PS5 drive.",
         "enum": [
@@ -6086,6 +6134,10 @@
               "console",
               "host"
             ]
+          },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -6104,6 +6156,10 @@
           },
           "check": {
             "description": "Only ask whether the helper would go ahead (nothing mounted in its folders); nothing\nchanges and the helper keeps running. Answers `state: \"ready\"`.",
+            "type": "boolean"
+          },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
             "type": "boolean"
           },
           "keep_backups": {
@@ -10975,6 +11031,10 @@
         "allOf": [
           {
             "properties": {
+              "confirm_friends": {
+                "description": "Replace the helper even though friends are playing through Play Together\n(together_guard.rs).",
+                "type": "boolean"
+              },
               "ps5_addr": {
                 "type": "string",
                 "x-aliases": [
@@ -11500,6 +11560,10 @@
               "console",
               "host"
             ]
+          },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -11561,6 +11625,10 @@
               "console",
               "host"
             ]
+          },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -11951,6 +12019,10 @@
               "console",
               "host"
             ]
+          },
+          "confirm_friends": {
+            "description": "Go ahead even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
           },
           "pid": {
             "type": "integer"
@@ -16019,6 +16091,10 @@
       },
       "StopReq": {
         "properties": {
+          "confirm_friends": {
+            "description": "Stop even though friends are playing through Play Together (together_guard.rs).",
+            "type": "boolean"
+          },
           "host": {
             "type": "string",
             "x-aliases": [
@@ -23915,6 +23991,7 @@
     },
     "/api/engine/update": {
       "get": {
+        "description": "The engine never replaces itself: the desktop app installs its own updates, and a container is\npulled again. An update or restart there ends Remote Play and friends' play, so every answer\nalso says who plays through Play Together now (`friends_playing`: `[{console, friends}]`, empty\nwhen nobody is in), read fresh on each call, for the app to ask \"Friends are playing on this\nPS5. Update anyway?\" first.",
         "responses": {
           "200": {
             "content": {
@@ -23927,6 +24004,24 @@
                     "current": {},
                     "docker": {
                       "type": "boolean"
+                    },
+                    "friends_playing": {
+                      "description": "Who plays through Play Together now, read fresh on each call: an update or restart ends their game, so ask first. Empty when nobody is in.",
+                      "items": {
+                        "properties": {
+                          "console": {
+                            "type": "string"
+                          },
+                          "friends": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "latest": {},
                     "notes": {}
@@ -29318,6 +29413,27 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "`1`: replace the helper even though friends are playing through Play Together.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -29378,8 +29494,21 @@
             "description": "Refused by the engine's address, Origin or Host guards."
           },
           "409": {
-            "$ref": "#/components/responses/Error",
-            "description": "Conflict"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
           },
           "500": {
             "content": {
@@ -29481,13 +29610,37 @@
             "name": "host",
             "required": false
           },
+          "friends_guard": true,
           "response_schema": "literal"
         }
       }
     },
     "/api/payload/send-check": {
       "post": {
-        "description": "`POST /api/payload/send-check {host, helper}`: for a send this engine does not make itself (the\ndesktop app's own socket): 200 once it can go, 409 `{error}` (`pkg_install_busy`, `helper_busy`,\n`loader_busy`) when it should not.",
+        "description": "`POST /api/payload/send-check {host, helper}`: for a send this engine does not make itself (the\ndesktop app's own socket): 200 once it can go, 409 `{error}` (`pkg_install_busy`, `helper_busy`,\n`loader_busy`) when it should not. A helper with friends playing through Play Together: 409\n`friends_playing` unless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -29546,6 +29699,9 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
                       "$ref": "#/components/schemas/Error"
                     },
                     {
@@ -29571,7 +29727,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
           },
           "500": {
             "content": {
@@ -29606,6 +29762,7 @@
         ],
         "x-ps5upload": {
           "access": "loopback",
+          "friends_guard": true,
           "response_schema": "literal"
         }
       }
@@ -31440,6 +31597,30 @@
     },
     "/api/pkg/payload-restore": {
       "post": {
+        "description": "Send the helper this engine carries to the console's loader.\n\nA failed or refused send is 200 with `ok: false`. The one HTTP error besides a bad request:\nwith friends playing through Play Together (the helper runs their controllers), 409\n`friends_playing` unless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -31461,6 +31642,23 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -31487,6 +31685,7 @@
             "name": "ps5_addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "none"
         }
       }
@@ -31999,6 +32198,30 @@
     },
     "/api/play/app/open": {
       "post": {
+        "description": "Open PS5Upload Play on the console.\n\nOpening it replaces the game running now: with friends playing through Play Together, 409\n`friends_playing` unless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -32033,6 +32256,23 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -32042,6 +32282,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Open PS5Upload Play on the console",
         "tags": [
           "play"
         ],
@@ -32056,6 +32297,7 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "literal"
         }
       }
@@ -33802,6 +34044,30 @@
     },
     "/api/ps5/app/launch": {
       "post": {
+        "description": "Launch an installed title on the console.\n\nA launch replaces the game running now: with friends playing through Play Together, 409\n`friends_playing` unless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -33836,6 +34102,23 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -33860,13 +34143,37 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "literal"
         }
       }
     },
     "/api/ps5/app/lifecycle": {
       "post": {
-        "description": "POST /api/ps5/app/lifecycle — suspend / resume / kill a running app.\n\nAdded because the BROWSER build had no way to close a game at all: the\ndesktop app reaches this through a Tauri command that calls core\ndirectly, with no HTTP route behind it, so \"Close game\" simply did not\nexist on the web UI. Same missing-half class as fs_read_preview.",
+        "description": "POST /api/ps5/app/lifecycle — suspend / resume / kill a running app.\n\nAdded because the BROWSER build had no way to close a game at all: the\ndesktop app reaches this through a Tauri command that calls core\ndirectly, with no HTTP route behind it, so \"Close game\" simply did not\nexist on the web UI. Same missing-half class as fs_read_preview.\n\n`kill` and `suspend` with friends playing through Play Together: 409 `friends_playing` unless\nconfirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -33896,6 +34203,23 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -33920,6 +34244,7 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "struct"
         }
       }
@@ -40448,7 +40773,30 @@
     },
     "/api/ps5/helper/stop": {
       "post": {
-        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" (not paired) | \"failed\" (the real error) | \"still_running\" }`\notherwise. 409 `reason: \"stopping\"` while another stop or removal of that console runs.",
+        "description": "POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit\n(`node.shutdown`), refused while this engine runs a job against that console.\n\n200 `{ \"state\": \"stopped\" }` once the helper's port went quiet, or `{ \"state\": \"not_running\" }`\nwhen nothing answered. 409 `{ \"error\", \"reason\": \"busy\" }` while a job runs; 502\n`{ \"error\", \"reason\": \"refused\" (not paired) | \"failed\" (the real error) | \"still_running\" }`\notherwise. 409 `reason: \"stopping\"` while another stop or removal of that console runs.\nWith friends playing through Play Together (the helper runs their controllers): 409\n`friends_playing` unless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -40489,6 +40837,9 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
                       "$ref": "#/components/schemas/Error"
                     },
                     {
@@ -40502,7 +40853,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -40532,6 +40883,7 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "literal"
         }
       }
@@ -40613,6 +40965,29 @@
     "/api/ps5/helper/uninstall": {
       "post": {
         "description": "POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. \"Remove PS5Upload from this\nPS5\": the helper turns Minion off and removes its tile, shows the icons it hid, exits and\ndeletes its own folders on the console (`node.uninstall`). Refused (409) while this engine\nhas a job running against the console (`reason: busy`) or while something is mounted in\nthose folders (`reason: in_use`, `paths`) or while the console itself installs a package,\nconverts a game or extracts an archive (`reason: console_installing` | `console_converting` |\n`console_extracting`); an older helper answers `reason: old_helper` (501).\nCopies of the helper stored in loaders are not touched here: the app removes them first.\nAfter a removal the key pinned for the console is forgotten (`key_forgotten`): its identity\nwent with the folders.",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -40646,6 +41021,9 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
                       "$ref": "#/components/schemas/Error"
                     },
                     {
@@ -40662,7 +41040,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -40696,6 +41074,7 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "json-unknown"
         }
       }
@@ -43135,7 +43514,30 @@
     },
     "/api/ps5/power/control": {
       "post": {
-        "description": "POST /api/ps5/power/control — Body: `{ addr, action }`.",
+        "description": "POST /api/ps5/power/control — Body: `{ addr, action }`. Reboot, shutdown and standby with\nfriends playing through Play Together: 409 `friends_playing` unless confirmed\n(together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -43165,6 +43567,23 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -43189,6 +43608,7 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "struct"
         }
       }
@@ -43761,7 +44181,30 @@
     },
     "/api/ps5/process/kill": {
       "post": {
-        "description": "POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`.",
+        "description": "POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`. With friends playing through\nPlay Together: 409 `friends_playing` unless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -43791,6 +44234,23 @@
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
+          },
           "502": {
             "$ref": "#/components/responses/Error",
             "description": "The console or remote end failed"
@@ -43815,6 +44275,7 @@
             "name": "addr",
             "required": true
           },
+          "friends_guard": true,
           "response_schema": "struct"
         }
       }
@@ -46325,7 +46786,30 @@
     },
     "/api/ps5/rp/stop": {
       "post": {
-        "description": "`POST /api/ps5/rp/stop`.",
+        "description": "`POST /api/ps5/rp/stop`. With friends playing through Play Together: 409 `friends_playing`\nunless confirmed (together_guard.rs).",
+        "parameters": [
+          {
+            "description": "`1` (or `true`): stop even though friends are playing.",
+            "in": "query",
+            "name": "confirm_friends",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "`1`: go ahead even though friends are playing through Play Together. Without it (or `confirm_friends`), the route answers 409 `friends_playing` while anyone is in.",
+            "in": "header",
+            "name": "X-Confirm-Friends",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -46386,6 +46870,9 @@
                 "schema": {
                   "anyOf": [
                     {
+                      "$ref": "#/components/schemas/FriendsPlaying"
+                    },
+                    {
                       "$ref": "#/components/schemas/Error"
                     },
                     {
@@ -46401,7 +46888,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Conflict. `friends_playing`: friends are playing on this PS5 through Play Together and this would end their game; ask, then send it again confirmed."
           },
           "default": {
             "$ref": "#/components/responses/Error",
@@ -46424,6 +46911,7 @@
             "name": "host",
             "required": false
           },
+          "friends_guard": true,
           "response_schema": "literal"
         }
       }

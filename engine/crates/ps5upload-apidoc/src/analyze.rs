@@ -65,6 +65,8 @@ pub struct Analysis {
     pub checks_host: bool,
     /// Calls `local_allowed` somewhere on its way.
     pub checks_peer: bool,
+    /// Calls the engine's "friends playing" guard (`together_guard::check`) on its way.
+    pub friends_guard: bool,
 }
 
 fn generic_args(segment: &syn::PathSegment) -> Vec<&Type> {
@@ -737,6 +739,15 @@ impl<'ast> Visit<'ast> for BodyScan<'_, '_> {
         let expr = Expr::Path(path.clone());
         if let Some(status) = status_of_path(&expr) {
             self.out.statuses.insert(status);
+        }
+        let segments: Vec<String> = path
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
+        if segments.ends_with(&["together_guard".to_string(), "check".to_string()]) {
+            self.out.friends_guard = true;
         }
         match last_name(&expr).as_deref() {
             Some("host_is_local") => self.out.checks_host = true,

@@ -935,8 +935,11 @@ fn restore_refused(r: &crate::helper_send::Refusal) -> serde_json::Value {
     v
 }
 
-/// The one HTTP error besides a bad request: with friends playing through Play Together (the
-/// helper runs their controllers), 409 `friends_playing` unless confirmed (together_guard.rs).
+/// Send the helper this engine carries to the console's loader.
+///
+/// A failed or refused send is 200 with `ok: false`. The one HTTP error besides a bad request:
+/// with friends playing through Play Together (the helper runs their controllers), 409
+/// `friends_playing` unless confirmed (together_guard.rs).
 async fn payload_restore_handler(
     State(state): State<PkgInstallStateHandle>,
     headers: axum::http::HeaderMap,

@@ -3521,6 +3521,8 @@ struct AppLaunchReq {
     confirm_friends: bool,
 }
 
+/// Launch an installed title on the console.
+///
 /// A launch replaces the game running now: with friends playing through Play Together, 409
 /// `friends_playing` unless confirmed (together_guard.rs).
 async fn ps5_app_launch(

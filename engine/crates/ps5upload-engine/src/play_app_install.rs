@@ -1491,7 +1491,9 @@ pub(crate) struct PlayAppOpenBody {
     confirm_friends: bool,
 }
 
-/// Opening the app replaces the game running now: with friends playing through Play Together, 409
+/// Open PS5Upload Play on the console.
+///
+/// Opening it replaces the game running now: with friends playing through Play Together, 409
 /// `friends_playing` unless confirmed (together_guard.rs).
 pub(crate) async fn open(
     headers: axum::http::HeaderMap,

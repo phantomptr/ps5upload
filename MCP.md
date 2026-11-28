@@ -297,6 +297,11 @@ clients let you allow tools one by one, so keep these on "ask".
 | `share_cancel` | Stop a share and its transfers |
 | `api_request` | Anything the API can do |
 
+While friends play through Play Together, `rp_stop`, `power_control`, `games_stop`, `processes_kill`,
+`games_launch`, `payloads_send` (the helper) and `consoles_helper_ensure` fail with `friends_playing`
+and the friends' names. The agent should ask you; it calls again with `confirm_friends: true` only
+when you say go ahead.
+
 Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`, `games_restore`,
 `games_restore_finish`,
 `rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`,

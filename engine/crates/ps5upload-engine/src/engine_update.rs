@@ -61,7 +61,7 @@ fn fetch_latest() -> Result<(String, String), String> {
 /// when nobody is in), read fresh on each call, for the app to ask "Friends are playing on this
 /// PS5. Update anyway?" first.
 pub(crate) async fn check() -> Json<serde_json::Value> {
-    let mut answer = cached_check().await;
+    let Json(mut answer) = cached_check().await;
     answer["friends_playing"] = friends_now();
     Json(answer)
 }
@@ -74,10 +74,10 @@ fn friends_now() -> serde_json::Value {
         .collect()
 }
 
-async fn cached_check() -> serde_json::Value {
+async fn cached_check() -> Json<serde_json::Value> {
     if let Some((at, v)) = CACHE.lock().ok().and_then(|g| g.clone()) {
         if at.elapsed() < CACHE_FOR {
-            return v;
+            return Json(v);
         }
     }
     let current = env!("CARGO_PKG_VERSION");
@@ -94,15 +94,15 @@ async fn cached_check() -> serde_json::Value {
         }),
         // Not cached: the next page load tries again.
         Err(e) => {
-            return serde_json::json!({
+            return Json(serde_json::json!({
                 "current": current, "available": false, "docker": in_container(), "error": e,
-            })
+            }))
         }
     };
     if let Ok(mut g) = CACHE.lock() {
         *g = Some((Instant::now(), body.clone()));
     }
-    body
+    Json(body)
 }
 
 #[cfg(test)]

@@ -6,6 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Play Together: friends keep playing**
+- **The app asks before ending friends' game.** While friends are in, stopping Remote Play, putting the PS5 in rest mode, restarting or turning it off, closing or switching the game, and replacing or stopping the helper first ask "Friends are playing on this PS5. Stop anyway?" with their names.
+- **Friends keep playing when your phone sleeps or you close the app.** The game goes on for up to 4 hours without you, then ends as before.
+
 **Minion queue (#982)**
 - **Queue game copies and installs on the PS5.** In Minion, Install and Copy to the PS5 in the Library, and Add to queue in Files (a package, or anything on a network share), add to a queue that runs one item after another, with Minion closed too. Home shows the queue: what runs now with its speed and time left, then what waits in order, with Remove, Move to top, Pause and Clear finished. A failure doesn't stop the rest; it stays listed with the reason. An install waits while the PS5 installs something else. The queue is kept on the PS5: if the helper restarts during an install, the queue pauses and says so.
 - A game's page shows only its own copy or install, and other games can be copied or installed while one runs. The app lists what waits in the PS5's queue too.

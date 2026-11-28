@@ -41,6 +41,8 @@ pub struct SerdeAttrs {
     pub flatten: bool,
     pub custom_in: bool,
     pub custom_out: bool,
+    /// The `deserialize_with` function, as written.
+    pub deserialize_with: Option<String>,
     pub tag: Option<String>,
     pub content: Option<String>,
     pub untagged: bool,
@@ -107,7 +109,10 @@ pub fn serde_attrs(attrs: &[Attribute]) -> SerdeAttrs {
                     out.custom_in = true;
                     out.custom_out = true;
                 }
-                "deserialize_with" => out.custom_in = true,
+                "deserialize_with" => {
+                    out.custom_in = true;
+                    out.deserialize_with = text;
+                }
                 "serialize_with" => out.custom_out = true,
                 "tag" => out.tag = text,
                 "content" => out.content = text,
@@ -548,7 +553,15 @@ impl<'a> Schemas<'a> {
         };
         let is_option = matches!(&field.ty, Type::Path(p)
             if p.path.segments.last().is_some_and(|s| s.ident == "Option"));
-        let schema = if custom {
+        let confirm = dir == Dir::In
+            && serde
+                .deserialize_with
+                .as_deref()
+                .is_some_and(|f| f.ends_with("together_guard::de_confirm"));
+        let schema = if confirm {
+            // The engine's "friends playing" confirm: `true` (also read: 1, "1", "true", "yes").
+            json!({ "type": "boolean" })
+        } else if custom {
             // Its own (de)serializer: the Rust type says nothing about the JSON.
             opaque(&field.ty)
         } else {

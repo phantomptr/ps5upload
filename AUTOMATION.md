@@ -115,6 +115,10 @@ after a session ends; a start in that time fails with `last_end.code` `busy` and
 right after a stop waits up to 5 s for the old session to go, then starts a new one, or answers
 `409 busy` with `retry_s`. It never joins the session you stopped.
 
+While friends play through Play Together, a stop answers `409 friends_playing` with their names
+until you confirm: add `"confirm_friends": true` (or the header `X-Confirm-Friends: 1`). See
+[Friends playing](API.md#friends-playing).
+
 ### `POST /api/ps5/rp/settings`: change it while it runs
 
 `{"host", "session", "keyframe": true, "replay_s": 30}`. `keyframe` asks the console for one;
