@@ -6,6 +6,20 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Help us test**
+- 13.0.0 brings a lot that runs on the PS5: Play Rooms, PS5Upload Play, Minion's queue, save sync, freeing space while extracting and the USB adapter. They have been tried on only a few consoles, so your reports matter. If something goes wrong, open **Bug Report** in the sidebar, save the zip and post it on GitHub (the "Remote Play, Play Room or PS5Upload Play problem" form asks the useful questions) or on Discord. For a Play Room, make it on the computer or phone that hosts the room.
+- Bug reports now carry the Play Room's state (listed or not, locked, how many are blocked), PS5Upload Play's connection (paired, connected, app version) and the USB adapter's state: counts and states only, never chat, names or addresses.
+
+**Terms, privacy and credits**
+- About › Disclaimer, Minion's About and Rules & responsibility, and PS5Upload Play's new Terms & privacy screen (△ on Rules & responsibility) say plainly: PS5Upload is unofficial and not affiliated with Sony, comes with no warranty, and isn't liable for lost data, damage, bans or account actions; you're responsible for what you install, copy and share; what stays on your devices and what the Play Rooms hub briefly sees; donations are voluntary gifts; and where legal or takedown requests go. The Play Rooms notice adds how to stay safe. Thanks & Support, the USB adapter settings, the first-run screen, the join page and the website say their part too. [DISCLAIMER.md](DISCLAIMER.md) has the full terms.
+- The credits now include everything PS5Upload Play and the tailnet core build on, and PS5Upload Play carries the license texts of the code inside it.
+
+**PS5Upload Play: a PS5 app to play together**
+- **Join a friend's game on your own PS5.** PS5Upload Play runs on the PS5 and plays a friend's Play Room full screen with your own controller: picture, sound, rumble, and chat and voice with the DualSense mic. Several controllers on one PS5 can each be a player.
+- **Find games with no typing:** a friend's room on your network, Play again with people you've played with, rooms your friends opened, the public Rooms list, an invite sent to your PS5, or scan the QR code on the TV with your phone and tap "Play on my PS5". A 6-character code and an address still work.
+- **Host from the couch** on your own PS5: who's asking (let them in or not), who's playing, the invite code and QR code, your room's settings.
+- **Install it from ProsperoStore, or from PS5Upload** (Settings › This PS5, the Play Room screen, or Minion on the PS5), which also updates and removes it; either one can update the other's copy. Thanks & Support, the controls and Rules & responsibility are in its Settings.
+
 **Play Rooms**
 - **Your Play Together is now your room.** Keep it Private (only people you invite), make it Friends (people you've played with see it's open) or Public (anyone can find it in Rooms). Changing who can see it never removes anyone, and your invite links keep working.
 - **An optional password** for people who find your room. Five wrong tries and they wait 10 minutes.
@@ -16,8 +30,11 @@ What's new in ps5upload, written for humans.
 - **People from the public list never get your PS5 user,** and PS & Create stay off for them.
 - **Friends keep their controllers** while your stream restarts: nobody picks a user again.
 - Minion and PS5Upload Play show the room the computer is hosting.
+- **Rooms:** find public rooms and your friends' rooms in Play › Play Room › Rooms, on the website's Rooms page, or in PS5Upload Play, with the game, players, room size, a lock for a password, and a ping before you join. Filter by game, space, language and more.
+- **Chat and voice in the room.** Quick messages and short text (quick messages only in public rooms, unless the host changes it), and voice (push-to-talk in public rooms, open mic allowed in private ones). Your mic is off until you turn it on; the host can mute anyone or turn chat and voice off. Nothing goes through our server and nothing is kept. Before the first chat, voice or public room, each app asks you to accept the room rules.
+- **Each player's ping** and the way they play (Home network, Tailscale or Internet) with a word for how good it is: Excellent, Good, Playable or Poor.
 
-**Play Together: friends keep playing**
+**Play Rooms: friends keep playing**
 - **The app asks before ending friends' game.** While friends are in, stopping Remote Play, putting the PS5 in rest mode, restarting or turning it off, closing or switching the game, and replacing or stopping the helper first ask "Friends are playing on this PS5. Stop anyway?" with their names.
 - **Friends keep playing when your phone sleeps or you close the app.** The game goes on for up to 4 hours without you, then ends as before.
 
@@ -31,6 +48,12 @@ What's new in ps5upload, written for humans.
 - **Faster transfers with a USB 2.5G, 5G or 10G network adapter.** Plug one with a Realtek RTL8156B (2.5G), RTL8157 (5G) or RTL8159 (10G) chip into the PS5 and connect it to your network. PS5Upload starts it by itself and gives it its own address; transfers from your computer go through it whenever your computer can reach it, and through the PS5's own network otherwise, without you doing anything. The PS5's own network setting is never changed.
 - **See whether it's working** in Settings › This PS5 › USB Ethernet adapter (and in Minion's Settings): the chip, the link speed, its address, the data it carried, and whether this computer uses it. A transfer says "Via USB 2.5G adapter" or "Via console network". You can turn it off there, or give it a fixed address for a network without a router handing out addresses.
 - Experimental: not yet tried with an adapter on a PS5. If it stops working, unplug the adapter and plug it back in. It pauses while the PS5 rests and starts again after.
+
+**Controllers**
+- **Stick dead zones per controller (#973).** A stick that moves by itself (drift) gets its own dead zone in Play › Settings › Controls › Controllers › Stick dead zones, with a readout of where the stick rests. It applies in Remote Play, Play Rooms and the phone pad. Thanks, elBarto.
+
+**Thanks & Support everywhere**
+- Minion and PS5Upload Play have the same Thanks & Support page as the app, from one supporter list.
 
 **Minion queue (#982)**
 - **Queue game copies and installs on the PS5.** In Minion, Install and Copy to the PS5 in the Library, and Add to queue in Files (a package, or anything on a network share), add to a queue that runs one item after another, with Minion closed too. Home shows the queue: what runs now with its speed and time left, then what waits in order, with Remove, Move to top, Pause and Clear finished. A failure doesn't stop the rest; it stays listed with the reason. An install waits while the PS5 installs something else. The queue is kept on the PS5: if the helper restarts during an install, the queue pauses and says so.

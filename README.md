@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  PS5Upload gets your games, apps and homebrew onto a jailbroken PS5 quickly and reliably: uploads resume after a dropped connection, installs pick the route that works, and you can browse files, manage the console and run cheats from your computer, phone or browser.
+  PS5Upload gets your games, apps and homebrew onto a jailbroken PS5 quickly and reliably: uploads resume after a dropped connection, installs pick the route that works, and you can browse files, manage the console and run cheats from your computer, phone or browser. Play your PS5 from anywhere, and open a Play Room so friends join your game from a browser, the app or their own PS5 with PS5Upload Play.
 </p>
 
 <p align="center">
@@ -28,7 +28,8 @@
   game archive unpacks, anything else is sent as the file, and you can choose either). Everything runs over
   **AVA1**, one encrypted connection on port 9120. Every file is verified, and an upload
   continues after a dropped connection, a helper restart or rest mode. A job that will not
-  fit is refused up front, counting what is already on the console. Queue, live speed and ETA;
+  fit is refused up front, counting what is already on the console. Queue, live speed, time
+  elapsed and time left (and "Stalled" when nothing moves for 15 seconds) on every transfer;
   pause an upload and resume it later where it stopped, or **Send now** to let another item go
   first.
 - **Upload & Install.** One drop zone takes packages, game folders and dumps, disk images,
@@ -46,7 +47,7 @@
   its real version, a PS4 game's update included), and the games on its drives. Play (or close) an installed game right from its card. Each game's
   page holds everything you can do with it: install, play, mount, add to the home screen, move,
   back up, convert, dump. Organize, de-duplicate and clean up the
-  drives. Replaces PS Game Library.
+  drives.
 - **Convert games (Workshop).** Build an installable package from a decrypted game folder or an
   image, or write a game folder as a game image (`.exfat`, `.ffpkg`, `.ffpfs`, or the smaller
   `.ffpfsc`) that ShadowMount+ mounts. A PS4 game (or a PS4 game merged with its update) can
@@ -59,6 +60,9 @@
   permissions. On a phone, Files keeps one compact bar on top, a long press starts selecting,
   and Copy, Move, Rename and Delete sit in a bar at the bottom.
 - **Save Data.** Automatic backups to a folder (or a server), **Back up now** and **Restore…**;
+  **Save sync** keeps a game's save in step between two PS5s by itself (after you close the game
+  on one, it's copied to the other; if both changed, you choose, and nothing is overwritten
+  without a backup);
   **Copy to…** another user on the same PS5, or a file for a friend or another PS5 that loads
   under their own account; open a save for save editors. PS1 (PSSwanStation), PS2 (Crux2,
   PS5SX2) and Switch (ProsperoEden) emulator saves are backed up and restored too.
@@ -83,16 +87,30 @@
     sound.
   - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
     what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
-    PS5 shows). If you prefer Sony's PS Remote Play app or chiaki-ng, **Accounts** has a PIN for those.
-  - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
-    controller on the PS5, from any browser or the app. Share a QR code, a link or a short
-    code, allow each friend, and they pick Quick Play on the TV. They play with a controller,
-    the keyboard or the on-screen controls on a phone, and hear the game (with Mute). A short
-    drop keeps their place; when you stop Play, they're told at once. Friends anywhere join from
-    an **internet invite** (no Tailscale or VPN needed), and a link opens in the PS5Upload app
-    when they have it. Guests play as the PS5 profile you choose, or the TV asks them. Phone
-    controllers and watch links work over the internet too. A friend can join from a TV with
-    its remote, and on Android TV the app opens on **Join Play Together**.
+    PS5 shows). If you prefer another Remote Play app, **Accounts** has a PIN for it.
+  - **Stick dead zones** per controller (Play › Settings › Controls › Controllers) for a stick
+    that drifts.
+  - **Play Rooms:** open a room for the game you're playing and friends join as Player 2, 3 and
+    4, each with their own controller on the PS5. Keep it **Private** (only people you invite),
+    **Friends** (people you've played with see it's open) or **Public** (anyone finds it in
+    **Rooms**, in the app and on the website), with an optional password; you still decide who
+    plays, and can remove, block, move or lock. Friends join from a link, a QR code, a short code,
+    the Rooms list, **Play again**, or nearby on your Wi-Fi; from any browser (a phone, a TV
+    with its remote, Android TV), the PS5Upload app, or their own PS5 with **PS5Upload Play**.
+    The app picks the best way for each friend (home network, Tailscale or the internet) and
+    shows how good it is. Friends play with a controller, the keyboard or the on-screen controls
+    on a phone, and hear the game (with Mute); a short drop keeps their place, and they play as
+    the PS5 profile you choose or the TV asks them. Rooms have **chat** and **voice** (your mic
+    stays off until you turn it on, push-to-talk in public rooms; the host can mute anyone or turn
+    them off) and pings per player, and the app asks before anything ends friends' game. Phone
+    controllers and watch links work over the internet too. The hub only introduces you: picture,
+    sound, chat and voice go straight between you.
+- **PS5Upload Play** (new in 13.0.0): a native app on the PS5. On a friend's PS5 it joins your Play
+  Room full screen with their own controller (picture, sound, rumble, chat and voice with the
+  DualSense mic), several controllers on one PS5 if they like; on your own PS5 it runs your room
+  from the couch (who's asking, who's playing, the invite QR code). Install it from ProsperoStore,
+  or from PS5Upload (Settings › This PS5, the Play Room screen, or Minion on the PS5), which also
+  updates and removes it. It pairs with PS5Upload by itself when the helper runs.
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
@@ -106,13 +124,21 @@
 - **Bug reports in one place.** Bug Report (always in the sidebar) gathers the app's, the
   engine's and the PS5 helper's logs for the time you pick into one `.zip`, with addresses,
   serials and keys removed, ready to post on GitHub or Discord. **Detailed logs** (Logs tab)
-  record the hard Remote Play and Play Together cases for 24 hours.
+  record the hard Remote Play and Play Room cases for 24 hours. A report carries the Play Room's,
+  PS5Upload Play's and the USB adapter's state as counts, never chat, names or addresses.
 - **Power.** Rest mode, reboot, shut down, and wake over the network (optionally straight
   into your signed-in user).
 - **PS5Upload Minion.** A page the helper serves to the PS5's own browser (a tile on the home
   screen, port 9180), made for the controller: installed games and the games on your network
   shares and drives, save backups, files (SMB shares, archive extraction, package install,
-  payload loading), cheats, fan, processes, clean-up and settings, with no PC nearby.
+  payload loading), cheats, fan, processes, clean-up and settings, with no PC nearby. A **queue**
+  runs game copies and installs one after another, Minion closed too, with speed and time left;
+  extracting can **delete the archive as it unpacks** so a game needs about its own size of free
+  space; and it installs PS5Upload Play, shows your Play Room and has Thanks & Support.
+- **USB Ethernet adapter (experimental).** Plug a USB 2.5G, 5G or 10G adapter (Realtek RTL8156B,
+  RTL8157, RTL8159) into the PS5 and transfers from your computer go through it when they can,
+  through the PS5's own network otherwise. Not yet tried with an adapter on a PS5: use it at your
+  own risk.
 - **Your PS5s on one page.** **Connection** shows each PS5 as a card: online or not, how this
   device reaches it, its helper and firmware. **Add a PS5** scans your home network and your
   Tailscale network, opens an invite, or takes an address. **Invite a device** gives a new phone
@@ -140,7 +166,7 @@
 ## A quick look
 
 <img width="1080" alt="Play: a PS5 game streaming in the app, with the stream's controls on the picture." src="site/assets/shots/play-dark.webp" />
-<img width="1080" alt="Play Together: friends joining a game from a link or a QR code." src="site/assets/shots/together-net-dark.webp" />
+<img width="1080" alt="Play Room: friends joining a game from a link or a QR code." src="site/assets/shots/together-net-dark.webp" />
 <img width="1080" alt="Games: a grid of game covers with their sizes and where they are." src="site/assets/shots/games-dark.webp" />
 
 ## Install
@@ -437,7 +463,7 @@ with **Settings → Engine URL**.
   not a full URL, and the web page is built with it, so a prefix needs its own image build. The
   variables a self-hoster may need are in [engine/README.md](engine/README.md#environment-variables). See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
   proxy authentication, Docker bridge networking, and sub-path hosting.
-- **Play Together through your own name:** the engine can run the invite hub and guest pages
+- **Play Rooms through your own name:** the engine can run the invite hub and guest pages
   itself, published on their own port while the engine stays on the LAN. See
   [SELF_HOSTING.md](SELF_HOSTING.md).
 - **Scripting it:** see [API and AI agents](#api-and-ai-agents) below. [ps5upctl](https://github.com/yuanzhengze/ps5upctl)
@@ -542,6 +568,44 @@ acknowledge and accept that:
 - **Indemnity.** You agree to hold the authors, contributors, and
   distributors harmless from any claim arising out of your use or
   misuse of this software.
+- **Not liable.** The authors, contributors and distributors are not
+  liable for lost data, damage to a console or any other device, a
+  banned or restricted account or console, or any other action a
+  platform takes against you.
+- **What you do with it is up to you.** You're responsible for what you
+  install, copy, share, stream and send with it, using only content you
+  own or have the right to use, and for following the laws where you
+  live and the terms of the platforms you use. PS5Upload manages your
+  own games and backups; it doesn't provide games or help anyone get
+  games they don't own.
+- **Play Rooms, chat and voice.** PS5Upload only provides the tool. Nobody
+  behind it runs, monitors, records or moderates rooms, chat, voice,
+  player names or room names, and it isn't responsible for what users
+  say, share or do. Each user is responsible for their own conduct, and
+  parents and guardians for supervising children. Protect yourself: share
+  no personal details with strangers, keep a room Private or give it a
+  password, mute, hide or block anyone, and leave any room you don't like.
+- **Privacy.** No accounts and no usage data (no telemetry, analytics or
+  tracking). Your games, files, settings and logs stay on your own
+  devices and PS5s. The Play Rooms hub only helps devices connect over the
+  internet: it sees their network addresses and a listed room's card,
+  keeps them in memory only for as long as needed, logs no addresses or
+  names, and never carries chat, voice or video. Details:
+  [DISCLAIMER.md § 9](DISCLAIMER.md#9-privacy) and the
+  [hub's privacy notes](engine/crates/ps5upload-hub/PROTOCOL.md#privacy).
+- **Experimental features** (such as the USB Ethernet adapter) are barely
+  tested and may not work. Use them at your own risk.
+- **Other people's tools and services.** Payloads, cheats, artwork and
+  services the app works with belong to their authors, under their own
+  licences and terms.
+- **Donations are voluntary.** A donation is a gift: it buys nothing,
+  unlocks nothing, creates no obligation and isn't refundable.
+- **Contact.** Legal questions and copyright or takedown requests:
+  phantomptr@gmail.com or a [GitHub issue](https://github.com/phantomptr/ps5upload/issues).
+  Security problems: [SECURITY.md](SECURITY.md).
+
+This section and [DISCLAIMER.md](DISCLAIMER.md) are a plain-language
+summary, not legal advice.
 
 If any of the above is not acceptable to you, do not use this
 software.
@@ -580,9 +644,11 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [ampr-emu-ng](https://github.com/quer3q/ampr-emu-ng) (quer3q) — the emulator that reads zstd packs, fetched from its release and checked by SHA-256, never bundled
 * [ampr_emu](https://github.com/drakmor/ampr_emu) (drakmor) — the LZ4 asset packer is a Rust port of its `ampr_pack.py`, and "Measure how it plays" of `ampr_pack_profile.py`; the index writer follows the format `build_ampr_index.py` writes
 * [playactor](https://github.com/dhleong/playactor) (Daniel Leong) — Remote Play registration (with its key tables) and the control session that wakes a console and signs its user in, ported to Rust in `engine/crates/ps5upload-core/src/rp_regist*.rs` and `rp_session.rs`
-* [ProsperoSunshine](https://github.com/Darkatek7/ProsperoSunshine) (Darkatek7, from ps5-mcp's RemoteEye) — the `/dev/hid` requests that make Play Together's virtual controllers (add, insert, delete, output, and the state block layout), written anew in `payload/src/vpad.c` (GPL-3.0-only, as its source)
+* [ProsperoSunshine](https://github.com/Darkatek7/ProsperoSunshine) (Darkatek7, from ps5-mcp's RemoteEye) — the `/dev/hid` requests that make Play Rooms' virtual controllers (add, insert, delete, output, and the state block layout), written anew in `payload/src/vpad.c` (GPL-3.0-only, as its source)
 * [tom-ps5-usbnet](https://github.com/wujiezero/tom-ps5-usbnet) (wujiezero) — the user-space driver for USB 2.5G/5G/10G Ethernet adapters (Realtek RTL8156B/8157/8159, after Linux's `r8152`), its lwIP setup and connection joining, adapted file by file into the experimental adapter daemon `payload/usbnet/` (GPL-3.0-or-later; [NOTICE](payload/usbnet/NOTICE.md))
 * [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) (Streetpea and the Chiaki authors) — Remote Play streaming: its session, control, Takion, crypto, FEC, video and audio receiving code, ported to Rust in `engine/crates/ps5upload-core/src/rp_stream/`
+* [Tailscale](https://github.com/tailscale/tailscale) (Tailscale Inc & contributors, BSD-3-Clause) and [wireguard-go](https://git.zx2c4.com/wireguard-go) (WireGuard LLC, MIT) — the tailnet core in `tailnet/` (its Noise IK client, control, netmap, DERP, disco and WireGuard handshake) ports their protocol code to C; no Go code is linked ([tailnet/NOTICE](tailnet/NOTICE))
+* PS5Term (its native app boilerplate is by BlackBearReloaded; GPL-3.0-or-later) — PS5Upload Play's native app boilerplate, toolchain and clean-room libc, its tiled framebuffer and pad structures, and its font, asset and translation tools, adapted in `apps/play/` ([apps/play/NOTICE.md](apps/play/NOTICE.md))
 
 **Libraries:**
 * Desktop client: [Tauri](https://tauri.app/), [React](https://react.dev/), [react-router](https://reactrouter.com/), [Zustand](https://github.com/pmndrs/zustand), [lucide-react](https://lucide.dev/) icons, built with [Vite](https://vitejs.dev/) and [Tailwind CSS](https://tailwindcss.com/)
@@ -590,6 +656,9 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * Remote Play sound on devices with no Opus decoder (older Safari and WebKit): [opus-decoder](https://github.com/eshaz/wasm-audio-decoders/tree/main/src/opus-decoder) (MIT, used unmodified from npm), [libopus](https://opus-codec.org/) (BSD-3-Clause) compiled to WebAssembly, loaded only where it is needed
 * Remote Play upscaling: [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT) — **ported**: its EASU and RCAS shaders rewritten as WebGL 2 GLSL in `client/src/lib/rpPicture.ts`
 * Engine: [tokio](https://tokio.rs/), [axum](https://github.com/tokio-rs/axum), [serde](https://serde.rs/), [anyhow](https://github.com/dtolnay/anyhow), [uuid](https://github.com/uuid-rs/uuid), [zip](https://github.com/zip-rs/zip2), and the other crates in the `Cargo.lock` files
+* PS5Upload Play (`apps/play/`): [Opus](https://opus-codec.org/) (Xiph.Org and contributors, BSD-3-Clause) linked into the app; the [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library) (Project Nayuki, MIT) in `apps/play/third_party/qrcodegen`; [BearSSL](https://www.bearssl.org/) (Thomas Pornin, MIT) for the hub's TLS; [JetBrains Mono](https://www.jetbrains.com/lp/mono/) and Noto Sans (SIL OFL 1.1) baked into its font pictures; [PS5 AT9 Converter](https://github.com/BlackBearRevived/ps5-at9-converter) (GPL-3.0-or-later) run at build time to encode its music, not shipped
+* [lwIP](https://savannah.nongnu.org/projects/lwip/) (Adam Dunkels and contributors, BSD-3-Clause) — the TCP/IP stack of the tailnet core and the experimental USB adapter daemon, the `third_party/lwip` submodule
+* [BearSSL](https://www.bearssl.org/) (Thomas Pornin, MIT) — TLS for the tailnet core, the `third_party/bearssl` submodule
 * [UnRAR](https://www.rarlab.com/) (Alexander Roshal) — `.rar` extraction on **desktop and Docker**, compiled from the source the `unrar_sys` crate bundles into its own program, `ps5upload-unrar`, which holds only ps5upload's own code and UnRAR and which the engine runs over pipes (UnRAR is never linked into the engine); used to *extract only*, never to compress.
 
 **Fetched at runtime:**
@@ -607,6 +676,9 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [NeoEnabler](https://github.com/gasb07/NeoEnabler) (gasb07) — the `/dev/mp1` read requests and table layout behind the Hardware screen's GPU and per-core CPU clocks (`payload/src/mp1_clock.c`); only its reads are used, written anew, and we never change clocks
 * [chiaki](https://git.sr.ht/~thestr4ng3r/chiaki) — cross-checked while porting playactor's registration
 * [TMDB](https://www.themoviedb.org/) — cover art in earlier versions (no longer used)
+* The PS5 [VLC port](https://github.com/ZiZc3/VLC) (GPL-2.0-or-later) — the libSceVideodec2 structure layouts and call order PS5Upload Play's decoder follows
+* [shadPS4](https://github.com/shadps4-emu/shadPS4) (GPL-2.0-or-later), renan-marcel's PS5_PayloadSDK pull request #1 and ThatRetiredDude's TokenStation5 pull request #19 — the libSceAudioIn call signatures behind PS5Upload Play's microphone (no code copied)
+* [ProsperoStore](https://github.com/darkxex/ProsperoStore) (darkxex) — how it installs a homebrew app, which PS5Upload follows so either one can update or remove the other's copy of PS5Upload Play
 
 License texts and the notices these projects require are in [`LICENSES/`](LICENSES/).
 
@@ -647,6 +719,17 @@ v3.0, which GPLv3 §13 allows combining with; see [`LICENSES/AGPL-3.0.txt`](LICE
 
 Included third-party code keeps its own license, next to the code or in [`LICENSES/`](LICENSES/);
 see [Credits](#credits).
+
+**Source code.** Every release's complete source (the apps, the engine and its Docker images,
+the PS5 helper and payloads, PS5Upload Play and the hub) is this repository at the release's
+tag. GitHub's "Source code" downloads leave out the three git submodules; get everything with
+`git clone --recursive --branch <tag> https://github.com/phantomptr/ps5upload`. Files the builds
+fetch (the payload SDK, libopus, the Noto fonts, the AT9 converter) are pinned by commit or
+SHA-256 in the build scripts.
+
+**Trademarks.** PlayStation, PS4 and PS5 are trademarks of Sony Interactive Entertainment Inc.
+Other names belong to their owners. They are used only to say what PS5Upload works with;
+PS5Upload is not affiliated with or endorsed by any of them.
 
 ## Author
 

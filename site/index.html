@@ -88,7 +88,8 @@
       </a>
       <nav class="nav" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
         <a href="#consoles" data-i18n="nav.consoles">Your PS5s</a>
-        <a href="#together" data-i18n="nav.together">Play Together</a>
+        <a href="#together" data-i18n="nav.rooms">Play Rooms</a>
+        <a href="rooms/" data-i18n="nav.find_room">Find a room</a>
         <a href="#tailscale" data-i18n="nav.tailscale">Tailscale</a>
         <a href="#share" data-i18n="nav.share">Share</a>
         <a href="#play" data-i18n="nav.play">Play</a>
@@ -123,9 +124,9 @@
         <div class="hero-text">
           <div class="hero-pills">
             <p class="eyebrow" id="hero-version" data-i18n="hero.eyebrow">Free and open source</p>
-            <a class="hero-new" href="#consoles">
-              <span class="hero-new-tag" data-i18n="hero.new_tag122">PS5Upload 12</span>
-              <span data-i18n="hero.new_text122">Play together from anywhere, Tailscale built in, Share, and every PS5 on one page</span>
+            <a class="hero-new" href="#together">
+              <span class="hero-new-tag" data-i18n="hero.new_tag13">PS5Upload 13</span>
+              <span data-i18n="hero.new_text13">Play Rooms, PS5Upload Play, chat and voice</span>
               <span class="hero-new-arrow" aria-hidden="true">→</span>
             </a>
           </div>
@@ -244,20 +245,21 @@
       </details>
     </section>
 
-    <!-- Play Together (11.0; over the internet since 11.6) -->
+    <!-- Play Rooms (13.0; Play Together since 11.0, over the internet since 11.6). The id stays
+         "together" so old links keep working. -->
     <section class="section together" id="together" aria-labelledby="together-title">
       <div class="together-glow" aria-hidden="true"></div>
       <div class="wrap together-head">
-        <p class="kicker" data-i18n="together.kicker3">One link, from anywhere</p>
-        <h2 id="together-title" data-i18n="together.title">Play Together: your friends, on your PS5</h2>
-        <p class="section-lead" data-i18n="together.lead2">Send a link and friends join the game you're playing as Player 2, 3 and 4, each with their own controller, from your Wi-Fi or from anywhere. They need no PS5 and no app: a browser on a phone, tablet or computer will do.</p>
+        <p class="kicker" data-i18n="rooms.kicker">New in 13: one room, from anywhere</p>
+        <h2 id="together-title" data-i18n="rooms.title">Play Rooms: your friends, on your PS5</h2>
+        <p class="section-lead" data-i18n="rooms.lead">Open a room for the game you're playing and friends join as Player 2, 3 and 4, each with their own controller, from your Wi-Fi or from anywhere. They join from a browser, the PS5Upload app or their own PS5, and talk in the room's chat and voice.</p>
       </div>
       <div class="wrap together-stage">
         <figure class="device laptop">
           <div class="screen">
             <picture>
               <source srcset="assets/shots/together-net-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together-net" />
-              <img src="assets/shots/together-net-light.webp" data-i18n-attr="alt:alt.together_net2" alt="The Play Together panel: a QR code and one invite link that works on your Wi-Fi and over the internet, and a friend asking to join with Allow." width="1600" height="1000" loading="lazy" data-theme-img="together-net" />
+              <img src="assets/shots/together-net-light.webp" data-i18n-attr="alt:alt.room_invite" alt="Inviting friends: a QR code, an invite link and a short code, and a friend asking to join." width="1600" height="1000" loading="lazy" data-theme-img="together-net" />
             </picture>
           </div>
         </figure>
@@ -271,13 +273,13 @@
         <ol class="together-steps">
           <li class="card">
             <span class="num">1</span>
-            <h3 data-i18n="together.s1.title2">Open Play Together</h3>
-            <p data-i18n="together.s1.text4">In <b>Play</b>, open the <b>Play Together</b> tab, press <b>Start and invite</b>, then share the QR code or the link. The same link works for friends on your Wi-Fi, on Tailscale or anywhere on the internet.</p>
+            <h3 data-i18n="rooms.s1.title">Create a room</h3>
+            <p data-i18n="rooms.s1.text">In <b>Play</b>, open <b>Play Room</b> and press <b>Create a Play Room</b>. It starts the stream and opens your room, with a link, a QR code and a short code to share.</p>
           </li>
           <li class="card">
             <span class="num">2</span>
-            <h3 data-i18n="together.s2.title">Your friend scans or opens it</h3>
-            <p data-i18n="together.s2.text2">The game opens in their browser, in their language, with nothing to install. They type a name, and you press <b>Allow</b> when it pops up over the picture.</p>
+            <h3 data-i18n="rooms.s2.title">Friends join their way</h3>
+            <p data-i18n="rooms.s2.text">From the link, the QR code or the short code, the <b>Rooms</b> list, <b>Play again</b>, or nearby on your Wi-Fi. You see their name and press <b>Let in</b>.</p>
           </li>
           <li class="card">
             <span class="num">3</span>
@@ -286,23 +288,49 @@
           </li>
         </ol>
       </div>
+      <!-- PS5Upload Play (13.0): the native app on the PS5. No screenshots of it yet: cards only. -->
+      <div class="wrap ps5play" id="ps5upload-play">
+        <div class="together-head">
+          <h3 data-i18n="psplay.title">PS5Upload Play: join from a PS5</h3>
+          <p class="section-lead" data-i18n="psplay.lead">A native app on the PS5. A friend with a PS5 joins your room on their own TV, and you can run your own room from the couch.</p>
+        </div>
+        <div class="grid together-more">
+          <div class="card">
+            <span class="ico" aria-hidden="true">🎮</span>
+            <h3 data-i18n="psplay.join.title">On a friend's PS5</h3>
+            <p data-i18n="psplay.join.text">Join a room full screen with your own controller: picture, sound and rumble, the room's chat, and voice with the DualSense mic. Several controllers on one PS5 play as several players.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">🛋️</span>
+            <h3 data-i18n="psplay.host.title">On your own PS5</h3>
+            <p data-i18n="psplay.host.text">Run your room from the couch: see who's asking and let them in, show the invite's QR code, and see who's playing.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">📦</span>
+            <h3 data-i18n="psplay.install.title">Install it your way</h3>
+            <p data-i18n="psplay.install.text">From ProsperoStore, or from PS5Upload: <b>Settings › This PS5</b>, the Play Room screen or Minion, which also update and remove it. With the helper running, it pairs with PS5Upload by itself.</p>
+          </div>
+        </div>
+      </div>
       <details class="fold">
         <summary class="fold-sum"><span class="fold-more" data-i18n="fold.more">Show more</span><span class="fold-less" data-i18n="fold.less">Show less</span></summary>
       <div class="wrap">
         <div class="tour-row together-tab">
           <div class="tour-text">
-            <h3 data-i18n="together.tab.title">Its own tab in Play</h3>
-            <p data-i18n="together.tab.text">Play has three tabs: <b>Play my PS5</b>, <b>Play Together</b> and <b>Join a friend</b>. On Play Together, one press of <b>Start and invite</b> wakes the PS5, starts the stream and shows the invite.</p>
+            <h3 data-i18n="rooms.tab.title">Private, Friends or Public</h3>
+            <p data-i18n="rooms.tab.text">Play has two tabs: <b>Play my PS5</b> and <b>Play Room</b>. In Play Room, <b>Your room</b> is the one you host, <b>Rooms</b> lists the rooms you can join, and <b>Join with a code/link</b> takes an invite. You choose who can find your room:</p>
             <ul class="ticks">
-              <li data-i18n="together.tab.t1b">One invite for everyone: for each friend the app picks your home network, Tailscale or the internet</li>
-              <li data-i18n="together.tab.t2">Guests play as the PS5 profile you pick in Settings › Play Together, or the TV asks them</li>
-              <li data-i18n="together.tab.t3">Already playing? The people button on the Play bar opens the same invite</li>
+              <li data-i18n="rooms.tab.t1">Private: only people you invite</li>
+              <li data-i18n="rooms.tab.t2">Friends: people you've played with see it's open</li>
+              <li data-i18n="rooms.tab.t3">Public: anyone can find it in Rooms, in the app and on this website</li>
+              <li data-i18n="rooms.tab.t4">An optional password for people who find it; after five wrong tries they wait 10 minutes</li>
+              <li data-i18n="rooms.tab.t5">Changing who can see it never removes anyone, and your invite links keep working</li>
             </ul>
           </div>
           <figure class="shot tilt-r">
             <picture>
               <source srcset="assets/shots/together-tab-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="together-tab" />
-              <img src="assets/shots/together-tab-light.webp" data-i18n-attr="alt:alt.together_tab2" alt="Play › Play Together before a stream: the console, a note that invites work from anywhere, and Start and invite." width="1920" height="1200" loading="lazy" data-theme-img="together-tab" />
+              <img src="assets/shots/together-tab-light.webp" data-i18n-attr="alt:alt.room_tab" alt="Play, before a stream: the console, a note that friends can join from anywhere, and the button that starts the stream and invites them." width="1920" height="1200" loading="lazy" data-theme-img="together-tab" />
             </picture>
           </figure>
         </div>
@@ -332,12 +360,12 @@
         <div class="tour-row together-tab">
           <div class="tour-text">
             <h3 data-i18n="together.tv.title">On a TV, with the remote</h3>
-            <p data-i18n="together.tv.text">A friend can join from a TV too. The join page works with a TV remote: the arrows move between buttons and OK presses one, and in the game they play. On Android TV, the app's first screen has a big <b>Join Play Together</b> button.</p>
+            <p data-i18n="rooms.tv.text">A friend can join from a TV too. The join page works with a TV remote: the arrows move between buttons and OK presses one, and in the game they play. On Android TV, the app's first screen has a big <b>Join a Play Room</b> button.</p>
           </div>
           <figure class="shot tilt-r">
             <picture>
               <source srcset="assets/shots/tv-join-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="tv-join" />
-              <img src="assets/shots/tv-join-light.webp" data-i18n-attr="alt:alt.tv_join" alt="PS5Upload on a TV: the first screen, with Join Play Together in focus." width="1920" height="1080" loading="lazy" data-theme-img="tv-join" />
+              <img src="assets/shots/tv-join-light.webp" data-i18n-attr="alt:alt.tv_join2" alt="PS5Upload on a TV: the first screen, with the big button to join a friend's game in focus." width="1920" height="1080" loading="lazy" data-theme-img="tv-join" />
             </picture>
           </figure>
         </div>
@@ -347,17 +375,32 @@
           <div class="card">
             <span class="ico" aria-hidden="true">🌍</span>
             <h3 data-i18n="together.net.title">Friends anywhere, no relay</h3>
-            <p data-i18n="together.net.text2">The link works from anywhere, a phone on mobile data too, and the picture comes as a video stream that holds 60 fps when a few packets go missing. A small server only introduces you: picture, sound and controls go straight between you. On a network that blocks direct connections, Tailscale gets through.</p>
+            <p data-i18n="rooms.net.text">The link works from anywhere, a phone on mobile data too. A small server, the hub, only introduces you: picture, sound, chat and voice never pass through it, they go straight between you. On a network that blocks direct connections, Tailscale gets through.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">📶</span>
+            <h3 data-i18n="rooms.route.title">The best way for each friend</h3>
+            <p data-i18n="rooms.route.text">For each friend the app picks your home network, Tailscale or the internet, and says how good it is: Excellent, Good, Playable or Poor, with each player's ping. Over the internet the picture holds 60 fps when a few packets go missing.</p>
           </div>
           <div class="card">
             <span class="ico" aria-hidden="true">🛡️</span>
-            <h3 data-i18n="together.safe.title">You stay in charge</h3>
-            <p data-i18n="together.safe.text">Nobody plays until you allow them, and you can remove anyone. One switch turns off friends' PS and Create buttons, so a stray press can't pull everyone out of the game.</p>
+            <h3 data-i18n="rooms.safe.title">You decide who plays</h3>
+            <p data-i18n="rooms.safe.text">Nobody plays until you let them in, unless you let people you've played with, or the password, in without asking. Remove someone and keep them out or block them, move players between seats, give Player 1 and take it back, lock the room, and turn off friends' PS and Create buttons.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">💬</span>
+            <h3 data-i18n="rooms.chat.title">Chat and voice</h3>
+            <p data-i18n="rooms.chat.text">Every room has chat and voice. Your mic stays off until you turn it on, public rooms use quick messages and push-to-talk, and you can mute anyone or turn chat and voice off for the whole room.</p>
           </div>
           <div class="card">
             <span class="ico" aria-hidden="true">🔗</span>
             <h3 data-i18n="together.app.title">Links open in the app</h3>
-            <p data-i18n="together.app.text">A friend with PS5Upload is asked whether to open the invite in the app, the way Slack and Zoom links do, or join from <b>Play › Join a friend</b> with the link, the code, a QR scan or <b>Playing nearby</b>.</p>
+            <p data-i18n="rooms.app.text">A friend with PS5Upload is asked whether to open the invite in the app, or joins from <b>Play › Play Room</b> with the link, the code, a QR scan, the <b>Rooms</b> list or <b>Playing nearby</b>.</p>
+          </div>
+          <div class="card">
+            <span class="ico" aria-hidden="true">⏳</span>
+            <h3 data-i18n="rooms.keep.title">Friends keep playing</h3>
+            <p data-i18n="rooms.keep.text">The app asks before anything would end friends' game, such as rest mode or closing the game. If your phone sleeps or you close the app, their game goes on for up to 4 hours.</p>
           </div>
         </div>
       </div>
@@ -420,7 +463,7 @@
           <div class="card">
             <span class="ico" aria-hidden="true">🎟️</span>
             <h3 data-i18n="ts.friends.title">Friends: an internet invite</h3>
-            <p data-i18n="ts.friends.text">A friend doesn't need a Tailscale account. Send them an internet invite from <a href="#together">Play Together</a> and they join from their browser as Player 2 to 4.</p>
+            <p data-i18n="ts.friends.text13">A friend doesn't need a Tailscale account. Invite them to your <a href="#together">Play Room</a> and they join from their browser, the app or their own PS5 as Player 2 to 4.</p>
           </div>
           <div class="card">
             <span class="ico" aria-hidden="true">🧭</span>
@@ -544,7 +587,7 @@
               <li data-i18n="play.together.t1">Phones as controllers, up to four</li>
               <li data-i18n="play.together.t2">Watch party with sound, up to four watchers</li>
               <li data-i18n="play.together.t3">Instant replay, screenshots and clips, saved to your phone's photos</li>
-              <li data-i18n="play.phones.t4">Friends somewhere else? <a href="#together">Play Together</a> gives them their own player from a link</li>
+              <li data-i18n="play.phones.t4b">Friends somewhere else? A <a href="#together">Play Room</a> gives them their own player from a link</li>
             </ul>
           </div>
           <figure class="shot tilt-l">
@@ -765,7 +808,7 @@
         </div>
         <div class="all-grid">
         <details class="all-group" id="all-send">
-          <summary><span class="all-ico" aria-hidden="true">📤</span><span class="all-name" data-i18n="all.g.send">Send &amp; install</span><span class="all-count">18</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">📤</span><span class="all-name" data-i18n="all.g.send">Send &amp; install</span><span class="all-count">20</span></summary>
           <ul>
             <li data-i18n="all.send.1">Send games, apps, folders, disk images and archives at the full speed of your network, every file checked</li>
             <li data-i18n="all.send.2">Uploads pick up where they stopped after a dropped connection, a restart or rest mode</li>
@@ -773,6 +816,7 @@
             <li data-i18n="all.send.4">Unpack .zip, .7z and .rar on the way, or send the archive as it is</li>
             <li data-i18n="all.send.5">Multi-part and password-protected RAR archives, in the desktop apps</li>
             <li data-i18n="all.send.6">A queue with live speed and time left: pause it, reorder it, or send something first</li>
+            <li data-i18n="all.send.19">Every transfer shows its speed, the time so far and the time left, in the app and in Minion, and says "Stalled" when nothing has moved for 15 seconds</li>
             <li data-i18n="all.send.7">The queue carries on by itself after rest mode or a lost connection</li>
             <li data-i18n="all.send.8">Checks for free space before anything is sent</li>
             <li data-i18n="all.send.9">Install PS4 packages and PS5 fake packages (games, updates, add-ons) with the app's own installer</li>
@@ -785,6 +829,7 @@
             <li data-i18n="all.send.16">Keeps your computer awake during transfers and installs</li>
             <li data-i18n="all.send.17">Two ways to play a fake PS5 game: install it (on firmware 11.61 to 13.60 with the latest kstuff, which supports fake packages up to 13.60) or mount the package with Kraken Mount</li>
             <li data-i18n="all.send.18">Change the name a fake package gets on the PS5 before you install it</li>
+            <li data-i18n="all.send.20">Experimental: a USB 2.5G, 5G or 10G network adapter on the PS5 (Realtek RTL8156B, RTL8157 or RTL8159) carries transfers from your computer when it can</li>
           </ul>
         </details>
         <details class="all-group" id="all-games">
@@ -828,11 +873,12 @@
           </ul>
         </details>
         <details class="all-group" id="all-files">
-          <summary><span class="all-ico" aria-hidden="true">📁</span><span class="all-name" data-i18n="all.g.files">Files &amp; servers</span><span class="all-count">12</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">📁</span><span class="all-name" data-i18n="all.g.files">Files &amp; servers</span><span class="all-count">13</span></summary>
           <ul>
             <li data-i18n="all.files.1">Browse the PS5's files like a folder: copy, move, rename, delete and make folders</li>
             <li data-i18n="all.files.2">Download files and folders from the PS5, or a whole folder as a .zip</li>
             <li data-i18n="all.files.3">Unpack archives on the console itself</li>
+            <li data-i18n="all.files.13">Free space while extracting: the archive is deleted as it's unpacked, so a game needs about its own size of free space</li>
             <li data-i18n="all.files.4">Search every drive, and see what takes up space</li>
             <li data-i18n="all.files.5">Games and files from SMB, NFS, FTP, FTPS, SFTP and WebDAV servers</li>
             <li data-i18n="all.files.6">Games on a NAS are scanned where they are and join your library</li>
@@ -845,13 +891,14 @@
           </ul>
         </details>
         <details class="all-group" id="all-saves">
-          <summary><span class="all-ico" aria-hidden="true">💾</span><span class="all-name" data-i18n="all.g.saves">Saves</span><span class="all-count">10</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">💾</span><span class="all-name" data-i18n="all.g.saves">Saves</span><span class="all-count">11</span></summary>
           <ul>
             <li data-i18n="all.saves.1">Back up saves on a schedule or with one press</li>
             <li data-i18n="all.saves.2">Back up to a folder, a network share or a USB drive</li>
             <li data-i18n="all.saves.3">Restore any backup; the current save is kept until the restore has worked</li>
             <li data-i18n="all.saves.4">Copy a save to another user on the same PS5</li>
             <li data-i18n="all.saves.5">Copy a save straight to another PS5</li>
+            <li data-i18n="all.saves.11">Save sync: keep a game's save in step between two PS5s; if both changed, you choose, and the save that gets replaced is backed up first</li>
             <li data-i18n="all.saves.6">Share a save as a file a friend loads under their own account</li>
             <li data-i18n="all.saves.7">Open a save on your computer for a save editor, then write it back</li>
             <li data-i18n="all.saves.8">Move saves over from a PS4</li>
@@ -860,7 +907,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-play">
-          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play">Remote Play &amp; Play Together</span><span class="all-count">28</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">▶️</span><span class="all-name" data-i18n="all.g.play13">Remote Play &amp; Play Rooms</span><span class="all-count">34</span></summary>
           <ul>
             <li data-i18n="all.play.1">Play your PS5 on your computer, phone or tablet, or in a browser</li>
             <li data-i18n="all.play.2">Play wakes the console from rest mode and signs your user in</li>
@@ -876,20 +923,26 @@
             <li data-i18n="all.play.12">Choose which PS5 user to play as, with its passcode when it has one</li>
             <li data-i18n="all.play.13">Phones as controllers, up to four</li>
             <li data-i18n="all.play.14">Watch party: friends watch on their phones, with sound</li>
-            <li data-i18n="all.play.15">Play Together: friends join as Player 2, 3 and 4 from a link, a QR code or a short code</li>
-            <li data-i18n="all.play.16">Internet invites: friends join from anywhere, and the picture goes straight between you</li>
-            <li data-i18n="all.play.17">Friends need no app: a phone browser will do, or the app opens the invite</li>
-            <li data-i18n="all.play.18">Nobody plays until you press Allow; remove anyone, and turn off their PS button</li>
+            <li data-i18n="all.play.15b">Play Rooms: friends join as Player 2, 3 and 4 from a link, a QR code, a short code, the Rooms list, Play again or nearby on your Wi-Fi</li>
+            <li data-i18n="all.play.29">Keep a room Private, Friends or Public, with an optional password; public rooms show in Rooms, in the app and on this website</li>
+            <li data-i18n="all.play.30">Chat and voice in every room: your mic stays off until you turn it on, push-to-talk in public rooms, and you can mute anyone</li>
+            <li data-i18n="all.play.31">Each player's ping, and how good each friend's connection is: Excellent, Good, Playable or Poor</li>
+            <li data-i18n="all.play.16b">Friends join from anywhere: the hub only introduces you, and picture, sound, chat and voice go straight between you</li>
+            <li data-i18n="all.play.17b">Friends need no app: a browser on a phone, computer or TV will do, or they join from the PS5Upload app or their own PS5 with PS5Upload Play</li>
+            <li data-i18n="all.play.18b">You decide who plays: let people in, remove or block them, move players between seats, lock the room, and turn off their PS button</li>
             <li data-i18n="all.play.19">Play on your TV and use the app only to invite friends</li>
             <li data-i18n="all.play.20">A dropped stream or friend reconnects by itself, in the same place</li>
             <li data-i18n="all.play.21">Play from anywhere through your own Tailscale, with no Tailscale app: direct or relayed, with the delay shown</li>
-            <li data-i18n="all.play.22">Play Together has its own tab: Start and invite in one press</li>
+            <li data-i18n="all.play.22b">Play Room has its own tab in Play: Create a Play Room starts the stream and opens your room in one press</li>
             <li data-i18n="all.play.23">Guests play as the PS5 profile you choose, or the TV asks them</li>
             <li data-i18n="all.play.24">Phones as controllers and watchers over the internet too, each one allowed by you</li>
             <li data-i18n="all.play.25">Third-party controllers (8BitDo, Switch Pro, Logitech and more) work right, and Check your controller sets up any other</li>
             <li data-i18n="all.play.26">One invite link for your Wi-Fi, Tailscale and the internet: the app picks the way for each friend</li>
             <li data-i18n="all.play.27">Over the internet the picture is a video stream that holds 60 fps, and the panel shows how each friend is connected</li>
-            <li data-i18n="all.play.28">Friends can join from a TV with its remote; the Android TV app starts with Join Play Together</li>
+            <li data-i18n="all.play.28b">Friends can join from a TV with its remote; the Android TV app starts with Join a Play Room</li>
+            <li data-i18n="all.play.32">The app asks before anything ends friends' game, and their game goes on for up to 4 hours if your phone sleeps or you close the app</li>
+            <li data-i18n="all.play.33">PS5Upload Play, an app on the PS5: a friend joins your room full screen with their own controller, or you run your room from the couch</li>
+            <li data-i18n="all.play.34">Stick dead zones for each controller, for a stick that drifts</li>
           </ul>
         </details>
         <details class="all-group" id="all-connect">
@@ -930,7 +983,7 @@
           </ul>
         </details>
         <details class="all-group" id="all-console">
-          <summary><span class="all-ico" aria-hidden="true">🧰</span><span class="all-name" data-i18n="all.g.console">Console tools</span><span class="all-count">20</span></summary>
+          <summary><span class="all-ico" aria-hidden="true">🧰</span><span class="all-name" data-i18n="all.g.console">Console tools</span><span class="all-count">23</span></summary>
           <ul>
             <li data-i18n="all.console.1">Send payloads from a catalogue, your own GitHub or Gitea projects, or files, with playlists and loading at boot</li>
             <li data-i18n="all.console.2">Keep payloads on the console in Payload Manager, the helper too, to start them with no computer</li>
@@ -951,6 +1004,9 @@
             <li data-i18n="all.console.15">Read and clear the PS5's notifications</li>
             <li data-i18n="all.console.16">A console shell, the kernel log and an audit log, for when something is off</li>
             <li data-i18n="all.console.17">PS5Upload Minion: a page in the PS5's own browser for games, saves, files, payloads and cheats</li>
+            <li data-i18n="all.console.21">Minion's queue copies and installs games one after another on the PS5, with Minion closed too</li>
+            <li data-i18n="all.console.22">Install, update and remove PS5Upload Play from Settings › This PS5, the Play Room screen or Minion</li>
+            <li data-i18n="all.console.23">Thanks &amp; Support in Minion and in PS5Upload Play</li>
             <li data-i18n="all.console.18">Bug Report: the app's, the engine's and the console's logs in one zip, private details removed</li>
           </ul>
         </details>
@@ -1045,14 +1101,14 @@
         <h3 class="guides-title" data-i18n="howto.title">How do I…</h3>
         <div class="guides">
           <details class="guide" open>
-            <summary data-i18n="howto.together.title">Play together with a friend</summary>
+            <summary data-i18n="howto.rooms.title">Play with friends in a Play Room</summary>
             <div>
               <ol>
-                <li data-i18n="howto.together.s1b">Open <b>Play › Play Together</b> and press <b>Start and invite</b>. Already playing? Press the people button on the picture's bar (on a phone, <b>⋯ › Play Together</b>).</li>
-                <li data-i18n="howto.together.s2">Send your friend the link, or let them scan the QR code. Press <b>Allow</b> when their name pops up.</li>
+                <li data-i18n="howto.rooms.s1">Open <b>Play › Play Room</b> and press <b>Create a Play Room</b>. Already playing? Press <b>Play Room</b> on the picture's bar (on a phone, in the <b>⋯</b> menu).</li>
+                <li data-i18n="howto.rooms.s2">Send your friend the link or the short code, or let them scan the QR code. Press <b>Let in</b> when their name pops up.</li>
                 <li data-i18n="howto.together.s3">On the TV, they press PS and pick <b>Quick Play</b> (or their own user), then play.</li>
               </ol>
-              <p class="muted" data-i18n="howto.together.note3">Friend somewhere else? Choose <b>Internet</b> before you start, or above the QR code, and send them that link. The <a href="faq/#short-guides-phone-away-from-home-friends-tv-delay--can-a-friend-who-isn-t-at-my-place-play-together-or-use-a-phone-controller">FAQ</a> has the details (in English).</p>
+              <p class="muted" data-i18n="howto.rooms.note">Friends somewhere else use the same link, as long as <b>Invites work</b> is set to <b>Anywhere</b> in <b>Settings › App › Play Room</b>. The <a href="faq/#short-guides-phone-away-from-home-friends-tv-delay--can-a-friend-who-isn-t-at-my-place-play-together-or-use-a-phone-controller">FAQ</a> has the details (in English).</p>
             </div>
           </details>
           <details class="guide">
@@ -1137,7 +1193,7 @@
                 <li data-i18n="howto.away.ts3">Away from home, connect and play as usual. The status bar shows <i>via Tailscale</i>, direct or relayed, with the delay.</li>
               </ol>
               <p class="muted" data-i18n="howto.away.ts_note">Only Remote Play and PS5Upload can be reached through Tailscale. How smooth it is depends on your home connection's upload speed, and waking the PS5 from rest mode from far away may not work: leave it on. Never open the app's ports to the internet instead: it has no password. Headscale works too, under <b>Advanced</b>.</p>
-              <p class="muted" data-i18n="howto.away.friends2">Only want a friend far away to play along? Send them an internet invite from <a href="#together">Play Together</a> instead: they don't need a Tailscale account.</p>
+              <p class="muted" data-i18n="howto.away.friends13">Only want a friend far away to play along? Invite them to your <a href="#together">Play Room</a> instead: they don't need a Tailscale account.</p>
             </div>
           </details>
           <details class="guide">
@@ -1277,6 +1333,8 @@
           </div>
         </div>
 
+        <p class="muted small thanks-note" data-i18n="thanks.voluntary">Support is voluntary: a donation is a gift that buys nothing, unlocks nothing, creates no obligation and isn't refundable. Ko-fi and the crypto networks handle payments under their own terms.</p>
+
         <h3 class="thanks-sub" data-i18n="thanks.wall">Wall of thanks</h3>
         <div class="thanks-wall" id="thanks-wall"></div>
         <p class="muted thanks-anon" id="thanks-anon"></p>
@@ -1334,6 +1392,8 @@
       <a href="faq/" data-i18n="nav.faq">FAQ</a>
       <span data-i18n="foot.made">Made by <a href="https://phantomptr.com/">PhantomPtr</a>. PS5Upload is free software under the GPL-3.0.</span>
       <span class="muted" data-i18n="foot.sony">Not affiliated with Sony Interactive Entertainment.</span>
+      <span class="muted" data-i18n="foot.terms">Free, with no warranty: use it at your own risk, and only with content you own. <a href="https://github.com/phantomptr/ps5upload/blob/main/DISCLAIMER.md">Terms, privacy and contact</a></span>
+      <span class="muted" data-i18n="foot.privacy">This site sets no cookies and has no analytics.</span>
     </div>
   </footer>
 

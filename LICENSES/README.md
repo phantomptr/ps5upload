@@ -11,6 +11,7 @@ licenses. This folder holds the texts that do not live next to the code; the REA
 | `UnRAR-license.txt`, `UnRAR-exception.md` | The UnRAR source compiled into the separate `ps5upload-unrar` program for `.rar` extraction (the engine runs it over pipes, never links it), and the GPLv3 §7 permission to combine it |
 | `Noto-OFL-1.1.txt` | The Noto Sans font subsets in `client/src/assets/fonts/` |
 | `FidelityFX-FSR-MIT.txt` | The Remote Play upscaling shaders (EASU, RCAS) ported from AMD FidelityFX Super Resolution 1 in `client/src/lib/rpPicture.ts` |
+| `Opus-BSD-3-Clause.txt` | libopus 1.5.2, fetched at build time and linked into PS5Upload Play (its text also travels in the app's `NOTICE.md`) |
 
 License texts kept next to the code:
 
@@ -28,4 +29,12 @@ License texts kept next to the code:
 | `third_party/ava1/LICENSE-MIT`, `LICENSE-APACHE` | MIT or Apache-2.0 |
 | `third_party/bearssl/LICENSE.txt` | MIT (BearSSL, used by `tailnet/`) |
 | `tailnet/NOTICE` | Credits for `tailnet/`: Tailscale (BSD-3-Clause) protocol code it ports, wireguard-go (MIT), Go x/crypto and x/net (BSD-3-Clause) |
+| `apps/play/NOTICE.md` | PS5Upload Play: PS5Term-derived code (GPL-3.0-or-later), references, Opus (BSD-3-Clause), BearSSL and the QR Code generator (MIT), JetBrains Mono and Noto (OFL 1.1), with the license texts; it ships inside the app |
+| `apps/play/third_party/qrcodegen/` (file headers), `apps/play/third_party/jetbrains-mono/OFL.txt`, `apps/play/third_party/noto/*-OFL.txt` | MIT; SIL OFL 1.1 |
+| `payload/usbnet/NOTICE.md` | The experimental USB adapter daemon: tom-ps5-usbnet (GPL-3.0-or-later), Linux `r8152` as its reference (GPL-2.0), lwIP |
+| `third_party/lwip/COPYING` | BSD-3-Clause (lwIP, used by `tailnet/` and `payload/usbnet/`) |
 | Source file headers | ps5-app-dumper, PS5 Dump Forge, ampr_emu and elf-arsenal ports (GPL-3.0-or-later / GPL-3.0); the ProsperoSunshine `/dev/hid` pad requests in `payload/src/vpad.c` (GPL-3.0-only, Darkatek7); FreeBSD `newfs` portions (BSD-3-Clause) |
+
+Every release's complete source is this repository at the release's tag; clone it with
+`git clone --recursive --branch <tag>` so the `third_party/ava1`, `third_party/bearssl` and
+`third_party/lwip` submodules come too (GitHub's "Source code" downloads leave them out).

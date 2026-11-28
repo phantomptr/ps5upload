@@ -14,6 +14,13 @@ export function RoomNoticeText({ className = "space-y-2 text-sm" }: { className?
         )}
       </p>
       <p>{tr("room_notice_parents", undefined, "Parents: please supervise children who use Play Rooms.")}</p>
+      <p>
+        {tr(
+          "room_notice_safety",
+          undefined,
+          "Stay safe: don't share personal details, passwords or account information with people you don't know, and leave any room that makes you uncomfortable. Chat and voice go only between the people in the room and aren't saved.",
+        )}
+      </p>
     </div>
   );
 }

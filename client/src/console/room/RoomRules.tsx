@@ -1,6 +1,10 @@
 import { ArrowLeft } from "lucide-react";
 import { t } from "../strings";
 
+/** Where legal questions and takedown requests go (DISCLAIMER.md § 13). */
+const LEGAL_EMAIL = "phantomptr@gmail.com";
+const ISSUES_URL = "github.com/phantomptr/ps5upload/issues";
+
 /**
  * Play Rooms' responsibility notice (the rooms design 7B, the same words as PS5Upload and PS5Upload
  * Play), reachable from Settings › About and from the "Your room" card. Read only: accepting it
@@ -18,8 +22,13 @@ export function RoomRules({ onBack }: { onBack?: () => void }) {
       <h1 className="cw-h1">{t("cw_room_notice_title")}</h1>
       <p>{t("cw_room_notice_body")}</p>
       <p>{t("cw_room_notice_parents")}</p>
+      <p>{t("cw_room_notice_safety")}</p>
       <h2 className="cw-h2">{t("cw_about_disclaimer_title")}</h2>
       <p className="cw-dim">{t("cw_about_disclaimer")}</p>
+      <p className="cw-dim">{t("cw_about_risk")}</p>
+      <p className="cw-dim">{t("cw_about_responsibility")}</p>
+      <p className="cw-dim">{t("cw_about_privacy")}</p>
+      <p className="cw-dim">{t("cw_about_contact", { email: LEGAL_EMAIL, url: ISSUES_URL })}</p>
     </div>
   );
 }

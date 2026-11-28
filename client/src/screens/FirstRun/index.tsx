@@ -662,6 +662,13 @@ export default function FirstRunScreen() {
             </div>
           </SetupCard>
         )}
+        <p className="text-xs text-[var(--color-muted)]" data-testid="first-run-terms">
+          {tr(
+            "first_run_terms",
+            undefined,
+            "PS5Upload is free, unofficial and not affiliated with Sony, and it comes with no warranty: use it at your own risk, and only with games and content you own. About › Disclaimer has the full terms.",
+          )}
+        </p>
       </div>
     </div>
   );

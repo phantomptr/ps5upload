@@ -227,6 +227,35 @@ The hub keeps everything in memory and nothing on disk. Its logs and metrics nev
 client address, a room id, a gid, a secret or a payload: only event names, counts and error
 kinds.
 
+In plain words, for the people who use it:
+
+- **What it is for.** The hub only helps devices find each other over the internet (an internet
+  invite, PS5Upload Play's waiting room, and the Play Rooms list). It has no accounts and asks
+  for no email, PlayStation account or real name.
+- **What it sees.** The network address of each device that connects (needed to answer it and
+  to stop floods), and what a host puts on a listed room's card: the room's name, the host's
+  name and 4-character tag, the game, the player count, whether there is a password (never the
+  password), the language and, if the host shows it, a coarse region. Signalling messages pass
+  through unread; they carry the network addresses the two devices use to connect, and in a
+  lobby room they only start after the host lets the guest in.
+- **What it never sees.** Chat, voice, video, game streams, passwords, saves or files. Those go
+  between the devices in the room, never through the hub (there is no media relay).
+- **What it keeps, and for how long.** Everything is kept in memory only and nothing is written
+  to disk or a database. A room's card goes when the room closes, when the host stops renewing
+  it (150 s), or after 12 hours at most; a host-less room goes after 120 s and a waiting guest
+  after 180 s. Rate-limit counters, keyed by address, go when their one-minute window ends; a
+  client blocked for flooding is remembered for up to an hour after the block ends. A restart
+  forgets everything. Region lookups, when a country table is loaded, keep only the region.
+- **What it logs.** Only event names and counts (for example an hourly summary of how many
+  rooms and joins there were). Never an address, a name, a tag, a room id, a secret or a
+  message. The reverse proxy in `deploy/` keeps no access log. The hosting platform (Fly.io)
+  runs its own network edge under its own terms.
+- **Who it shares with.** Nobody. The room list never holds an address, and a host sees a
+  guest only as a short per-room id, not an address.
+- **What it can't do.** It does not read, record or moderate rooms. Hosts and players moderate
+  their own rooms (remove, block, mute, hide); the operator can only switch listing off or block
+  a tag, address range or word through the private control endpoint.
+
 ## A whole exchange
 
 ```

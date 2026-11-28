@@ -217,6 +217,8 @@ pub(crate) fn features_json() -> Value {
         "host": host_json(),
         "remote_play": crate::rp_stream_api::diag_summary(),
         "play_together": crate::join::diag_summary(),
+        "play_app": crate::play_app::diag(),
+        "usbnet": crate::usbnet_engine::table().diag(),
         "pad_link": crate::pad_link::diag_summary(),
         "go_live": crate::rp_golive::diag_summary(),
         "remote_connections": crate::remote::api::diag_summary(),

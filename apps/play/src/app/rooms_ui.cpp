@@ -383,6 +383,13 @@ void App::input_notice(std::uint32_t p) noexcept
         // Not now: those features stay off; the room still works.
         pending_ = Pending::none;
         back();
+        return;
+    }
+    // Terms and privacy; ○ there comes back here, with what was asked for still waiting.
+    if (p & pad::kTriangle)
+    {
+        platform::blip(platform::Blip::choose);
+        go(Screen::terms);
     }
 }
 
@@ -392,10 +399,30 @@ void App::draw_notice(Canvas &c) noexcept
     int y = 150;
     y += c.text_wrap(Font::title, kLeft, y, 1500, tr(S::notice_title), col::text) + 36;
     y += c.text_wrap(Font::body, kLeft, y, 1500, tr(S::notice_body), col::text) + 30;
-    c.text_wrap(Font::body, kLeft, y, 1500, tr(S::notice_parents), col::warn);
-    const int g[] = {G_CROSS, G_CIRCLE};
-    const S l[] = {S::notice_accept, S::notice_later};
-    draw_hints(c, g, l, 2);
+    y += c.text_wrap(Font::body, kLeft, y, 1500, tr(S::notice_parents), col::warn) + 30;
+    c.text_wrap(Font::small, kLeft, y, 1500, tr(S::notice_safety), col::muted, 4);
+    const int g[] = {G_CROSS, G_CIRCLE, G_TRIANGLE};
+    const S l[] = {S::notice_accept, S::notice_later, S::terms_hint};
+    draw_hints(c, g, l, 3);
+}
+
+// ---- terms and privacy (from the notice's △) ---------------------------------------------------
+void App::input_terms(std::uint32_t p) noexcept
+{
+    if (p & (pad::kCircle | pad::kTriangle | pad::kCross))
+        back();
+}
+
+void App::draw_terms(Canvas &c) noexcept
+{
+    draw_frame(c, tr(S::terms_title));
+    const S lines[] = {S::terms_1, S::terms_2, S::terms_3, S::terms_4, S::terms_5};
+    int y = 230;
+    for (const S s : lines)
+        y += c.text_wrap(Font::small, kLeft, y, 1600, tr(s), col::text, 4) + 26;
+    const int g[] = {G_CIRCLE};
+    const S l[] = {S::hint_back};
+    draw_hints(c, g, l, 1);
 }
 
 // ---- the Join list ----------------------------------------------------------------------------
@@ -1246,12 +1273,14 @@ void App::draw_thanks(Canvas &c) noexcept
     std::snprintf(b, sizeof b, tr(S::thanks_count), n_names_, n_anonymous_);
     c.text(Font::body, kLeft, 210, b, col::muted, 1100);
     c.text(Font::small, kLeft, 260, tr(S::thanks_text), col::muted, 1100);
+    const int vh = c.text_wrap(Font::small, kLeft, 296, 1100, tr(S::thanks_voluntary), col::muted, 2);
     // the names, most first (the list's own order), three columns of 16
+    const int top = 296 + vh + 14 > 340 ? 296 + vh + 14 : 340;
     const int first = thanks_page_ * 48;
     for (int i = first; i < n_names_ && i < first + 48; ++i)
     {
         const int k = i - first;
-        c.text(Font::small, kLeft + (k / 16) * 370, 320 + (k % 16) * 38, names_[i], col::text, 350);
+        c.text(Font::small, kLeft + (k / 16) * 370, top + (k % 16) * 38, names_[i], col::text, 350);
     }
     // two QR codes: Ko-fi and the site's thanks page (scan with a phone)
     static std::uint8_t qr[qrcodegen_BUFFER_LEN_MAX], tmp[qrcodegen_BUFFER_LEN_MAX];
@@ -1301,6 +1330,7 @@ void App::draw_welcome(Canvas &c) noexcept
     // page dots
     for (int i = 0; i < 3; ++i)
         c.circle(kLeft + 14 + i * 40, 820, 10, i == welcome_page_ ? col::accent : col::panel_hi);
+    c.text_wrap(Font::small, kLeft, 870, 1500, tr(S::wel_terms), col::muted, 4);
     const int g[] = {G_CROSS, G_CIRCLE};
     const S l[] = {welcome_page_ >= 2 ? S::wel_got_it : S::hint_next, S::hint_skip};
     draw_hints(c, g, l, 2);

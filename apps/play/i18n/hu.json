@@ -521,5 +521,16 @@
   "pm_give_p1": "1. játékos átadása",
   "pm_take_p1": "1. játékos visszavétele",
   "pm_move_to": "Áthelyezés: %d. játékos",
-  "released_note": "Kiléptél. A többiek ezen a PS5-ön tovább játszanak."
+  "released_note": "Kiléptél. A többiek ezen a PS5-ön tovább játszanak.",
+  "about_terms": "Nem áll kapcsolatban a Sony Interactive Entertainmenttel, és az nem is támogatja. Ingyenes, garancia nélkül: saját felelősségedre használd. Feltételek és adatvédelem: Szabályok és felelősség, majd △.",
+  "notice_safety": "Vigyázz magadra: ne adj meg személyes adatokat, jelszavakat vagy fiókadatokat olyanoknak, akiket nem ismersz, és lépj ki minden szobából, ahol kényelmetlenül érzed magad. A csevegés és a hang csak a szobában lévők között megy, és nem tárolódik.",
+  "terms_hint": "Feltételek és adatvédelem",
+  "terms_title": "Feltételek és adatvédelem",
+  "terms_1": "A PS5Upload Play ingyenes, nem hivatalos, nem áll kapcsolatban a Sony Interactive Entertainmenttel, és az nem is támogatja; a PlayStation és a PS5 annak védjegyei, és csak azért szerepelnek, hogy jelezzék, mivel működik az app. Semmilyen garancia nincs rá. Saját felelősségedre használod: a készítői nem felelősek az elveszett adatokért, a konzol károsodásáért, kitiltásokért vagy a fiókjaid elleni más intézkedésekért.",
+  "terms_2": "Te felelsz azért, amit vele teszel: csak olyan játékokkal játssz, amelyek a tieid vagy a barátaidéi, és tartsd be a lakóhelyed törvényeit és a használt platformok feltételeit. A PS5Upload Play nem ad játékokat.",
+  "terms_3": "Adatvédelem: az app a beállításait, párosításait és naplóját ezen a PS5-ön tárolja, és nem küld használati adatokat. Hogy az interneten játékokat találjon, a PS5Upload szerverét használja, amely látja ennek a PS5-nek a hálózati címét és azt, amit egy listázott szoba mutat, csak addig tartja őket a memóriában, amíg szükség van rájuk, és soha nem továbbít csevegést, hangot vagy videót.",
+  "terms_4": "A támogatás önkéntes: az adomány ajándék, amivel semmit nem vásárolsz, semmit nem old fel, és nem visszatéríthető.",
+  "terms_5": "Teljes feltételek: github.com/phantomptr/ps5upload (DISCLAIMER.md). Jogi kérdések vagy eltávolítási kérelmek: phantomptr@gmail.com.",
+  "thanks_voluntary": "A támogatás önkéntes: ajándék, amivel semmit nem vásárolsz, és nem visszatéríthető.",
+  "wel_terms": "Ingyenes, nem hivatalos, és nem áll kapcsolatban a Sonyval; garancia nélkül, saját felelősségedre használd. A feltételeket a Beállítások › Szabályok és felelősség alatt találod."
 }

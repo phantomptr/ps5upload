@@ -257,6 +257,13 @@ export function JoinFlow({
             {tr("room_notice_link", undefined, "Rules & responsibility")}
           </button>
         )}
+        <p className="text-center text-[11px] leading-snug text-white/40" data-testid="join-legal">
+          {tr(
+            "join_legal",
+            undefined,
+            "PS5Upload is free, unofficial and not affiliated with Sony. You're responsible for what you say and do while you play.",
+          )}
+        </p>
       </form>
       {notice.sheet}
     </div>

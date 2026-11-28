@@ -34,7 +34,7 @@ body:
     id: where
     attributes:
       label: Where is it?
-      placeholder: "e.g. Play › Play Together, the Invite button; or the website's FAQ"
+      placeholder: "e.g. Play › Play Room, the Invite button; or the website's FAQ"
     validations:
       required: true
   - type: textarea

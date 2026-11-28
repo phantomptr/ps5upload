@@ -86,6 +86,9 @@ export function UsbNetSectionView({ st, busy, err, onToggle }: UsbNetSectionView
         ) : null}
       </div>
       <p className="cw-dim cw-setting-note">{t("cw_usbnet_note")}</p>
+      <p className="cw-dim cw-setting-note" data-usbnet-risk="">
+        {t("cw_usbnet_risk")}
+      </p>
       {err ? (
         <div className="cw-msg is-error" role="alert">
           {err}

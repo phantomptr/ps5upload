@@ -379,6 +379,7 @@ int main(int argc, char **argv)
     app.fake_page(1, 0);
     shot("welcome", App::Screen::welcome, r);
     shot("help", App::Screen::help, r);
+    shot("terms", App::Screen::terms, r);
     // joining a room: a name already there, a wrong password, the real round trip while asking
     r.guest = GuestView{};
     r.guest.phase = GuestView::name_taken;

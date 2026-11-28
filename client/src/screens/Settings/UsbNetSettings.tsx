@@ -102,7 +102,14 @@ export function UsbNetCard({ st, tooOld, busy, err, onToggle, onAddress }: UsbNe
         "usbnet_note",
         undefined,
         "The console's own network keeps working and is used whenever the adapter isn't.",
-      )}
+      )}{" "}
+      <span data-testid="usbnet-risk">
+        {tr(
+          "usbnet_risk",
+          undefined,
+          "Experimental: it hasn't been tried with every adapter or PS5 and may not work. Use it at your own risk. If something goes wrong, turn it off here and unplug the adapter.",
+        )}
+      </span>
     </p>
   );
 

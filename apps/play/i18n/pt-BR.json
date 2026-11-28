@@ -521,5 +521,16 @@
   "pm_give_p1": "Passar o Jogador 1",
   "pm_take_p1": "Pegar o Jogador 1 de volta",
   "pm_move_to": "Mover para Jogador %d",
-  "released_note": "Você saiu. Os outros neste PS5 continuam jogando."
+  "released_note": "Você saiu. Os outros neste PS5 continuam jogando.",
+  "about_terms": "Não é afiliado nem endossado pela Sony Interactive Entertainment. Gratuito, sem garantia: use por sua conta e risco. Termos e privacidade: Regras e responsabilidade, depois △.",
+  "notice_safety": "Proteja-se: não compartilhe dados pessoais, senhas ou informações da conta com pessoas que você não conhece, e saia de qualquer sala que te deixe desconfortável. Chat e voz só passam entre as pessoas da sala e não são salvos.",
+  "terms_hint": "Termos e privacidade",
+  "terms_title": "Termos e privacidade",
+  "terms_1": "O PS5Upload Play é gratuito, não oficial e não é afiliado nem endossado pela Sony Interactive Entertainment; PlayStation e PS5 são marcas dela, citadas só para dizer com o que o app funciona. Ele vem sem garantia. Você usa por sua conta e risco: quem o faz não se responsabiliza por dados perdidos, danos a um console, banimentos ou outras medidas contra suas contas.",
+  "terms_2": "Você é responsável pelo que faz com ele: jogue só jogos que são seus ou dos seus amigos, e siga as leis do lugar onde você mora e os termos das plataformas que usa. O PS5Upload Play não fornece jogos.",
+  "terms_3": "Privacidade: o app guarda as configurações, os pareamentos e o log neste PS5 e não envia dados de uso. Para encontrar partidas pela internet, ele usa o hub do PS5Upload, que vê o endereço de rede deste PS5 e o que uma sala listada mostra, os mantém na memória só enquanto são necessários e nunca transmite chat, voz ou vídeo.",
+  "terms_4": "O apoio é voluntário: uma doação é um presente que não compra nada, não desbloqueia nada e não é reembolsável.",
+  "terms_5": "Termos completos: github.com/phantomptr/ps5upload (DISCLAIMER.md). Dúvidas jurídicas ou pedidos de remoção: phantomptr@gmail.com.",
+  "thanks_voluntary": "O apoio é voluntário: um presente que não compra nada e não é reembolsável.",
+  "wel_terms": "Gratuito, não oficial e não afiliado à Sony; sem garantia, use por sua conta e risco. Os termos estão em Configurações › Regras e responsabilidade."
 }

@@ -521,5 +521,16 @@
   "pm_give_p1": "1. Oyuncuyu ver",
   "pm_take_p1": "1. Oyuncuyu geri al",
   "pm_move_to": "%d. Oyuncu yap",
-  "released_note": "Ayrıldın. Bu PS5'teki diğerleri oynamaya devam ediyor."
+  "released_note": "Ayrıldın. Bu PS5'teki diğerleri oynamaya devam ediyor.",
+  "about_terms": "Sony Interactive Entertainment ile bağlantılı değildir ve onun tarafından onaylanmamıştır. Ücretsiz, garantisiz: kendi sorumluluğunda kullan. Koşullar ve gizlilik: Kurallar ve sorumluluk, ardından △.",
+  "notice_safety": "Güvende kal: tanımadığın kişilerle kişisel bilgilerini, şifrelerini veya hesap bilgilerini paylaşma ve seni rahatsız eden her odadan çık. Sohbet ve ses yalnızca odadaki kişiler arasında iletilir ve kaydedilmez.",
+  "terms_hint": "Koşullar ve gizlilik",
+  "terms_title": "Koşullar ve gizlilik",
+  "terms_1": "PS5Upload Play ücretsizdir, resmî değildir, Sony Interactive Entertainment ile bağlantılı değildir ve onun tarafından onaylanmamıştır; PlayStation ve PS5 onun ticari markalarıdır ve yalnızca uygulamanın neyle çalıştığını belirtmek için anılır. Hiçbir garanti verilmez. Kendi sorumluluğunda kullanırsın: yapımcıları kaybolan verilerden, konsol hasarından, yasaklardan veya hesaplarına karşı alınan diğer önlemlerden sorumlu değildir.",
+  "terms_2": "Onunla yaptıklarından sen sorumlusun: yalnızca senin ya da arkadaşlarının sahip olduğu oyunları oyna; yaşadığın yerin yasalarına ve kullandığın platformların koşullarına uy. PS5Upload Play oyun sağlamaz.",
+  "terms_3": "Gizlilik: uygulama ayarlarını, eşleştirmelerini ve günlüğünü bu PS5'te tutar ve kullanım verisi göndermez. İnternet üzerinden oyun bulmak için PS5Upload sunucusunu kullanır; sunucu bu PS5'in ağ adresini ve listelenen bir odanın gösterdiklerini görür, bunları yalnızca gerektiği sürece bellekte tutar ve asla sohbet, ses ya da video taşımaz.",
+  "terms_4": "Destek gönüllüdür: bağış, hiçbir şey satın almayan, hiçbir şeyin kilidini açmayan ve iade edilmeyen bir hediyedir.",
+  "terms_5": "Tam koşullar: github.com/phantomptr/ps5upload (DISCLAIMER.md). Hukuki sorular veya kaldırma talepleri: phantomptr@gmail.com.",
+  "thanks_voluntary": "Destek gönüllüdür: hiçbir şey satın almayan ve iade edilmeyen bir hediyedir.",
+  "wel_terms": "Ücretsiz, resmî değil ve Sony ile bağlantılı değil; garanti yok, kendi sorumluluğunda kullan. Koşullar Ayarlar › Kurallar ve sorumluluk bölümünde."
 }

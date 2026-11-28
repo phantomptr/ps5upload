@@ -793,6 +793,31 @@ fn with_hub<R>(f: impl FnOnce(&mut Hub) -> R) -> R {
     f(g.get_or_insert_with(Hub::default))
 }
 
+/// PS5Upload Play for a bug report (`/api/diag/features`): counts, states and app versions only,
+/// never a console address, an app id, a token, a code or a grant (a report is posted in public).
+pub(crate) fn diag() -> Value {
+    let now = Instant::now();
+    with_hub(|h| {
+        let apps: Vec<Value> = h
+            .reports
+            .values()
+            .map(|r| json!({"open": r.open, "foreground": r.foreground, "version": r.v}))
+            .collect();
+        json!({
+            "paired_apps": h.store.as_ref().map(|s| s.apps.len()),
+            "connected": h.sockets.len(),
+            "connected_paired": h.sockets.values().filter(|s| s.paired.is_some()).count(),
+            "apps": apps,
+            "codes_waiting": h.pairing.pending.iter().filter(|p| p.until > now).count(),
+            "wrong_codes": h.pairing.bad,
+            "pairing_locked": h.pairing.locked_until.is_some_and(|t| t > now),
+            "moves_waiting": h.moves.len(),
+            "grants": h.grants.len(),
+            "old_helpers": h.grant_old_helper.len(),
+        })
+    })
+}
+
 #[cfg(test)]
 static TEST_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 

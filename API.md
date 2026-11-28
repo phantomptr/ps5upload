@@ -70,7 +70,7 @@ Every operation in the document carries `x-ps5upload.access`:
 |---|---|
 | `loopback` | Most routes. This computer and the `PS5UPLOAD_ALLOW_IP` addresses. |
 | `strict-local` | Also tagged `strict-local`. Remote Play start, stop, frame, input, passcode, keyboard, microphone, the live feed, virtual keyboard and mouse. This computer alone, unless `PS5UPLOAD_ALLOW_AUTOMATION=1`. |
-| `host-checked` | Play Together's and Go live's host routes. This computer, addressed by a loopback name or one in `PS5UPLOAD_ALLOW_HOST`, and the `PS5UPLOAD_ALLOW_IP` addresses. |
+| `host-checked` | Play Room's and Go live's host routes. This computer, addressed by a loopback name or one in `PS5UPLOAD_ALLOW_HOST`, and the `PS5UPLOAD_ALLOW_IP` addresses. |
 | `lan-open` | `/pkg-host/*` (package bytes for the console), `/pad`, `/api/pad/ws`, `/join`, `/api/join/ws`, `/api/join/preview`, `/api/join/signal`, `/api/join/bridge`, `/api/play/app`, `/share`, `/api/share/ws` (a phone or a friend, which check their own key or invite; a Share serves only what the sender allowed; PS5Upload Play on the TV gets only "the engine is there" until it is paired; the bridge joins a friend's internet room for PS5Upload Play through the hub in the settings only, checked against the link's fingerprint). |
 | `mcp` | `/mcp`. Like `loopback`, and a browser may reach it only from this computer. |
 
@@ -123,7 +123,7 @@ The status tells you whose fault it was:
 
 ### Friends playing
 
-While friends are in through Play Together, a request that would end their game is answered `409`
+While friends are in a Play Room, a request that would end their game is answered `409`
 instead of done:
 
 ```json
@@ -494,7 +494,7 @@ named `share` on `GET /api/events`. Read through MCP, `/api/share` leaves the li
 
 ## Play Rooms
 
-Play Together's session for one console is the **room**. It starts Private (invite only, as
+Play Room (called Play Together before 13.0.0; the routes keep the `together`/`join` names) is the session for one console, the **room**. It starts Private (invite only, as
 before) and can be made Friends (people you've played with see it's open) or Public (a card in
 Rooms on the hub). Changing who can see a room never removes anyone, and invite links keep working.
 
@@ -673,7 +673,7 @@ them:
 | **Play time** | In each browser or app's own storage. | `GET /api/activity`, `GET /api/ps5/activity/get`, `GET /api/event-journal` have the raw material. |
 | **The notification inbox** | Likewise per device. | `GET /api/ps5/notif/list` is the helper's log; `GET /api/event-journal` is the engine's. |
 | **A phone as a controller** | `/pad` and `/api/pad/ws`, for a person holding the phone that scanned the code. | `POST /api/ps5/rp/input` drives the session from a script. `/api/ps5/rp/pad-link` opens and closes the link. |
-| **A guest joining Play Together** | `/join` and `/api/join/ws`, for a person who has the invite; `/api/join/bridge`, for PS5Upload Play on a PS5 joining an internet invite through this engine. | `/api/join/*` is the host's side: open, invite, let in, let go; `/api/join/friends` lists the guests' PS5s that may ask to play again, forgets one, and sends one the invite. |
+| **A guest joining a Play Room** | `/join` and `/api/join/ws`, for a person who has the invite; `/api/join/bridge`, for PS5Upload Play on a PS5 joining an internet invite through this engine. | `/api/join/*` is the host's side: open, invite, let in, let go; `/api/join/friends` lists the guests' PS5s that may ask to play again, forgets one, and sends one the invite. |
 | **PS5Upload Play on the host's PS5** | `/api/play/app`, for the app on the console that paired with a code shown on the TV, or with a one-time grant the console's helper handed it (the helper gets it from this engine over AVA1, `play.grant`). | `POST /api/play/app/pair` confirms that code typed in; `POST /api/play/app/pair_confirm {console}` confirms it with one click (the `play` event `pair_waiting` and `GET /api/play/app/paired` show the code to compare); `POST /api/play/app/moved {console_old?, addr, ok}` confirms a paired console that moved to a new address (the `play` event `moved`; a console whose AVA1 key proves it moves by itself); `GET /api/play/app/paired` and `POST /api/play/app/unpair` list and remove paired consoles. `GET /api/play/app/installed`, `POST /api/play/app/install`, `/remove` and `/open` put the app this build carries on a PS5, update it, take it off and start it. |
 | **A friend receiving a Share in a browser** | `/share` and `/api/share/ws`, for a person with the link on the same network. | `/api/share/receive` receives one engine to another. |
 | **Your file picker, drag and drop, keep-awake, game mode, screenshots of the app, controller haptics, the app's updater** | The device itself. | Name paths directly. `GET /api/engine/update` says if there's a new release. |

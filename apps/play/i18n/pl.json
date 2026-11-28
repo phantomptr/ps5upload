@@ -521,5 +521,16 @@
   "pm_give_p1": "Oddaj Gracza 1",
   "pm_take_p1": "Odbierz Gracza 1",
   "pm_move_to": "Przenieś na Gracza %d",
-  "released_note": "Wychodzisz. Pozostali na tej PS5 grają dalej."
+  "released_note": "Wychodzisz. Pozostali na tej PS5 grają dalej.",
+  "about_terms": "Niepowiązane z Sony Interactive Entertainment ani przez nią niewspierane. Darmowe, bez gwarancji: korzystasz na własne ryzyko. Warunki i prywatność: Zasady i odpowiedzialność, potem △.",
+  "notice_safety": "Dbaj o bezpieczeństwo: nie podawaj danych osobowych, haseł ani informacji o koncie osobom, których nie znasz, i wyjdź z każdego pokoju, w którym czujesz się niekomfortowo. Czat i głos trafiają tylko do osób w pokoju i nie są zapisywane.",
+  "terms_hint": "Warunki i prywatność",
+  "terms_title": "Warunki i prywatność",
+  "terms_1": "PS5Upload Play jest darmowy, nieoficjalny, niepowiązany z Sony Interactive Entertainment ani przez nią niewspierany; PlayStation i PS5 są jej znakami towarowymi, użytymi tylko po to, by wskazać, z czym działa aplikacja. Nie ma żadnej gwarancji. Korzystasz z niej na własne ryzyko: jej twórcy nie ponoszą odpowiedzialności za utracone dane, uszkodzenie konsoli, blokady ani inne działania wobec twoich kont.",
+  "terms_2": "Odpowiadasz za to, co z nią robisz: graj tylko w gry, które posiadasz ty lub twoi znajomi, i przestrzegaj prawa obowiązującego tam, gdzie mieszkasz, oraz warunków platform, z których korzystasz. PS5Upload Play nie dostarcza gier.",
+  "terms_3": "Prywatność: aplikacja przechowuje ustawienia, sparowania i log na tej PS5 i nie wysyła żadnych danych o użytkowaniu. Aby znajdować gry przez internet, korzysta z serwera PS5Upload, który widzi adres sieciowy tej PS5 i to, co pokazuje pokój na liście, trzyma je w pamięci tylko tak długo, jak są potrzebne, i nigdy nie przesyła czatu, głosu ani obrazu.",
+  "terms_4": "Wsparcie jest dobrowolne: darowizna to prezent, który niczego nie kupuje, niczego nie odblokowuje i nie podlega zwrotowi.",
+  "terms_5": "Pełne warunki: github.com/phantomptr/ps5upload (DISCLAIMER.md). Pytania prawne lub żądania usunięcia treści: phantomptr@gmail.com.",
+  "thanks_voluntary": "Wsparcie jest dobrowolne: to prezent, który niczego nie kupuje i nie podlega zwrotowi.",
+  "wel_terms": "Darmowe, nieoficjalne i niepowiązane z Sony; bez gwarancji, korzystasz na własne ryzyko. Warunki znajdziesz w Ustawienia › Zasady i odpowiedzialność."
 }

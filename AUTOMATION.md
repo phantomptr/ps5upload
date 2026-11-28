@@ -115,7 +115,7 @@ after a session ends; a start in that time fails with `last_end.code` `busy` and
 right after a stop waits up to 5 s for the old session to go, then starts a new one, or answers
 `409 busy` with `retry_s`. It never joins the session you stopped.
 
-While friends play through Play Together, a stop answers `409 friends_playing` with their names
+While friends play in a Play Room, a stop answers `409 friends_playing` with their names
 until you confirm: add `"confirm_friends": true` (or the header `X-Confirm-Friends: 1`). See
 [Friends playing](API.md#friends-playing).
 
@@ -133,7 +133,7 @@ set when a session starts: asking for one answers `409 restart_needed` with `fie
 ```
 
 Off, the page gets no picture or sound, sends no controller and runs no decoder, for this session.
-Play Together guests, phones, the live feed (Go live, OBS) and instant replay carry on as before,
+Play Room guests, phones, the live feed (Go live, OBS) and instant replay carry on as before,
 and while Go live runs, friends are in or an invite is out, the session no longer needs a page at
 all. `on: true` brings it back without a restart: the page gets the codec headers again and the next
 keyframe. `session` is optional. Answers `{"ok": true, "session": 3, "picture": false}`, or 404
