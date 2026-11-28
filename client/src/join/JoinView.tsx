@@ -26,6 +26,7 @@ import { useAutoHide, usePickHint } from "./autoHide";
 import { PadCheck } from "./PadCheck";
 import { OpenOnWifi } from "./OpenOnWifi";
 import type { NetPath } from "./netPath";
+import { tierLabel } from "./routeTier";
 import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -758,6 +759,11 @@ export function JoinView({
           data-path={snap.path ?? undefined}
         >
           {snap.path && <span className="text-white/80">{pathLabel(tr, snap.path)} · </span>}
+          {snap.tier && (
+            <span className="text-white/80" data-testid="join-tier" data-tier={snap.tier}>
+              {tierLabel(tr, snap.tier)} ·{" "}
+            </span>
+          )}
           {Math.round(delay)} ms
         </span>
       )}

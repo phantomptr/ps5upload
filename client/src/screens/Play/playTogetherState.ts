@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { MeshJoin } from "../../api/mesh";
 import { HIGH_DELAY_MS, type GuestState } from "../../lib/joinProtocol";
 import { getEngineUrl } from "../../state/engine";
+import { readTier, type Tier } from "../../join/routeTier";
 
 export interface JoinGuest {
   id: number;
@@ -49,6 +50,9 @@ export interface JoinGuest {
    *  20% to spare, how long it has stayed under the rate, the loss and RTCP round trip; null off
    *  the track (the data channel, the plain socket, an older engine). */
   link: GuestLink | null;
+  /** How good their connection is (apps/play/docs/ROUTES.md): what their app or page measured,
+   *  else the engine's own reading from the round trip; null when neither knows yet. */
+  tier: Tier | null;
   /** Plays on a PS5 (PS5Upload Play), from the app's hello (`client_kind: "ps5"`). */
   onPs5: boolean;
   /** Their app said it can't show this stream's picture: "hevc" (no HEVC) or "main10" (no HDR);
@@ -414,7 +418,8 @@ export function readJoinState(v: unknown): JoinHostState {
       // An older engine says nothing: the home network.
       via: g.via === "internet" ? ("internet" as const) : ("lan" as const),
       path: str(g.path),
-      netPath: readNetPath(g.link),
+      // The pair ICE chose, else the way their app or page says it plays over.
+      netPath: readNetPath(g.link) ?? readNetPath({ path: g.route }),
       ipv6: (g.link as { ipv6?: unknown } | null | undefined)?.ipv6 === true,
       // An older engine says nothing: the TV asks every guest.
       playsAs: str((g.plays_as as Record<string, unknown> | null | undefined)?.name),
@@ -422,6 +427,7 @@ export function readJoinState(v: unknown): JoinHostState {
       quality: readQuality(g.quality),
       carries: readCarries(g.link),
       link: readLink(g.link),
+      tier: readTier(g.tier),
       onPs5: g.client_kind === "ps5",
       codecWarning: readCodecWarning(g.codec_warning),
     }))

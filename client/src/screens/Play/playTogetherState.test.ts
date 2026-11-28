@@ -95,7 +95,7 @@ describe("Play Together host state", () => {
     const s = readJoinState({ guests: [null, { id: 1 }], asks: "x", invite: { code: 1 } });
     expect(s.invite).toBeNull();
     expect(s.guests).toEqual([
-      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, ipv6: false, playsAs: null, seatNote: null, quality: null, carries: null, link: null, onPs5: false, codecWarning: null },
+      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, ipv6: false, playsAs: null, seatNote: null, quality: null, carries: null, link: null, onPs5: false, codecWarning: null, tier: null },
     ]);
     expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);
@@ -323,5 +323,20 @@ describe("opening while the stream restarts (#720)", () => {
     expect(foundOf({ error: "not_playing", asked: "10.0.0.2", streaming: null })).toBe("asked 10.0.0.2, streaming none");
     // An engine from before it.
     expect(foundOf({ error: "not_playing" })).toBeUndefined();
+  });
+});
+
+describe("a guest's way and tier (apps/play/docs/ROUTES.md)", () => {
+  it("reads the tier, and the way the guest said when ICE has no pair", () => {
+    const s = readJoinState({
+      guests: [
+        { id: 1, player: 2, state: "playing", route: "tailscale", tier: "good" },
+        { id: 2, player: 3, state: "playing", link: { path: "lan" }, route: "internet", tier: "great" },
+      ],
+    });
+    expect(s.guests.map((g) => [g.netPath, g.tier])).toEqual([
+      ["tailscale", "good"],
+      ["lan", null],
+    ]);
   });
 });
