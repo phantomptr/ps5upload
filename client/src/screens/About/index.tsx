@@ -16,6 +16,7 @@ import { useNavigate } from "react-router";
 
 import { useTr } from "../../state/lang";
 import { Button, Card, Badge } from "../../components";
+import { RoomNoticeText, useRoomNoticeTitle } from "../../components/RoomNoticeText";
 
 const AUTHOR_EMAIL = "phantomptr@gmail.com";
 const AUTHOR_SITE = "phantomptr.com";
@@ -28,6 +29,7 @@ const URLS = {
   license: "https://github.com/phantomptr/ps5upload/blob/main/LICENSE",
   changelog: "https://github.com/phantomptr/ps5upload/blob/main/CHANGELOG.md",
   disclaimer: "https://github.com/phantomptr/ps5upload/blob/main/DISCLAIMER.md",
+  credits: "https://github.com/phantomptr/ps5upload#credits",
   author: "https://x.com/phantomptr",
   discord: "https://discord.gg/fzK3xddtrM",
   coffee: COFFEE_URL,
@@ -37,6 +39,7 @@ const URLS = {
 /** `embedded`: shown as the About tab of Help, under that screen's own header. */
 export default function AboutScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const tr = useTr();
+  const noticeTitle = useRoomNoticeTitle();
   const navigate = useNavigate();
   const [version, setVersion] = useState<string>("");
 
@@ -207,7 +210,79 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
               "Use it only with hardware you own and content you lawfully own. It must not be used to copy, distribute, or run software you do not have the right to use.",
             )}
           </p>
-          <div className="mt-4">
+          {/* Play Rooms (13.0.0): the responsibility notice in full, always reachable here. */}
+          <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]" data-testid="about-disclaimer-rooms">
+            {tr(
+              "about_disclaimer_rooms",
+              undefined,
+              "Play Rooms, chat and voice: PS5Upload only gives you the tool. Nobody behind it runs, watches, records, stores or moderates rooms, chat, voice, names or room names, and it isn't responsible for what users say, share or do. You're responsible for your own conduct and for following the law and the rules of the platforms and games you use. Parents and guardians are responsible for supervising children. You can mute, hide, remove or block anyone.",
+            )}
+          </p>
+          <div className="mt-3 rounded-lg bg-[var(--color-surface)] p-3" data-testid="about-room-notice">
+            <p className="mb-1 text-sm font-medium">{noticeTitle}</p>
+            <RoomNoticeText className="space-y-1.5 text-xs leading-relaxed text-[var(--color-muted)]" />
+          </div>
+          {/* 13.0.0 legal audit: liability, your responsibility, privacy, experimental features,
+              donations, licenses and contact, the same words as DISCLAIMER.md in short. */}
+          <div className="mt-3 space-y-3 text-sm leading-relaxed text-[var(--color-muted)]" data-testid="about-disclaimer-more">
+            <p>
+              {tr(
+                "about_disclaimer_liability",
+                undefined,
+                "The people who make PS5Upload aren't liable for lost or damaged data, damage to a console or any other device, a banned or restricted account or console, or any other action a platform takes against you.",
+              )}
+            </p>
+            <p>
+              {tr(
+                "about_disclaimer_responsibility",
+                undefined,
+                "You're responsible for what you install, copy, share, stream and send with PS5Upload. Use only games, saves and other content you own or have the right to use, and follow the laws where you live and the terms of the platforms you use. PS5Upload manages your own games and backups: it doesn't provide games, and it won't help anyone get games they don't own.",
+              )}
+            </p>
+            <p data-testid="about-privacy">
+              {tr(
+                "about_disclaimer_privacy",
+                undefined,
+                "Privacy: PS5Upload has no accounts and sends no usage data. Your games, files, settings and logs stay on your own devices and PS5s, and a bug report goes only where you post it. To connect people over the internet, the Play Rooms hub sees your network address and what a listed room shows; it keeps them in memory only while they're needed, logs no addresses or names, and never carries chat, voice or video. Services you choose to use (GitHub, Tailscale, artwork and cheat sources, streaming sites, Ko-fi) follow their own privacy terms.",
+              )}
+            </p>
+            <p>
+              {tr(
+                "about_disclaimer_experimental",
+                undefined,
+                "Features marked Experimental, such as the PS5's USB Ethernet adapter, are barely tested and may not work. Use them at your own risk.",
+              )}
+            </p>
+            <p>
+              {tr(
+                "about_disclaimer_donations",
+                undefined,
+                "Support is voluntary. A donation is a gift: it buys nothing, unlocks nothing, creates no obligation and isn't refundable.",
+              )}
+            </p>
+            <p>
+              {tr(
+                "about_disclaimer_licenses",
+                undefined,
+                "PS5Upload is free software under the GPL v3. It includes other people's open-source work under their own licenses. The credits, the license texts and every release's full source code are on GitHub.",
+              )}
+            </p>
+            <p data-testid="about-contact">
+              {tr(
+                "about_disclaimer_contact",
+                { email: AUTHOR_EMAIL },
+                `Legal questions, copyright or takedown requests: email ${AUTHOR_EMAIL} or open an issue on GitHub.`,
+              )}
+            </p>
+            <p className="text-xs">
+              {tr(
+                "about_disclaimer_summary",
+                undefined,
+                "This is a plain-language summary, not legal advice. The full terms decide.",
+              )}
+            </p>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
             <Button
               variant="secondary"
               size="sm"
@@ -215,6 +290,9 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
               onClick={() => openExternal(URLS.disclaimer)}
             >
               {tr("about_disclaimer_read_full", undefined, "Read the full terms")}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => openExternal(URLS.credits)}>
+              {tr("about_licenses_link", undefined, "Licenses & credits")}
             </Button>
           </div>
         </Card>

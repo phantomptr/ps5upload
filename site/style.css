@@ -1290,6 +1290,15 @@ code {
 .together-more .ico {
   font-size: 21px;
 }
+/* PS5Upload Play (13.0): a sub-heading and cards inside Play Rooms, no screenshot. */
+.ps5play {
+  position: relative;
+  margin-top: 56px;
+}
+.ps5play .together-head h3 {
+  font-size: clamp(24px, 3.2vw, 32px);
+  letter-spacing: -0.02em;
+}
 @media (max-width: 900px) {
   .hero-pills {
     justify-content: center;

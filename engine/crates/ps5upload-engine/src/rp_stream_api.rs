@@ -11,7 +11,11 @@
 //!   "lx", "ly", "rx", "ry"}}` whenever the pad changes, `{"keyframe": true}`,
 //!   `{"ping": t}` (answered at once with `{"pong": t, "engine_us": e}`, for the page to time
 //!   the round trip and, with `e` the engine's clock when the ping came, to line its clock up
-//!   with the engine's), or `{"stop": true}`.
+//!   with the engine's), or `{"stop": true}`. With friends playing through Play Together a stop
+//!   is answered `{"stage": "confirm_friends", "friends": [names], "message"}` and nothing stops;
+//!   `{"stop": true, "confirm_friends": true}` stops anyway (together_guard.rs). Friends playing
+//!   also keep a session with no page attached, picture on or off, for up to 4 hours
+//!   (`HOST_AWAY_MAX`) since the host's last page left.
 //!   Microphone (experimental), only for a session started with `"mic": true`:
 //!   `{"mic": true|false}` turns the console's mic
 //!   on or off, and binary `[5][one Opus packet]` is one mic frame (48 kHz
@@ -107,6 +111,9 @@ const VIDEO_QUEUE_LOW_LATENCY: usize = 2;
 /// Audio frames (100/s), status, rumble and light bar.
 const CTL_QUEUE: usize = 512;
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
+/// The longest a session is kept for friends playing through Play Together with no page of the
+/// host's attached; after it the session ends as any page-less one does.
+pub(crate) const HOST_AWAY_MAX: Duration = Duration::from_secs(4 * 60 * 60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
 /// A start while the console's last session is finishing: asked to look again this soon.
 const STOPPING_RETRY_S: u64 = 2;
@@ -202,6 +209,10 @@ struct ClientMsg {
     pad: Option<ControllerState>,
     #[serde(default)]
     stop: bool,
+    /// With `stop`: stop even though friends are playing through Play Together. Without it the
+    /// page is told `{"stage": "confirm_friends", "friends", "message"}` and nothing stops.
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
     #[serde(default)]
     keyframe: bool,
     #[serde(default)]
@@ -256,7 +267,7 @@ fn pong(m: &ClientMsg) -> Option<Message> {
 }
 
 /// The engine's clock for latency stamps: µs since the first time it was read, monotonic.
-fn engine_us() -> u64 {
+pub(crate) fn engine_us() -> u64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
@@ -287,6 +298,8 @@ struct Live {
     /// This session's id (NEXT_SESSION), shown by `GET /api/ps5/rp/session`.
     session: u64,
     hevc: bool,
+    /// HEVC Main10 in HDR (set as the session starts).
+    hdr: AtomicBool,
     /// The bitrate the console was asked for (kbit/s; it cannot change mid-session): an internet
     /// guest's video track compares its bandwidth estimate with it (join_net).
     bitrate_kbps: std::sync::atomic::AtomicU32,
@@ -370,6 +383,8 @@ struct Spectator {
     /// Its keyframe gap once it keeps falling behind ([`LAGGING_KEY_GAP`], an internet guest's
     /// [`INTERNET_LAGGING_KEY_GAP`]).
     lagging_gap: Duration,
+    /// Takes timed video (kind 7 instead of 1): a player whose app asked for it (join.rs).
+    timing: bool,
 }
 
 impl Spectator {
@@ -385,6 +400,7 @@ impl Spectator {
             lag_skips: 0,
             last_skip: None,
             lagging_gap: LAGGING_KEY_GAP,
+            timing: false,
         }
     }
 
@@ -617,6 +633,15 @@ fn live() -> Option<Arc<Live>> {
     LIVE.lock().ok().and_then(|g| g.clone())
 }
 
+/// How long the host has had no page attached to `console`'s session (a phone asleep, the desktop
+/// closed). None: a page is attached, or no session runs for that console. Play Rooms answers an
+/// ask with `host_away` from this.
+pub(crate) fn host_away(console: &str) -> Option<Duration> {
+    live()
+        .filter(|l| same_console(&l.host, console) && !l.stop.load(Ordering::Relaxed))
+        .and_then(|l| l.away_for())
+}
+
 /// A phone's controller changed (pad_link.rs); dropped when no session runs.
 pub(crate) fn push_pad(source: u64, state: Option<ControllerState>) {
     if let Some(l) = live() {
@@ -633,6 +658,106 @@ fn live_on(host: &str) -> Option<Arc<Live>> {
 /// no phone is linked as a controller, and no guest has it yet.
 pub(crate) fn stream_seat_free(host: &str) -> bool {
     live_on(host).is_some_and(|l| l.seat_free())
+}
+
+/// "It's me" (Play Rooms): the stream's controller is free for the host playing from another
+/// device of theirs: free for a guest, or no host page attached at all (nobody drives it), with
+/// no guest and no phone on it.
+pub(crate) fn stream_seat_free_for_owner(host: &str) -> bool {
+    live_on(host).is_some_and(|l| {
+        l.seat_free()
+            || (l.away_for().is_some()
+                && !l.seat_held()
+                && l.sources.is_empty()
+                && !crate::pad_link::phones_playing())
+    })
+}
+
+/// "It's me" keeps the stream's controller: the host's picture is off, or no host page is attached
+/// at all, and no linked phone plays.
+pub(crate) fn stream_seat_kept_for_owner(host: &str) -> bool {
+    live_on(host).is_some_and(|l| {
+        let phones = crate::pad_link::phones_playing();
+        l.seat_kept_given(phones) || (l.away_for().is_some() && !phones)
+    })
+}
+
+/// The engine's round trip to the console of `host`'s running session (Takion), ms, at least 1:
+/// Play Rooms' "host's PS5 link". None until measured, or with no session.
+pub(crate) fn console_rtt_ms(host: &str) -> Option<u32> {
+    let l = live().filter(|l| same_console(&l.host, host))?;
+    let ms = l.stats.lock().ok()?.as_ref()?["console_rtt_ms"].as_f64()?;
+    Some((ms.round() as u32).max(1))
+}
+
+/// The paired PS5 user `host`'s running session signed in, by name (None: no session, or a user
+/// the engine has no name for).
+pub(crate) fn session_user(host: &str) -> Option<String> {
+    live().filter(|l| same_console(&l.host, host))?.user_name()
+}
+
+/// What the last session started on each console asked for: Play Rooms starts it again, with no
+/// page attached, after a friend took the host's user ([`restart_for_friends`]). Never the keys
+/// (the regist key names the paired user; the keys stay in consoles_api's store).
+#[derive(Clone, Debug)]
+struct LastStart {
+    width: Option<u32>,
+    height: Option<u32>,
+    fps: Option<u32>,
+    bitrate_kbps: Option<u32>,
+    codec: Option<String>,
+    regist_hex: String,
+}
+
+static LAST_START: Mutex<Option<std::collections::HashMap<String, LastStart>>> = Mutex::new(None);
+
+/// The consoles a restart was asked for (the tests' record: nothing is started in a test).
+#[cfg(test)]
+pub(crate) static TEST_RESTARTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Starts the host's stream on `console` again with no page attached, as the last session there
+/// was (its size, rate, codec and paired user, the keys from the engine's store): a friend's pad
+/// took the host's user and the PS5 ended the stream, and nobody's page started it again. The
+/// session is held while friends play (`held_without_page`), and a host page that comes back
+/// attaches to it. Err: `running` (a session runs), `no_start` (none started here before),
+/// `no_keys` (that user's keys are gone).
+pub(crate) fn restart_for_friends(console: &str) -> Result<u64, &'static str> {
+    let host = crate::vinput_api::host_key(console);
+    if cfg!(test) {
+        #[cfg(test)]
+        TEST_RESTARTS.lock().unwrap().push(host.clone());
+        return Err("test");
+    }
+    let last = LAST_START
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref()?.get(&host).cloned())
+        .ok_or("no_start")?;
+    let (r, k) =
+        crate::consoles_api::rp_keys_by_regist(&host, &last.regist_hex).ok_or("no_keys")?;
+    let creds =
+        ps5upload_core::rp_session::SessionCreds::from_hex(&r, &k).map_err(|_| "no_keys")?;
+    let req: StartReq = serde_json::from_value(serde_json::json!({
+        "host": host,
+        "regist_key": "",
+        "rp_key": "",
+        "width": last.width,
+        "height": last.height,
+        "fps": last.fps,
+        "bitrate_kbps": last.bitrate_kbps,
+        "codec": last.codec,
+    }))
+    .map_err(|_| "bad_start")?;
+    let mut g = LIVE.lock().map_err(|_| "lock")?;
+    if g.is_some() {
+        return Err("running");
+    }
+    let l = begin(&req, creds);
+    if let Ok(mut a) = l.alone_since.lock() {
+        *a = Some(Instant::now());
+    }
+    *g = Some(l.clone());
+    Ok(l.session)
 }
 
 /// A guest on the stream's controller may keep it: the session runs for `host`, its picture is
@@ -687,12 +812,14 @@ pub(crate) fn add_spectator(id: u64) -> Option<mpsc::Receiver<Message>> {
 /// never far behind: a full queue skips to the next keyframe (counted in `skipped`) instead of
 /// adding delay. None when no session runs for `host`. `internet`: over a WebRTC data channel
 /// (keyframes come sooner after it keeps falling behind, [`INTERNET_LAGGING_KEY_GAP`]).
+/// `timing`: its pictures come as kind 7 (with the engine's time), as a page that asked for it.
 pub(crate) fn add_player(
     id: u64,
     host: &str,
     video_queue: usize,
     skipped: Arc<AtomicU64>,
     internet: bool,
+    timing: bool,
 ) -> Option<PlayerFeed> {
     let l = live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == crate::vinput_api::host_key(host))?;
@@ -706,6 +833,7 @@ pub(crate) fn add_player(
         } else {
             LAGGING_KEY_GAP
         },
+        timing,
         ..Spectator::watcher(id, tx)
     };
     l.add_spectator(sp, Some(&vtx));
@@ -723,6 +851,22 @@ pub(crate) fn live_session(host: &str) -> Option<u64> {
     live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
         .map(|l| l.session)
+}
+
+/// The session running for `host`: its codec ("h264", "h265" or "h265_hdr") and the bitrate it
+/// was asked for (kbit/s), or None.
+pub(crate) fn live_video(host: &str) -> Option<(&'static str, u32)> {
+    let key = crate::vinput_api::host_key(host);
+    live()
+        .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
+        .map(|l| {
+            let codec = match (l.hevc, l.hdr.load(Ordering::Relaxed)) {
+                (true, true) => "h265_hdr",
+                (true, false) => "h265",
+                _ => "h264",
+            };
+            (codec, l.bitrate_kbps.load(Ordering::Relaxed))
+        })
 }
 
 /// A Play Together player's picture is waiting for a keyframe (it skipped frames it could not
@@ -876,12 +1020,31 @@ impl Live {
     }
 
     fn to_spectators_tagged_at(&self, kind: u8, msg: &Bytes, key: bool, now: Instant) {
+        self.to_spectators_timed_at(kind, msg, key, now, None);
+    }
+
+    /// `to_spectators_tagged` for a video access unit the engine had whole at `t_us`: a player
+    /// that takes timed video gets it as kind 7 with that time.
+    fn to_spectators_timed(&self, msg: &Bytes, key: bool, t_us: u64) {
+        self.to_spectators_timed_at(1, msg, key, Instant::now(), Some(t_us));
+    }
+
+    fn to_spectators_timed_at(
+        &self,
+        kind: u8,
+        msg: &Bytes,
+        key: bool,
+        now: Instant,
+        t_us: Option<u64>,
+    ) {
         let Ok(mut g) = self.spectators.lock() else {
             return;
         };
         if g.is_empty() {
             return;
         }
+        // Built once, for the players that take timed video.
+        let mut timed: Option<Message> = None;
         for sp in g.iter_mut() {
             if kind > 1 {
                 // Sound and the rest: a full queue just misses it.
@@ -915,9 +1078,16 @@ impl Live {
                 }
             }
             sp.need_key = false;
-            if let Err(mpsc::error::TrySendError::Full(_)) =
-                q.try_send(Message::Binary(msg.clone()))
-            {
+            let m = if kind == 1 && sp.timing {
+                timed
+                    .get_or_insert_with(|| {
+                        bin_timed(t_us.unwrap_or_else(engine_us), msg.get(1..).unwrap_or(&[]))
+                    })
+                    .clone()
+            } else {
+                Message::Binary(msg.clone())
+            };
+            if let Err(mpsc::error::TrySendError::Full(_)) = q.try_send(m) {
                 sp.need_key = true;
                 sp.skipped_at(now);
                 if let Some(c) = &sp.skipped {
@@ -1007,6 +1177,7 @@ impl Live {
             host,
             session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             hevc,
+            hdr: AtomicBool::new(false),
             bitrate_kbps: std::sync::atomic::AtomicU32::new(StreamConfig::default().bitrate_kbps),
             keep_alive,
             pad: Default::default(),
@@ -1282,13 +1453,28 @@ impl Live {
     }
 
     /// With no page attached, the session still has a reason to run: the picture is off here on
-    /// purpose, and Go live or Play Together needs the stream.
+    /// purpose, and Go live or Play Together needs the stream; or friends are playing through
+    /// Play Together, picture on or off, for up to [`HOST_AWAY_MAX`] since the host's last page
+    /// left (a phone asleep, the desktop closed: their game goes on).
     fn held_without_page(&self) -> bool {
-        self.picture_off() && self.stream_needed()
+        let friends_in = crate::join::needs_session(&self.host)
+            && !crate::join::friends_playing(&self.host).is_empty();
+        if friends_in && self.away_for().is_none_or(|d| d < HOST_AWAY_MAX) {
+            return true;
+        }
+        // Past the cap, Play Together no longer holds it; Go live still does.
+        self.picture_off()
+            && (crate::rp_golive::run_needs_session()
+                || (!friends_in && crate::join::needs_session(&self.host)))
     }
 
-    fn stream_needed(&self) -> bool {
-        crate::rp_golive::run_needs_session() || crate::join::needs_session(&self.host)
+    /// How long no page has been attached (None: one is).
+    fn away_for(&self) -> Option<Duration> {
+        self.alone_since
+            .lock()
+            .ok()
+            .and_then(|a| *a)
+            .map(|t| t.elapsed())
     }
 
     /// `keep_alive_s` ran out with no page, and nothing holds the session.
@@ -1498,7 +1684,7 @@ impl Sink {
             key,
             msg.slice(1..),
         );
-        live.to_spectators_tagged(1, &msg, key);
+        live.to_spectators_timed(&msg, key, t_us);
         if live.picture_off() {
             return true; // guests and the feed have it; this page asked not to
         }
@@ -2048,13 +2234,29 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .min(MAX_KEEP_ALIVE),
     ));
     live.bitrate_kbps.store(cfg.bitrate_kbps, Ordering::Relaxed);
-    let _ = live.regist_hex.set(
-        creds
-            .regist_key
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
+    live.hdr.store(
+        matches!(cfg.codec, ps5upload_core::rp_stream::Codec::H265Hdr),
+        Ordering::Relaxed,
     );
+    let regist_hex: String = creds
+        .regist_key
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if let Ok(mut g) = LAST_START.lock() {
+        g.get_or_insert_with(std::collections::HashMap::new).insert(
+            crate::vinput_api::host_key(&start.host),
+            LastStart {
+                width: start.width,
+                height: start.height,
+                fps: start.fps,
+                bitrate_kbps: start.bitrate_kbps,
+                codec: start.codec.clone(),
+                regist_hex: regist_hex.clone(),
+            },
+        );
+    }
+    let _ = live.regist_hex.set(regist_hex);
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
@@ -2327,7 +2529,18 @@ async fn session(mut socket: WebSocket) {
     // Pings since the page was last heard from. Counted, not timed: a computer waking from sleep
     // has its clock moved on, not a silent page.
     let mut quiet = 0u32;
+    // The host's side of Play Rooms chat and voice (join_comms.rs): this page talks and hears as
+    // the host. Nothing reaches it until the host accepts the notice and a room is open.
+    let mut comms = crate::join_comms::attach(
+        &live.host,
+        crate::join_comms::HOST_PID,
+        &crate::mesh_api::device_name(),
+        None,
+        true,
+    );
     loop {
+        // Pictures waiting: room voice goes in 40 ms bundles (join_comms.rs).
+        let pictures_waiting = !video_rx.is_empty();
         tokio::select! {
             // Audio and status first: a big keyframe must not hold up sound.
             biased;
@@ -2354,8 +2567,16 @@ async fn session(mut socket: WebSocket) {
                 }
                 None => break,
             },
+            // Room voice, then chat, after the picture (join_comms.rs).
+            m = comms.next(pictures_waiting) => {
+                if !send_limited(&mut socket, m).await {
+                    reason = "gone";
+                    break;
+                }
+            },
             inc = socket.recv() => { quiet = 0; match inc {
                 Some(Ok(Message::Text(t))) => {
+                    comms.on_text(t.as_str());
                     if let Ok(m) = serde_json::from_str::<ClientMsg>(t.as_str()) {
                         if let Some(p) = pong(&m) {
                             let _ = pong_tx.try_send(p);
@@ -2377,8 +2598,14 @@ async fn session(mut socket: WebSocket) {
                             live.page_key_ask();
                         }
                         if m.stop {
-                            crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
-                            live.stop.store(true, Ordering::Relaxed);
+                            let friends = crate::join::friends_playing(&live.host);
+                            if friends.is_empty() || m.confirm_friends {
+                                crate::log_at!(Info, "rp", "rp_stream: {}: page {id} stops the session", live.host);
+                                live.stop.store(true, Ordering::Relaxed);
+                            } else {
+                                crate::log_at!(Info, "rp", "rp_stream: {}: page {id} asks to stop with {} friend(s) playing: asked to confirm", live.host, friends.len());
+                                let _ = pong_tx.try_send(text(crate::together_guard::socket_ask(&friends)));
+                            }
                         }
                         if let Some(on) = m.mic {
                             live.set_mic(id, on);
@@ -2408,6 +2635,10 @@ async fn session(mut socket: WebSocket) {
                             note_decoder(&live.host, id, d);
                         }
                     }
+                }
+                // The host's room voice (join_voice.rs).
+                Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::join_voice::KIND_VOICE_UP) => {
+                    comms.on_binary(&b);
                 }
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&KIND_MIC) => {
                     live.mic_frame(id, &b[1..]);
@@ -2456,6 +2687,96 @@ pub async fn player() -> impl IntoResponse {
     Html(include_str!("rp_player.html"))
 }
 
+/// A recorded session played as the running one (rp_dev_replay.rs: a test engine started with
+/// `PS5UPLOAD_DEV_REPLAY_HOST`, never the app): its pictures, sound and rumble go through the
+/// same [`Sink`] the console's stream feeds, so Play Together guests, watchers and the page get
+/// exactly what a live session gives them.
+pub(crate) struct DevSession {
+    sink: Sink,
+}
+
+impl DevSession {
+    /// Becomes the running session for `host`, unless one runs already. `picture_off`: as a host
+    /// with the picture off on their device (a guest may get the stream's controller).
+    pub(crate) fn start(host: &str, hevc: bool, hdr: bool, picture_off: bool) -> Option<Self> {
+        let mut g = LIVE.lock().ok()?;
+        if g.as_ref().is_some_and(|l| !l.stop.load(Ordering::Relaxed)) {
+            return None;
+        }
+        let live = Arc::new(Live::new(host.into(), hevc, DEFAULT_KEEP_ALIVE));
+        live.hdr.store(hdr, Ordering::Relaxed);
+        live.page_off.store(picture_off, Ordering::Relaxed);
+        live.playing.store(true, Ordering::Relaxed);
+        *g = Some(live.clone());
+        Some(DevSession {
+            sink: Sink {
+                live,
+                t0: Instant::now(),
+            },
+        })
+    }
+
+    /// This session's id.
+    pub(crate) fn session(&self) -> u64 {
+        self.sink.live.session
+    }
+
+    /// The codec header.
+    pub(crate) fn video_header(&mut self, header: &[u8]) {
+        self.sink.video(header, true);
+    }
+
+    /// An access unit, and whether the recording called it a keyframe.
+    pub(crate) fn picture(&mut self, au: &[u8], key: bool) {
+        self.sink.video_known(au, false, Some(key));
+    }
+
+    /// The audio header (`header`) or one frame as the session carries it (`[u16 BE index][Opus]`).
+    pub(crate) fn audio(&mut self, frame: &[u8], header: bool) {
+        self.sink.audio(frame, header);
+    }
+
+    /// The game's rumble on the stream's controller.
+    pub(crate) fn rumble(&mut self, left: u8, right: u8) {
+        self.sink.rumble(left, right);
+    }
+
+    /// Someone (a page, a watcher, a player, instant replay) waits for a keyframe.
+    pub(crate) fn wants_keyframe(&mut self) -> bool {
+        self.sink.wants_keyframe()
+    }
+
+    /// The next controller state for the console (the page's, phones', a guest's on the stream's
+    /// controller), merged.
+    pub(crate) fn input(&mut self) -> Option<ControllerState> {
+        self.sink.input()
+    }
+
+    /// Stopped (`POST /api/ps5/rp/stop`), or another session took its place.
+    pub(crate) fn ended(&self) -> bool {
+        self.sink.live.stop.load(Ordering::Relaxed)
+            || !live().is_some_and(|l| Arc::ptr_eq(&l, &self.sink.live))
+    }
+}
+
+/// Ends the running session as `POST /api/ps5/rp/stop` would (tests).
+#[cfg(test)]
+pub(crate) fn stop_running() {
+    if let Some(l) = live() {
+        l.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for DevSession {
+    fn drop(&mut self) {
+        if let Ok(mut g) = LIVE.lock() {
+            if g.as_ref().is_some_and(|l| Arc::ptr_eq(l, &self.sink.live)) {
+                *g = None;
+            }
+        }
+    }
+}
+
 /// A session in [`LIVE`] for other modules' tests (hold [`LIVE_TEST_LOCK`]).
 #[cfg(test)]
 pub(crate) mod test_live {
@@ -2484,6 +2805,16 @@ pub(crate) mod test_live {
         /// Any kind of the stream's messages (0: the codec header, 1: a picture).
         pub(crate) fn send(&self, kind: u8, data: &[u8], key: bool) {
             self.0.to_spectators(kind, data, key);
+        }
+
+        /// The host's page left (no page attached since now).
+        pub(crate) fn page_left(&self) {
+            *self.0.alone_since.lock().unwrap() = Some(Instant::now());
+        }
+
+        /// The engine's round trip to the console, as the session's stats would say it.
+        pub(crate) fn console_rtt(&self, ms: f64) {
+            *self.0.stats.lock().unwrap() = Some(serde_json::json!({"console_rtt_ms": ms}));
         }
     }
 
@@ -3013,6 +3344,35 @@ mod tests {
         assert!(!crate::join::needs_session("10.0.77.1"));
     }
 
+    /// Friends playing hold a page-less session, picture on or off, for up to HOST_AWAY_MAX since
+    /// the host's last page left; then it ends as any page-less session does.
+    #[test]
+    fn friends_playing_hold_the_session_for_up_to_four_hours() {
+        let host = "10.0.77.3";
+        let live = Arc::new(Live::new(host.into(), false, Duration::from_millis(0)));
+        *live.alone_since.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
+        assert!(live.alone_too_long(), "nobody in: ends as ever");
+        crate::join::test_party_with_guest(host, "Mia");
+        assert!(crate::join::needs_session(host));
+        // Picture on (the host's device was showing it), and off: held either way.
+        assert!(!live.picture_off());
+        assert!(live.held_without_page());
+        assert!(!live.alone_too_long());
+        live.set_picture(false);
+        assert!(!live.alone_too_long());
+        live.set_picture(true);
+        // Just under the cap: still held. Past it: ends, picture on or off.
+        *live.alone_since.lock().unwrap() =
+            Some(Instant::now() - (HOST_AWAY_MAX - Duration::from_secs(60)));
+        assert!(!live.alone_too_long());
+        *live.alone_since.lock().unwrap() =
+            Some(Instant::now() - (HOST_AWAY_MAX + Duration::from_secs(1)));
+        assert!(live.alone_too_long());
+        live.set_picture(false);
+        assert!(live.alone_too_long());
+        crate::join::test_close_party(host);
+    }
+
     /// "Server shutting down" while a Play Together guest was being asked who is using their pad:
     /// the end names their player for the page. Any other end, or no guest picking, names nobody.
     #[test]
@@ -3373,6 +3733,56 @@ mod tests {
             drop(c);
         }
 
+        /// `{"stop": true}` with friends playing asks the page first; with `"confirm_friends":
+        /// true` it stops. `host_away` says how long no page has been attached.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_page_stop_with_friends_in_asks_first() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            crate::join::test_party_with_guest("10.0.77.2", "Mia");
+            assert_eq!(host_away("10.0.77.2"), None, "never attached, never left");
+            *s.0.alone_since.lock().unwrap() = Some(Instant::now() - Duration::from_secs(90));
+            assert!(host_away("10.0.77.2").unwrap() >= Duration::from_secs(90));
+            assert_eq!(host_away("10.0.77.9"), None, "another console");
+            let url = serve().await;
+            let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            c.send(TMsg::Text(ATTACH.into())).await.unwrap();
+            c.send(TMsg::Text(r#"{"stop":true}"#.into())).await.unwrap();
+            let asked = async {
+                loop {
+                    match c.next().await {
+                        Some(Ok(TMsg::Text(t))) => {
+                            let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                            if v["stage"] == "confirm_friends" {
+                                return v;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        other => panic!("closed: {other:?}"),
+                    }
+                }
+            };
+            let v = tokio::time::timeout(Duration::from_secs(3), asked)
+                .await
+                .expect("asked");
+            assert_eq!(v["friends"], serde_json::json!(["Mia"]));
+            assert!(!s.0.stop.load(Ordering::Relaxed));
+            assert_eq!(host_away("10.0.77.2"), None, "a page is attached");
+            c.send(TMsg::Text(r#"{"stop":true,"confirm_friends":true}"#.into()))
+                .await
+                .unwrap();
+            let stopped = async {
+                while !s.0.stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(3), stopped)
+                .await
+                .expect("stopped");
+            crate::join::test_close_party("10.0.77.2");
+            drop(c);
+        }
+
         /// A session told to stop is not joined: a start hears "busy, look again", a page coming
         /// back that it has gone. Attaching used to end with it, a minute later, with no word.
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3585,6 +3995,58 @@ mod tests {
         live.need_key.store(false, Ordering::Relaxed);
         assert!(sink.video(KEY, false));
         assert_eq!(kinds(&mut vr), ["bin1"]);
+    }
+
+    #[test]
+    fn a_player_whose_app_asks_for_timing_gets_kind_7_and_other_players_kind_1() {
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let player = |id: u64, timing: bool| {
+            let (tx, other) = mpsc::channel(SPECTATOR_QUEUE);
+            let (vtx, video) = mpsc::channel(4);
+            live.add_spectator(
+                Spectator {
+                    video: Some(vtx.clone()),
+                    need_key: false,
+                    timing,
+                    ..Spectator::watcher(id, tx)
+                },
+                Some(&vtx),
+            );
+            (video, other)
+        };
+        let (mut timed, _o1) = player(1, true);
+        let (mut plain, _o2) = player(2, false);
+        let before = engine_us();
+        assert!(sink.video(KEY, false));
+        let after = engine_us();
+        let Ok(Message::Binary(b)) = timed.try_recv() else {
+            panic!("no timed video");
+        };
+        assert_eq!(b[0], KIND_VIDEO_TIMED);
+        let t = u64::from_be_bytes(b[1..9].try_into().unwrap());
+        assert!((before..=after).contains(&t));
+        assert_eq!(&b[9..], KEY);
+        let Ok(Message::Binary(w)) = plain.try_recv() else {
+            panic!("no plain video");
+        };
+        assert_eq!(w[0], 1);
+        assert_eq!(&w[1..], KEY);
+    }
+
+    #[test]
+    fn the_codec_a_player_is_told_says_hdr() {
+        let _g = LIVE_TEST_LOCK.blocking_lock();
+        let live = Arc::new(Live::new("10.0.0.41".into(), true, DEFAULT_KEEP_ALIVE));
+        live.hdr.store(true, Ordering::Relaxed);
+        live.bitrate_kbps.store(20_000, Ordering::Relaxed);
+        *LIVE.lock().unwrap() = Some(live);
+        assert_eq!(live_video("10.0.0.41"), Some(("h265_hdr", 20_000)));
+        assert_eq!(live_video("10.0.0.42"), None);
+        *LIVE.lock().unwrap() = None;
     }
 
     #[test]

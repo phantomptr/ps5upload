@@ -154,6 +154,7 @@ int xreq_parse(const char *json, xjob_t *j) {
     if (get_bool(json, "replace", &j->replace) < 0) return -1;
     if (get_bool(json, "list", &j->list) < 0) return -1;
     if (get_str(json, "top", j->top_map, sizeof j->top_map) < 0) return -1;
+    if (get_bool(json, "free", &j->free_req) < 0) return -1;
     return 0;
 }
 
@@ -226,6 +227,23 @@ int xstatus_format(char *out, size_t cap, const xjob_t *j, const char *state, lo
         put_str(out, cap, &at, j->top_dirs);
         if (at + 20 >= cap) return -1;
         at += (size_t)snprintf(out + at, cap - at, ",\"top_more\":%s", j->top_more ? "true" : "false");
+    }
+    if (j->free_req) {
+        if (at + 400 + XJ_NAME * 6 >= cap) return -1;
+        at += (size_t)snprintf(out + at, cap - at,
+                               ",\"free_mode\":\"%s\",\"checking\":%s,\"deleting\":%s,\"parts\":%u,\"parts_freed\":%u,\"bytes_freed\":%llu,"
+                               "\"parts_left\":%u,\"free_not_removed\":%u,\"archive_bytes\":%llu,\"unpacked\":%llu,"
+                               "\"free_peak\":%llu,\"same_drive\":%s,\"plan_known\":%s,\"left_first\":",
+                               j->free_mode, j->checking ? "true" : "false", j->deleting ? "true" : "false", j->parts,
+                               j->parts_freed,
+                               (unsigned long long)j->bytes_freed, j->parts_left, j->free_not_removed,
+                               (unsigned long long)j->archive_bytes, (unsigned long long)j->unpacked,
+                               (unsigned long long)j->free_peak, j->same_drive ? "true" : "false",
+                               j->plan_known ? "true" : "false");
+        put_str(out, cap, &at, j->left_first);
+        if (at + 16 >= cap) return -1;
+        at += (size_t)snprintf(out + at, cap - at, ",\"free_why\":");
+        put_str(out, cap, &at, j->free_why);
     }
     if (at + 2 >= cap) return -1;
     out[at++] = '}';

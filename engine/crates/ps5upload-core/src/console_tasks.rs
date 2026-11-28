@@ -21,6 +21,8 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(8);
 const SMB_KEEP_S: i64 = 5 * 60;
 /// What an id of the SMB daemon's job starts with, here and in cancel.
 const SMB_PREFIX: &str = "smb:";
+/// Items waiting in the page's queue carry this in front of the queue's id (#982).
+const QUEUE_PREFIX: &str = "queue:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsoleTask {
@@ -28,7 +30,8 @@ pub struct ConsoleTask {
     pub id: String,
     /// `copy`, `move`, `delete`, `chmod`, `verify`, `unpack`, `extract`, `pkg_install`, `other`.
     pub kind: String,
-    /// `running`, `done`, `failed`, `cancelled`, or `gone` (it ended and nobody saw how).
+    /// `running`, `done`, `failed`, `cancelled`, `gone` (it ended and nobody saw how), or
+    /// `queued` (waiting in the page's queue, #982).
     pub state: String,
     /// The file or folder it works on; may be empty.
     #[serde(default)]
@@ -44,6 +47,10 @@ pub struct ConsoleTask {
     /// Seconds since it ended; 0 while it runs.
     #[serde(default)]
     pub age_s: u64,
+    /// Seconds since it started (how long it ran, once ended), on the console's clock; `None`
+    /// from a helper too old to say (#981).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_s: Option<u64>,
     /// Whether cancel can stop it.
     #[serde(default)]
     pub cancellable: bool,
@@ -103,6 +110,15 @@ fn smb_task(j: &Value, now: i64) -> Option<ConsoleTask> {
     if !running && age > SMB_KEEP_S {
         return None;
     }
+    // A daemon that says how long it ran; else worked out from "started" (a clock that went back
+    // reads 0).
+    let elapsed_s = j.get("elapsed_s").and_then(Value::as_u64).or_else(|| {
+        let started = j
+            .get("started")
+            .and_then(Value::as_i64)
+            .filter(|s| *s > 0)?;
+        Some((if running { now } else { ended } - started).max(0) as u64)
+    });
     Some(ConsoleTask {
         id: format!("{SMB_PREFIX}{id}"),
         kind: kind.to_string(),
@@ -120,6 +136,7 @@ fn smb_task(j: &Value, now: i64) -> Option<ConsoleTask> {
         bytes_done: u64_of(j, "bytes_done"),
         bytes_total: u64_of(j, "bytes_total"),
         age_s: if running { 0 } else { age as u64 },
+        elapsed_s,
         cancellable: running,
     })
 }
@@ -145,7 +162,47 @@ pub fn parse_reply(reply: &Value) -> Vec<ConsoleTask> {
     if let Some(jobs) = reply.get("smb_jobs").and_then(Value::as_array) {
         out.extend(jobs.iter().filter_map(|j| smb_task(j, now)));
     }
+    if let Some(items) = reply
+        .get("queue")
+        .and_then(|q| q.get("items"))
+        .and_then(Value::as_array)
+    {
+        out.extend(items.iter().filter_map(queued_task));
+    }
     out
+}
+
+/// One item waiting in the console page's queue (#982), state `queued`: the apps show what waits
+/// there. The running item is already listed as its job, and how items ended as theirs, so only
+/// the waiting ones are taken. Read-only: the page's queue is changed on the page.
+fn queued_task(j: &Value) -> Option<ConsoleTask> {
+    if str_of(j, "state") != "pending" {
+        return None;
+    }
+    let id = j.get("id").and_then(Value::as_u64)?;
+    let kind = match str_of(j, "kind") {
+        "copy" => "copy",
+        "install" => "pkg_install",
+        _ => return None,
+    };
+    let name = str_of(j, "name");
+    Some(ConsoleTask {
+        id: format!("{QUEUE_PREFIX}{id}"),
+        kind: kind.to_string(),
+        state: "queued".to_string(),
+        name: if name.is_empty() {
+            last_name(str_of(j, "src"))
+        } else {
+            name.to_string()
+        },
+        files_done: 0,
+        files_total: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        age_s: 0,
+        elapsed_s: None,
+        cancellable: false,
+    })
 }
 
 fn unix_now() -> i64 {
@@ -236,6 +293,51 @@ mod tests {
     }
 
     #[test]
+    fn what_waits_in_the_page_queue_is_listed_read_only() {
+        let v = json!({"now":1,"tasks":[],"smb_jobs":[],"queue":{"paused":false,"items":[
+            {"id":3,"kind":"copy","state":"done","src":"smb://n/a","name":"A"},
+            {"id":4,"kind":"install","state":"running","src":"/data/b.pkg","name":"B"},
+            {"id":5,"kind":"install","state":"pending","src":"smb://n/Games/c.pkg","name":""},
+            {"id":6,"kind":"copy","state":"pending","src":"smb://n/d","name":"D"},
+            {"id":7,"kind":"other","state":"pending","src":"x"},
+        ]}});
+        let t = parse_reply(&v);
+        assert_eq!(t.len(), 2);
+        assert_eq!(
+            (
+                t[0].id.as_str(),
+                t[0].kind.as_str(),
+                t[0].state.as_str(),
+                t[0].name.as_str()
+            ),
+            ("queue:5", "pkg_install", "queued", "c.pkg")
+        );
+        assert_eq!((t[1].id.as_str(), t[1].kind.as_str()), ("queue:6", "copy"));
+        assert!(!t[0].cancellable && !t[1].cancellable);
+        // a helper without the queue: nothing more
+        assert!(parse_reply(&json!({"now":1,"tasks":[]})).is_empty());
+    }
+
+    #[test]
+    fn elapsed_comes_from_the_helper_and_is_absent_when_it_does_not_say() {
+        let v = json!({"now":1000,"tasks":[
+            {"id":"a","kind":"copy","state":"running","elapsed_s":42},
+            {"id":"b","kind":"copy","state":"running"},
+        ],"smb_jobs":[
+            {"job":"d","kind":"download","state":"running","src":"s","dest":"/d","started":2000,"elapsed_s":7},
+            // the console clock went back: never a negative time
+            {"job":"e","kind":"download","state":"running","src":"s","dest":"/d","started":2000},
+        ]});
+        let t = parse_reply(&v);
+        assert_eq!(t[0].elapsed_s, Some(42));
+        assert_eq!(t[1].elapsed_s, None);
+        assert_eq!(t[2].elapsed_s, Some(7));
+        assert_eq!(t[3].elapsed_s, Some(0));
+        let out = serde_json::to_value(&t[1]).unwrap();
+        assert!(out.get("elapsed_s").is_none());
+    }
+
+    #[test]
     fn share_jobs_are_named_and_scans_left_out() {
         let v = json!({"now":1000,"tasks":[],"smb_jobs":[
             {"job":"d1","kind":"download","state":"running","src":"Share/Games/x.iso","dest":"/data/y/x.iso",
@@ -254,6 +356,9 @@ mod tests {
         assert_eq!(t[1].name, "up");
         assert_eq!(t[1].age_s, 10);
         assert!(!t[1].cancellable);
+        // #981: how long they ran, from when they started (no elapsed_s from this daemon)
+        assert_eq!(t[0].elapsed_s, Some(100));
+        assert_eq!(t[1].elapsed_s, Some(490));
         assert_eq!(
             (t[2].kind.as_str(), t[2].state.as_str()),
             ("delete", "failed")

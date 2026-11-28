@@ -312,8 +312,9 @@ fn away_on_tailscale_the_tailnet_pair_wins_over_the_internet() {
 }
 
 /// Away, the host's computer on the tailnet through PS5Upload's own Tailscale only (no interface):
-/// the engine has no tailnet socket, so ICE goes through the routers. Play Together's Tailscale
-/// path needs the Tailscale app on the host's computer.
+/// the engine has no tailnet socket, so ICE goes through the routers. A browser guest's Tailscale
+/// path needs the Tailscale app on the host's computer (PS5Upload Play on a friend's PS5 instead
+/// reaches the guest socket through the node's guest port, tailnet_guest.rs).
 #[test]
 fn away_with_only_the_builtin_tailscale_it_goes_over_the_internet() {
     let o = connect(Place {

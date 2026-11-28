@@ -315,10 +315,10 @@ export default function TvHome() {
 
       <section
         className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4"
-        aria-label={tr("pt_title", undefined, "Play Together")}
+        aria-label={tr("pt_title", undefined, "Play Room")}
       >
         <TvButton icon={<LogIn size={24} />} onClick={() => navigate("/play?mode=friend")} testId="tv-join-go">
-          {tr("tv_join_button", undefined, "Join Play Together")}
+          {tr("tv_join_button", undefined, "Join a Play Room")}
         </TvButton>
         <p className="min-w-0 flex-1 text-base text-[var(--color-muted)] sm:text-lg">
           {tr("tv_join_body", undefined, "Got a link or a code from a friend? Play their PS5 on this TV.")}

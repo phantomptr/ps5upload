@@ -12,8 +12,8 @@ import {
 } from "../../api/tailnet";
 
 const pro: FoundConsole = {
-  name: "yunpengs-ps5pro",
-  tailnet_name: "yunpengs-ps5pro-ps5u",
+  name: "sams-ps5pro",
+  tailnet_name: "sams-ps5pro-ps5u",
   tailnet_ip: "100.64.0.10",
   lan_host: null,
   id: "ab".repeat(32),
@@ -52,17 +52,17 @@ describe("the Add flow", () => {
     const f = answer(200, {
       ok: true,
       action: "added",
-      console: { id: "new-1", name: "yunpengs-ps5pro", host: "100.64.0.10" },
+      console: { id: "new-1", name: "sams-ps5pro", host: "100.64.0.10" },
       found: pro,
     });
     vi.stubGlobal("fetch", f);
-    const r = await addTailnetConsole(" 100.64.0.10 ", "yunpengs-ps5pro");
+    const r = await addTailnetConsole(" 100.64.0.10 ", "sams-ps5pro");
     expect(r.action).toBe("added");
     expect(r.console.host).toBe("100.64.0.10");
     const init = f.mock.calls[0][1] ?? {};
     expect(String(f.mock.calls[0][0])).toContain("/api/tailnet/consoles/add");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual({ addr: "100.64.0.10", name: "yunpengs-ps5pro" });
+    expect(JSON.parse(String(init.body))).toEqual({ addr: "100.64.0.10", name: "sams-ps5pro" });
   });
 
   it("a typed address that is not a Tailscale one is refused in words", async () => {

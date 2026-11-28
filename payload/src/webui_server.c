@@ -7,7 +7,9 @@
  *   - a new connection waits on the accept thread until it sends something, so
  *     an idle one (a browser's speculative connect, or four from anyone on the
  *     LAN) holds no worker; it is closed at its deadline;
- *   - one address cannot take the whole server (WEBUI_PER_SOURCE_MAX);
+ *   - one address cannot take the whole server (WEBUI_PER_SOURCE_MAX), nor send requests faster
+ *     than a person ever does (a rate gate per LAN address, rate_gate.h: 429 with Retry-After,
+ *     longer waits only for one that keeps going; the TV's own browser, 127.0.0.1, is never gated);
  *   - a full queue closes the new connection instead of waiting;
  *   - every connection has a deadline of accept time + 5 s; a worker reads in
  *     poll slices up to that deadline and drops an expired connection unread;
@@ -26,6 +28,7 @@
  * the worker slot under the lock BEFORE it is closed, so stop() can never
  * shutdown() a descriptor number that was reused by another subsystem. */
 #include "webui_server.h"
+#include "rate_gate.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -54,6 +57,10 @@
 #define WEBUI_QUEUE_DEPTH    32
 #define WEBUI_WAITING_MAX    32      /* connections waiting for their first bytes */
 #define WEBUI_PER_SOURCE_MAX 16      /* one address's connections anywhere in the server: a browser opens 6 */
+/* Requests a LAN address may send: a burst well above a page load with a folder of covers, and a
+ * steady pace no person keeps up (a folder upload sends a few a second). rate_gate.h. */
+#define WEBUI_RATE_BURST     400u
+#define WEBUI_RATE_PER_S     60u
 /* The host self-test builds with shorter connection and watch times (-D on its compile line) so it
  * exercises the same timeout paths in a fraction of the time; the helper always uses these. */
 #ifndef WEBUI_CONN_MS
@@ -120,6 +127,7 @@ typedef struct srv {
     int w_long[WEBUI_WORKERS];      /* 1 while the worker is inside a transfer (WEBUI_LONG_MAX) */
     unsigned expired;               /* queued connections past their deadline before a worker got to them */
     unsigned busy;                  /* transfers answered 503: WEBUI_LONG_MAX were running */
+    rate_gate_t gate;               /* requests per LAN address */
     worker_arg_t wargs[WEBUI_WORKERS];
     char *wbuf[WEBUI_WORKERS];
 } srv_t;
@@ -129,6 +137,7 @@ static pthread_mutex_t g_life = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static srv_t *g_srv;
 static char g_token[65];
+static int g_lan_flag;
 
 static uint64_t mono_ms(void) {
     struct timespec ts;
@@ -170,9 +179,24 @@ static int thread_start(pthread_t *t, void *(*fn)(void *), void *arg) {
 /* The console's IPv4 addresses, for the LAN Host check; -1 when they could not be read
  * (getifaddrs failed: the caller keeps the list it has, so a passing failure never looks like an
  * address change). */
+/* The USB adapter's address (usbnet.c), which getifaddrs never lists: it is the adapter daemon's
+ * own TCP/IP stack's, not the kernel's. "" when there is none. Its own lock: own_addrs runs with and
+ * without the server's. */
+static pthread_mutex_t g_extra_mu = PTHREAD_MUTEX_INITIALIZER;
+static char g_extra_addr[INET_ADDRSTRLEN];
+
+void webui_set_extra_addr(const char *ip) {
+    pthread_mutex_lock(&g_extra_mu);
+    snprintf(g_extra_addr, sizeof g_extra_addr, "%s", ip ? ip : "");
+    pthread_mutex_unlock(&g_extra_mu);
+}
+
 static int own_addrs(char out[WEBUI_MAX_ADDRS][INET_ADDRSTRLEN]) {
     struct ifaddrs *ifa = NULL, *p;
     int n = 0;
+    pthread_mutex_lock(&g_extra_mu);
+    if (g_extra_addr[0]) memcpy(out[n++], g_extra_addr, INET_ADDRSTRLEN);
+    pthread_mutex_unlock(&g_extra_mu);
     if (getifaddrs(&ifa) != 0) return -1;
     for (p = ifa; p && n < WEBUI_MAX_ADDRS; p = p->ifa_next) {
         if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
@@ -337,16 +361,29 @@ enum { RD_OK = 0, RD_DROP = -1, RD_STREAM = 1 };
 
 /* Read one request within the deadline. Returns RD_OK, RD_STREAM (the headers are in; the body is
  * the stream handler's to read), RD_DROP (silent close), or an HTTP status (400/413) to answer with. */
+/* *src: the peer; a loopback peer that opens with a PROXY line (the USB adapter daemon joining a LAN
+ * client, usbnet_proto.h) becomes the client it names, and the line is taken off the buffer. */
 static int read_request(srv_t *s, int fd, uint64_t deadline, char *buf, webui_req_t *req,
-                        size_t *got_out) {
+                        size_t *got_out, uint32_t *src) {
     size_t got = 0, need = 0;
-    int parsed = 0;
+    int parsed = 0, proxy_checked = *src != 0x7F000001u;
     for (;;) {
         struct pollfd pf;
         uint64_t now;
         ssize_t n;
         int r, wait;
-        if (got > 0 && !parsed) {
+        if (got > 0 && !proxy_checked) {
+            uint32_t client = 0;
+            r = webui_proxy_line(buf, got, &client);
+            if (r == -2) return RD_DROP;
+            if (r > 0) {
+                memmove(buf, buf + r, got - (size_t)r);
+                got -= (size_t)r;
+                *src = client;
+            }
+            if (r != -1) proxy_checked = 1;
+        }
+        if (got > 0 && !parsed && proxy_checked) {
             r = webui_http_parse_cap(buf, got, req, s->stream ? WEBUI_STREAM_BODY_MAX : WEBUI_BODY_CAP);
             if (r == WEBUI_PARSE_BAD) return 400;
             if (r == WEBUI_PARSE_TOO_BIG) return 413;
@@ -419,7 +456,7 @@ static void serve(srv_t *s, int idx, conn_t c) {
     set_timeo(c.fd, SO_RCVTIMEO, WEBUI_CONN_MS);
     set_timeo(c.fd, SO_SNDTIMEO, WEBUI_CONN_MS);
     memset(&req, 0, sizeof req);
-    rd = read_request(s, c.fd, c.deadline_ms, buf, &req, &got);
+    rd = read_request(s, c.fd, c.deadline_ms, buf, &req, &got, &c.src);
     if (rd == RD_DROP) return;
     req.peer = c.src; /* after the parse, which clears the struct */
 
@@ -435,6 +472,17 @@ static void serve(srv_t *s, int idx, conn_t c) {
     if (rd == 413) {
         webui_send_json(c.fd, 413, "{\"error\":\"too_big\"}");
         return;
+    }
+    /* Faster than any person: asked to slow down (the page waits Retry-After and asks again). */
+    if (c.src != 0x7F000001u) {
+        unsigned wait = rate_gate_take(&s->gate, c.src, mono_ms());
+        if (wait) {
+            static const char body[] = "{\"error\":\"slow_down\"}";
+            char h[40];
+            snprintf(h, sizeof h, "Retry-After: %u\r\n", wait);
+            webui_send_ex(c.fd, 429, "application/json", body, sizeof body - 1, h);
+            return;
+        }
     }
 
     pthread_mutex_lock(&s->mu);
@@ -590,12 +638,16 @@ static void report_drops(srv_t *s, drops_t *d) {
     busy = s->busy;
     s->busy = 0;
     pthread_mutex_unlock(&s->mu);
-    if (d->queue_full || d->per_source || d->idle_evicted || expired || busy)
-        fprintf(stderr,
-                "webui: connections turned away: %u queue full, %u over %d from one address, "
-                "%u idle evicted, %u expired in the queue, %u transfers over %d at once\n",
-                d->queue_full, d->per_source, WEBUI_PER_SOURCE_MAX, d->idle_evicted, expired, busy,
-                WEBUI_LONG_MAX);
+    {
+        unsigned slow = 0;
+        rate_gate_counts(&s->gate, &slow, NULL);
+        if (d->queue_full || d->per_source || d->idle_evicted || expired || busy || slow)
+            fprintf(stderr,
+                    "webui: connections turned away: %u queue full, %u over %d from one address, "
+                    "%u idle evicted, %u expired in the queue, %u transfers over %d at once, %u asked to slow down\n",
+                    d->queue_full, d->per_source, WEBUI_PER_SOURCE_MAX, d->idle_evicted, expired, busy,
+                    WEBUI_LONG_MAX, slow);
+    }
     memset(d, 0, sizeof *d);
 }
 
@@ -872,6 +924,7 @@ int webui_start(const webui_cfg_t *cfg) {
         }
     }
     pthread_mutex_init(&s->mu, NULL);
+    rate_gate_init(&s->gate, WEBUI_RATE_BURST, WEBUI_RATE_PER_S);
     pthread_cond_init(&s->cv, NULL);
     s->refs = 1;
     s->port = cfg->port;
@@ -880,6 +933,7 @@ int webui_start(const webui_cfg_t *cfg) {
     s->stream = cfg->stream;
     s->long_for = cfg->long_for;
     s->lan = cfg->lan ? 1 : 0;
+    __atomic_store_n(&g_lan_flag, s->lan, __ATOMIC_RELAXED);
     webui_token_new(s->token);
     if (s->lan) {
         int got = own_addrs(s->addrs);
@@ -948,6 +1002,11 @@ int webui_running(void) {
     return on;
 }
 
+/* g_lan_flag follows every write of a server's lan (no lock order with the server's own mutex). */
+int webui_lan_on(void) {
+    return webui_running() && __atomic_load_n(&g_lan_flag, __ATOMIC_RELAXED);
+}
+
 void webui_stop(void) {
     srv_t *s;
     pthread_mutex_lock(&g_life);
@@ -980,6 +1039,7 @@ int webui_restart(int lan) {
     }
     pthread_mutex_lock(&s->mu);
     s->lan = lan ? 1 : 0;
+    __atomic_store_n(&g_lan_flag, s->lan, __ATOMIC_RELAXED);
     if (!lan || got >= 0) { /* a failed read keeps the list it had */
         s->n_addrs = n;
         if (n) memcpy(s->addrs, addrs, sizeof addrs);

@@ -7,7 +7,7 @@ import { rememberDestination } from "../../lib/moveTo";
 import { LinkToFolder } from "./LinkToFolder";
 import { MoveToDialog, type MoveItem } from "./MoveToDialog";
 import { ExtractDialog, extractDest, type ExtractAfter, type ExtractChoice } from "./ExtractDialog";
-import { extractCause, isExtractableArchive, needsPassword } from "../../lib/archiveName";
+import { extractCause, isExtractableArchive, needsPassword, partlyFreed } from "../../lib/archiveName";
 import { extractedNext } from "../../lib/extractNext";
 import { SendToConsoleDialog } from "./SendToConsoleDialog";
 import { RenameFromTitleDialog } from "./RenameFromTitleDialog";
@@ -216,6 +216,7 @@ import { formatBytes } from "../../lib/format";
 import { useWindowedRows } from "../../lib/useWindowedRows";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
+import { RateFigures } from "../../components/RateFigures";
 import { resumedShown } from "../../lib/resumedProgress";
 import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 
@@ -2308,6 +2309,7 @@ export default function FileSystemScreen() {
         merge: choice.merge,
         replace: choice.replace,
         top: choice.top,
+        ...(after.freeArchive ? { free: true } : {}),
       });
       task.done();
       // Another folder than the archive's: offer it again next time, under Recent.
@@ -2339,6 +2341,10 @@ export default function FileSystemScreen() {
         extra.push(tr("fs_extract_kept_archive", undefined, "The archive was kept, since not every entry came out."));
       }
       if (deleted) extra.push(tr("fs_extract_deleted", undefined, "The archive was deleted."));
+      if (after.freeArchive && out.partsFreed > 0)
+        extra.push(
+          tr("fs_extract_freed", { size: formatBytes(out.bytesFreed) }, `The archive was deleted as it unpacked (${formatBytes(out.bytesFreed)} freed).`),
+        );
       // What came out decides the next step: packages to install, or a game folder to register.
       // Not for Extract here: the folder held other things before.
       const next = choice.here ? { packages: 0, game: false } : await extractedNext(addr, into);
@@ -2362,7 +2368,10 @@ export default function FileSystemScreen() {
       void refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("cancelled")) {
+      // Part of the archive is gone (it was deleted as it unpacked): never a quiet stop, and the
+      // folder with everything unpacked so far is one click away.
+      const gone = partlyFreed(msg);
+      if (msg.includes("cancelled") && !gone) {
         task.done();
         void refresh();
       } else if (needsPassword(msg)) {
@@ -2380,7 +2389,10 @@ export default function FileSystemScreen() {
         pushNotification(
           "error",
           withConsolePrefix(host, tr("fs_extract_failed", { name: entry.name }, `Couldn't extract ${entry.name}`)),
-          { body: humanizePs5Error(msg) || msg },
+          {
+            body: humanizePs5Error(msg) || msg,
+            ...(gone ? { link: `/files?path=${encodeURIComponent(gone.folder)}` } : {}),
+          },
         );
         void refresh();
       }
@@ -4794,6 +4806,9 @@ export default function FileSystemScreen() {
                 {tr("fs_unpack_running", { name: unpackOp.name }, `Decompressing ${unpackOp.name}`)}
                 {unpackOp.total > 0 &&
                   ` · ${formatBytes(unpackOp.done)} / ${formatBytes(unpackOp.total)} (${Math.floor((unpackOp.done / unpackOp.total) * 100)}%)`}
+                {unpackOp.total > 0 && !unpackOp.stopping && (
+                  <RateFigures id={`unpack:${unpackOp.name}`} done={unpackOp.done} total={unpackOp.total} prefix=" · " />
+                )}
               </span>
               <Button variant="secondary" size="sm" disabled={unpackOp.stopping} onClick={() => void stopUnpack()}>
                 {tr("fs_unpack_stop", undefined, "Stop")}
@@ -4808,6 +4823,9 @@ export default function FileSystemScreen() {
                 {tr("fs_extract_running", { name: extractOp.name }, `Extracting ${extractOp.name}`)}
                 {extractOp.total > 0 &&
                   ` · ${formatBytes(extractOp.done)} / ${formatBytes(extractOp.total)} (${Math.min(100, Math.floor((extractOp.done / extractOp.total) * 100))}%)`}
+                {extractOp.total > 0 && !extractOp.stopping && (
+                  <RateFigures id={`extract:${extractOp.name}`} done={extractOp.done} total={extractOp.total} prefix=" · " />
+                )}
               </span>
               <Button variant="secondary" size="sm" disabled={extractOp.stopping} onClick={() => void stopExtract()}>
                 {tr("fs_extract_stop", undefined, "Stop")}
@@ -5846,7 +5864,6 @@ function DownloadOpBanner({
     startedAtMs > 0 ? Math.max(0, (now - startedAtMs) / 1000) : 0;
   const pct =
     totalBytes > 0 ? Math.min(100, (bytesReceived / totalBytes) * 100) : 0;
-  const speed = elapsedSec > 0 ? bytesReceived / elapsedSec : 0;
 
   return (
     <div className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3 text-xs">
@@ -5886,11 +5903,13 @@ function DownloadOpBanner({
             {formatBytes(bytesReceived)}
           </span>
         )}
-        {speed > 0 && (
-          <span className="text-[var(--color-muted)]">
-            {formatBytes(speed)}/s
-          </span>
-        )}
+        {/* Speed over the last seconds and the time left (#981), not an average since the start. */}
+        <RateFigures
+          id={`download:${rootName}:${startedAtMs}`}
+          done={bytesReceived}
+          total={totalBytes}
+          className="text-[var(--color-muted)]"
+        />
       </div>
 
       {lostContact && (

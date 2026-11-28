@@ -12,9 +12,10 @@ import { ApiError, call } from "../api";
 import type { Volume } from "../home/Home";
 import { t } from "../strings";
 import { ActionsSheet } from "./ActionsSheet";
-import { ExtractDialog, extractCauseText, extractErrorText, itemsPasswordAsk } from "./ExtractDialog";
+import { ExtractDialog, extractAfter, extractCauseText, extractErrorText, freeNoteText, itemsPasswordAsk } from "./ExtractDialog";
 import { busyText, extractMessage, FilesView, sheetActions, type FilesViewProps } from "./Files";
-import { extractInfo, listArchiveTop, skipTop, startOp, topListing, type ExtractInfo, type TopListing } from "./opJob";
+import { extractInfo, listArchiveTop, planArchiveFree, skipTop, startOp, topListing, type ExtractInfo, type TopListing } from "./opJob";
+import type { FreePlan } from "../../lib/archiveName";
 import { TextPrompt } from "./TextPrompt";
 import type { DirState, Entry } from "./useDir";
 
@@ -364,5 +365,94 @@ describe("extract: choose items (#969)", () => {
     mocked.mockResolvedValueOnce({ job: "old" });
     deps.status.mockResolvedValueOnce({ ...(await deps.status()), state: "failed" as never, message: "fs_extract_destination_exists" as never, result: null as never });
     await expect(listArchiveTop("/data/x/g.zip", "/data/x", undefined, deps)).rejects.toMatchObject({ code: "fs_extract_destination_exists" });
+  });
+});
+
+describe("extract: delete the archive as it's unpacked", () => {
+  const status = { job: "j", state: "done" as const, files_done: 1, files_total: 1, bytes_done: 1, bytes_total: 1, message: null, result: null, code: null };
+  const plan: FreePlan = { mode: "parts", parts: 8, archiveBytes: 8000, unpacked: 9000, peak: 2000, sameDrive: true, known: true, why: "" };
+  const dialog = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <ExtractDialog dir="/data/x" name="x.7z.001" path="/data/x/x.7z.001" busy={false} onStart={vi.fn()} onCancel={vi.fn()} initial={INFO} {...over} />,
+    );
+
+  // As the markup writes it.
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+  it("is off for every archive, beside Delete after extracting", () => {
+    const html = dialog();
+    expect(html).toContain('data-action="extract-free"');
+    expect(html).toContain(esc(t("cw_files_extract_free")));
+    expect(html).toContain(esc(t("cw_files_extract_free_hint")));
+    expect(html).toContain('data-action="extract-delete-after"');
+    expect(html).not.toContain("data-extract-free-note");
+  });
+
+  it("on, it says how much less room it needs and hides Delete after extracting", () => {
+    const html = dialog({ startFree: true, startFreePlan: plan });
+    expect(html).toContain(esc(t("cw_files_extract_free_parts", { n: 8, size: formatBytes(7000) })));
+    expect(html).not.toContain('data-action="extract-delete-after"');
+    expect(dialog({ startFree: true })).toContain(esc(t("cw_files_extract_free_checking")));
+    expect(dialog({ startFree: true, startFreePlan: null })).toContain(esc(t("cw_files_extract_free_old")));
+  });
+
+  it("says plainly when it saves nothing while it runs, or can't be done", () => {
+    expect(freeNoteText({ ...plan, mode: "end" })).toBe(t("cw_files_extract_free_end"));
+    expect(freeNoteText({ ...plan, sameDrive: false })).toBe(t("cw_files_extract_free_other_drive"));
+    expect(freeNoteText({ ...plan, known: false })).toBe(t("cw_files_extract_free_parts_plain", { n: 8 }));
+    expect(freeNoteText({ ...plan, mode: "", why: "fs_extract_free_refused: x" })).toBe(t("cw_files_extract_err_free_refused"));
+    expect(extractCauseText("fs_extract_free_refused")).toBe(t("cw_files_extract_err_free_refused"));
+  });
+
+  it("is never on with items left out, and then Delete after extracting is what is sent", () => {
+    expect(extractAfter(true, false, false)).toEqual({ deleteAfter: false, free: true });
+    expect(extractAfter(true, false, true)).toEqual({ deleteAfter: false, free: true });
+    expect(extractAfter(true, true, true)).toEqual({ deleteAfter: true });
+    expect(extractAfter(false, false, true)).toEqual({ deleteAfter: true });
+    const listed = dialog({ startFree: true, startFreePlan: plan, startItems: { top: ["Game", "extra"], dirs: ["Game"], more: false } });
+    expect(listed).toContain('data-action="extract-free"');
+  });
+
+  it("asks the helper for the plan with a listing, and reads it back", async () => {
+    const mocked = vi.mocked(call);
+    mocked.mockReset();
+    mocked.mockResolvedValueOnce({ job: "p1" });
+    const deps = {
+      status: vi.fn(async () => ({
+        ...status,
+        result: JSON.stringify({
+          path: "/data/x",
+          top: "Game",
+          top_dirs: "Game",
+          top_more: false,
+          listed: true,
+          free: { mode: "parts", parts: 8, archive_bytes: 8000, unpacked: 9000, peak: 2000, same_drive: true, known: true, why: "" },
+        }),
+      })),
+      cancel: vi.fn(async () => {}),
+      sleep: vi.fn(async () => {}),
+    };
+    const got = await planArchiveFree("/data/x/x.7z.001", "/data/x", undefined, deps);
+    expect(mocked).toHaveBeenNthCalledWith(1, "/api/fs/extract", { path: "/data/x/x.7z.001", dest: "/data/x", list: true, free: true });
+    expect(got).toEqual(plan);
+    // A listing without the member (an older helper) is no plan.
+    expect(topListing({ top: "Game", top_dirs: "", top_more: false, listed: true })).not.toHaveProperty("free");
+  });
+
+  it("done says what was freed; a stop after parts went says why, what is gone and where the files are", () => {
+    const done = extractMessage(
+      { end: "done", status: { ...status, result: '{"path":"/data/x/x","files":3,"parts_freed":4,"bytes_freed":4096}' } },
+      false,
+    );
+    expect(done?.text).toContain(t("cw_files_extract_freed", { size: formatBytes(4096) }));
+    const failed = (message: string) => extractMessage({ end: "failed", status: { ...status, state: "failed", message } }, false);
+    const out = failed("fs_extract_partly_freed: 3 5 x.7z.004.partial-deleted | /data/x/x | fs_extract_no_space: x/a, 0 free");
+    expect(out?.tone).toBe("error");
+    expect(out?.text).toBe(
+      t("cw_files_extract_err_partly_freed", { reason: t("cw_files_extract_err_no_space"), folder: "/data/x/x", n: 5 }),
+    );
+    expect(failed("fs_extract_partly_freed: 1 7 x.7z.002.partial-deleted | /data/x/x | fs_extract_cancelled")?.text).toBe(
+      t("cw_files_extract_err_partly_freed", { reason: t("cw_files_extract_free_stopped"), folder: "/data/x/x", n: 7 }),
+    );
   });
 });

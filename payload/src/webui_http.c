@@ -253,3 +253,46 @@ int webui_http_head(char *out, size_t cap, int status, const char *content_type,
     out[used] = '\0';
     return (int)used;
 }
+
+/* One dotted IPv4 address filling [p, end), no leading zeros. */
+static int proxy_octets(const char *p, const char *end, uint32_t *out) {
+    uint32_t v = 0;
+    int i;
+    for (i = 0; i < 4; i++) {
+        unsigned n = 0;
+        int digits = 0;
+        while (p < end && *p >= '0' && *p <= '9') {
+            if (digits && n == 0) return -1;
+            n = n * 10 + (unsigned)(*p - '0');
+            if (n > 255) return -1;
+            p++;
+            digits++;
+        }
+        if (!digits) return -1;
+        v = v << 8 | n;
+        if (i < 3) {
+            if (p >= end || *p != '.') return -1;
+            p++;
+        }
+    }
+    if (p != end) return -1;
+    *out = v;
+    return 0;
+}
+
+/* PROXY v1 allows 107 bytes with the CRLF. */
+#define PROXY_LINE_MAX 107
+
+int webui_proxy_line(const char *buf, size_t len, uint32_t *client) {
+    static const char pre[] = "PROXY TCP4 ";
+    const size_t pl = sizeof pre - 1;
+    const char *end, *sp;
+    size_t k = len < pl ? len : pl;
+    if (memcmp(buf, pre, k) != 0) return 0;
+    if (len < pl) return -1;
+    end = find_crlf(buf, buf + (len < PROXY_LINE_MAX ? len : PROXY_LINE_MAX));
+    if (!end) return len < PROXY_LINE_MAX ? -1 : -2;
+    sp = memchr(buf + pl, ' ', (size_t)(end - (buf + pl)));
+    if (!sp || proxy_octets(buf + pl, sp, client) != 0) return -2;
+    return (int)(end - buf) + 2;
+}

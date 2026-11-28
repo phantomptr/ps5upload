@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArchiveRestore, Eraser, Gamepad2, HardDrive, Sparkles, Usb, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ArchiveRestore, Eraser, Gamepad2, HardDrive, Heart, Sparkles, Usb, X } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { ApiError, call, callBlob, isOffline } from "../api";
 import { cleanupLastFound, onCleanupFound } from "../cleanup/Cleanup";
@@ -11,6 +11,9 @@ import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pollWhileVisible } from "../ui/visiblePoll";
 import { TaskRow } from "./TaskRow";
+import { QueueSection } from "../queue/QueueList";
+import { PlayAppCard } from "./PlayAppCard";
+import { RoomCard } from "../room/RoomCard";
 import { HomeDeviceAsks } from "../settings/Devices";
 import { useJobs, visibleJobs, type Job } from "./useJobs";
 
@@ -101,7 +104,8 @@ export async function runAsk(ask: Ask, deps: { cancel: (id: string) => Promise<v
       await deps.cancel(ask.job.job);
       return;
     case "close":
-      await call("/api/app/close", { app_id: ask.appId });
+      // room_ok: the dialog named the players of a Play Room here, if there was one.
+      await call("/api/app/close", { app_id: ask.appId, room_ok: true });
       return;
   }
 }
@@ -135,6 +139,12 @@ function askCopy(ask: Ask): {
 /* ---- view ---- */
 
 export interface HomeViewProps {
+  /** The console's queue section (#982), rendered under Tasks. */
+  queue?: ReactNode;
+  /** The "Your room" card (room/RoomCard), above PS5Upload Play's. */
+  room?: ReactNode;
+  /** The footer's heart: Thanks & Support. */
+  onOpenThanks?: (() => void) | null;
   status: ConsoleStatus | null;
   /** null until the first answer. */
   volumes: Volume[] | null;
@@ -336,6 +346,12 @@ export function HomeView(p: HomeViewProps) {
         )}
       </section>
 
+      {/* A Play Room hosted on this console: who plays, from where (read only). */}
+      {p.room ?? null}
+
+      {/* PS5Upload Play: Install / Update / Open / Join a friend (hidden while there is nothing to show). */}
+      <PlayAppCard />
+
       <section className="cw-home-section">
         <h2 className="cw-h2">{t("cw_home_tasks")}</h2>
         {p.jobsError && tasks.length ? <div className="cw-dim">{t("cw_home_err_load_tasks")}</div> : null}
@@ -360,6 +376,9 @@ export function HomeView(p: HomeViewProps) {
           </button>
         ) : null}
       </section>
+
+      {/* The console's queue (#982): what runs and what waits, in order. */}
+      {p.queue ?? null}
 
       <section className="cw-home-section">
         <h2 className="cw-h2">{t("cw_home_storage")}</h2>
@@ -392,6 +411,13 @@ export function HomeView(p: HomeViewProps) {
         ) : null}
       </section>
 
+      {p.onOpenThanks ? (
+        <button type="button" className="cw-focusable cw-button cw-thanks-link" data-action="open-thanks" onClick={p.onOpenThanks}>
+          <Heart aria-hidden />
+          <span>{t("cw_thanks_title")}</span>
+        </button>
+      ) : null}
+
       {p.ask && copy ? (
         <ConfirmDialog
           title={copy.title}
@@ -401,6 +427,7 @@ export function HomeView(p: HomeViewProps) {
           danger={copy.danger}
           busy={p.busy}
           error={p.askError}
+          roomNotice={p.ask.kind === "close"}
           onConfirm={p.onConfirm}
           onCancel={p.onDismiss}
         />
@@ -581,6 +608,9 @@ export function Home({ ctx }: { ctx: SectionContext }) {
 
   return (
     <HomeView
+      queue={<QueueSection />}
+      room={<RoomCard onOpenRules={hasSection("settings") ? () => openSection("settings", { view: "rules" }) : null} />}
+      onOpenThanks={hasSection("settings") ? () => openSection("settings", { view: "thanks" }) : null}
       status={status}
       volumes={volumes}
       volumesError={volumesError}

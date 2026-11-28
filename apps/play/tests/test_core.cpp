@@ -1,0 +1,783 @@
+// PS5Upload Play - host unit tests for the portable core (make -C apps/play test).
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "../src/core/chord.hpp"
+#include "../src/core/friends.hpp"
+#include "../src/core/hdr.hpp"
+#include "../src/core/invite.hpp"
+#include "../src/core/jitter.hpp"
+#include "../src/core/json.hpp"
+#include "../src/core/proto.hpp"
+#include "../src/core/resume.hpp"
+#include "../src/core/settings.hpp"
+#include "../src/core/ws.hpp"
+#include "../src/ui/i18n.hpp"
+#include "../src/ui/strings.hpp"
+
+#include <cstdio>
+#include <cstring>
+
+namespace
+{
+int failures = 0, checks = 0;
+#define CHECK(cond)                                                                            \
+    do                                                                                         \
+    {                                                                                          \
+        ++checks;                                                                              \
+        if (!(cond))                                                                           \
+        {                                                                                      \
+            ++failures;                                                                        \
+            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                       \
+        }                                                                                      \
+    } while (0)
+
+using namespace play;
+
+void hex(const std::uint8_t *d, std::size_t n, char *out)
+{
+    for (std::size_t i = 0; i < n; ++i)
+        std::snprintf(out + i * 2, 3, "%02x", d[i]);
+}
+
+void test_sha1_base64()
+{
+    std::uint8_t d[20];
+    char h[41];
+    ws::sha1("abc", 3, d);
+    hex(d, 20, h);
+    CHECK(!std::strcmp(h, "a9993e364706816aba3e25717850c26c9cd0d89d"));
+    ws::sha1("", 0, d);
+    hex(d, 20, h);
+    CHECK(!std::strcmp(h, "da39a3ee5e6b4b0d3255bfef95601890afd80709"));
+    // 56 bytes: the padding needs a second block
+    const char *s56 = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    ws::sha1(s56, std::strlen(s56), d);
+    hex(d, 20, h);
+    CHECK(!std::strcmp(h, "84983e441c3bd26ebaae4aa1f95129e5e54670f1"));
+    // 64 bytes exactly
+    char a64[65];
+    std::memset(a64, 'a', 64);
+    a64[64] = 0;
+    ws::sha1(a64, 64, d);
+    hex(d, 20, h);
+    CHECK(!std::strcmp(h, "0098ba824b5c16427bd7a1122a5a442a25ec644d"));
+    char b[32];
+    const std::uint8_t x[] = {'f', 'o', 'o', 'b', 'a'};
+    ws::base64(x, 5, b, sizeof b);
+    CHECK(!std::strcmp(b, "Zm9vYmE="));
+}
+
+void test_handshake()
+{
+    // RFC 6455's example key and answer.
+    const char *key = "dGhlIHNhbXBsZSBub25jZQ==";
+    const char resp[] = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                        "sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
+    int status = 0;
+    CHECK(ws::header_end(resp, sizeof resp - 1) == sizeof resp - 1);
+    CHECK(ws::handshake_ok(resp, sizeof resp - 1, key, &status));
+    CHECK(status == 101);
+    const char bad[] = "HTTP/1.1 429 Too Many Requests\r\n\r\n";
+    CHECK(!ws::handshake_ok(bad, sizeof bad - 1, key, &status));
+    CHECK(status == 429);
+    char req[512], k[32];
+    std::uint8_t k16[16] = {};
+    CHECK(ws::handshake_request(req, sizeof req, "10.0.0.2:19113", "/api/join/ws", k16, k) > 0);
+    CHECK(std::strstr(req, "GET /api/join/ws HTTP/1.1\r\nHost: 10.0.0.2:19113\r\n"));
+    CHECK(!std::strcmp(k, "AAAAAAAAAAAAAAAAAAAAAA=="));
+}
+
+void test_ws_frames()
+{
+    std::uint8_t out[300];
+    const std::uint8_t mask[4] = {1, 2, 3, 4};
+    const std::size_t n = ws::frame(out, sizeof out, ws::kText, "Hi", 2, mask);
+    CHECK(n == 8);
+    CHECK(out[0] == 0x81 && out[1] == 0x82 && out[6] == ('H' ^ 1) && out[7] == ('i' ^ 2));
+    std::uint8_t big[200];
+    std::memset(big, 7, sizeof big);
+    CHECK(ws::frame(out, sizeof out, ws::kBinary, big, 200, mask) == 208);
+    CHECK(out[1] == (0x80 | 126) && out[2] == 0 && out[3] == 200);
+
+    // server frames: a fragmented binary message, a ping in the middle, fed byte by byte
+    std::uint8_t stream[64];
+    std::size_t s = 0;
+    const std::uint8_t f1[] = {0x02, 3, 'a', 'b', 'c'};
+    const std::uint8_t ping[] = {0x89, 2, 'p', 'q'};
+    const std::uint8_t f2[] = {0x80, 2, 'd', 'e'};
+    std::memcpy(stream + s, f1, sizeof f1), s += sizeof f1;
+    std::memcpy(stream + s, ping, sizeof ping), s += sizeof ping;
+    std::memcpy(stream + s, f2, sizeof f2), s += sizeof f2;
+    std::uint8_t buf[16];
+    ws::Reader r(buf, sizeof buf);
+    int msgs = 0, ctls = 0;
+    for (std::size_t i = 0; i < s; ++i)
+    {
+        std::size_t used = 0;
+        const auto got = r.feed(stream + i, 1, &used);
+        CHECK(used == 1);
+        if (got == ws::Reader::Got::control)
+        {
+            ++ctls;
+            CHECK(r.op() == ws::kPing && r.size() == 2 && r.data()[0] == 'p');
+        }
+        else if (got == ws::Reader::Got::message)
+        {
+            ++msgs;
+            CHECK(r.op() == ws::kBinary && r.size() == 5 && !std::memcmp(r.data(), "abcde", 5));
+        }
+    }
+    CHECK(msgs == 1 && ctls == 1);
+
+    // two messages in one feed, the second with a 16-bit length
+    std::uint8_t two[2 + 1 + 4 + 130];
+    std::size_t t = 0;
+    two[t++] = 0x81, two[t++] = 1, two[t++] = 'x';
+    two[t++] = 0x82, two[t++] = 126, two[t++] = 0, two[t++] = 130;
+    std::memset(two + t, 9, 130), t += 130;
+    std::uint8_t mb[256];
+    ws::Reader r2(mb, sizeof mb);
+    std::size_t at = 0, used = 0;
+    CHECK(r2.feed(two, t, &used) == ws::Reader::Got::message);
+    CHECK(r2.op() == ws::kText && r2.size() == 1 && used == 3);
+    at += used;
+    CHECK(r2.feed(two + at, t - at, &used) == ws::Reader::Got::message);
+    CHECK(r2.op() == ws::kBinary && r2.size() == 130 && used == t - at);
+
+    // too big for the buffer: reported, and the next message still reads
+    std::uint8_t tiny[4];
+    ws::Reader r3(tiny, sizeof tiny);
+    const std::uint8_t tb[] = {0x82, 6, 1, 2, 3, 4, 5, 6, 0x81, 1, 'k'};
+    CHECK(r3.feed(tb, sizeof tb, &used) == ws::Reader::Got::too_big);
+    CHECK(r3.feed(tb + used, sizeof tb - used, &used) == ws::Reader::Got::message);
+    CHECK(r3.size() == 1 && r3.data()[0] == 'k');
+    // a masked server frame is a protocol error
+    const std::uint8_t masked[] = {0x81, 0x81, 0, 0, 0, 0, 'z'};
+    ws::Reader r4(tiny, sizeof tiny);
+    CHECK(r4.feed(masked, sizeof masked, &used) == ws::Reader::Got::bad);
+}
+
+void test_json()
+{
+    json::Token t[64];
+    json::Doc d(t, 64);
+    const char *s = R"({"a": [1, 2.5, -3e2], "b": {"c": "x\"yé", "d": true, "e": null}, "f": "z"})";
+    CHECK(d.parse(s, std::strlen(s)));
+    const int a = d.get(0, "a");
+    CHECK(d.count(a) == 3 && d.num(d.item(a, 1)) == 2.5 && d.num(d.item(a, 2)) == -300);
+    const char *path[] = {"b", "c"};
+    char out[32];
+    CHECK(d.str(d.path(0, path, 2), out, sizeof out) && !std::strcmp(out, "x\"y\xc3\xa9"));
+    const int b = d.get(0, "b");
+    CHECK(d.boolean(d.get(b, "d")) && d.is_null(d.get(b, "e")));
+    CHECK(d.str_is(d.get(0, "f"), "z"));
+    CHECK(d.get(0, "nope") < 0);
+    CHECK(!d.parse("{\"a\":}", 6));
+    CHECK(!d.parse("[1,2", 4));
+    json::Token few[2];
+    json::Doc small(few, 2);
+    CHECK(!small.parse("[1,2,3]", 7));
+    char w[64];
+    json::Writer wr(w, sizeof w);
+    wr.open_obj().key("k").str("a\"b").key("n").num(5LL).close_obj();
+    CHECK(wr.ok() && !std::strcmp(w, R"({"k":"a\"b","n":5})"));
+}
+
+void test_pad_frame()
+{
+    proto::PadState s;
+    s.buttons = proto::pad::kCross | proto::pad::kL2 | proto::pad::kTouchpad;
+    s.lx = 0, s.ly = 255, s.l2 = 200;
+    s.touches = 1;
+    s.touch[0] = {7, 1919, 1079};
+    std::uint8_t f[proto::kPadFrameMax];
+    std::size_t n = proto::pad_frame(f, sizeof f, 0x01020304, s, true);
+    // golden bytes, as join.rs parse_pad reads them
+    const std::uint8_t want[] = {0x01, 0x04, 0x03, 0x02, 0x01, 0x00, 0x41, 0x10, 0x00, 0, 255, 128, 128,
+                                 200,  0,    1,    7,    0x7f, 0x07, 0x37, 0x04};
+    CHECK(n == sizeof want && !std::memcmp(f, want, n));
+    // the apps' bits for an engine without raw_pad: cross 1, touchpad 16384 (L2 comes from the trigger)
+    n = proto::pad_frame(f, sizeof f, 1, s, false);
+    CHECK(f[5] == 0x01 && f[6] == 0x40 && f[7] == 0 && f[8] == 0);
+    CHECK(proto::raw_to_app(proto::pad::kPs | proto::pad::kOptions) == (32768u | 4096u));
+    s.has_motion = true;
+    s.gyro[0] = 1.5f;
+    s.accel[2] = -1.0f;
+    n = proto::pad_frame(f, sizeof f, 1, s, true);
+    CHECK(n == 21 + 25 && f[21] == 0x02);
+    float g;
+    std::memcpy(&g, f + 22, 4);
+    CHECK(g == 1.5f);
+    // the system's own bit never goes
+    s.buttons = proto::pad::kIntercepted | proto::pad::kCross;
+    proto::pad_frame(f, sizeof f, 1, s, true);
+    CHECK(f[8] == 0 && f[5] == 0);
+}
+
+void test_guest_messages()
+{
+    char h[512];
+    const proto::ClientCaps caps{"13.0.0", true, false, true, true};
+    CHECK(proto::hello(h, sizeof h, "ABCDEF", nullptr, "Sam", caps) > 0);
+    CHECK(!std::strcmp(h, R"({"hello":{"code":"ABCDEF","name":"Sam","client":{"kind":"ps5","app":"play","v":"13.0.0","caps":{"hevc":true,"main10":false,"raw_pad":true,"timing":true}}}})"));
+    proto::hello(h, sizeof h, nullptr, nullptr, nullptr, caps);
+    CHECK(!std::strncmp(h, R"({"hello":{"client":)", 19));
+    proto::GuestEvent e;
+    const char *j = R"({"stage":"joined","player":2,"token":"tok","hevc":true,"track":false,"audio":false,"codec_warning":null})";
+    CHECK(proto::parse_guest(j, std::strlen(j), e));
+    CHECK(e.type == proto::GuestEvent::joined && e.player == 2 && e.hevc && e.caps_known && !std::strcmp(e.token, "tok"));
+    const char *old = R"({"stage":"joined","player":3,"token":"t","hevc":false,"track":false,"audio":false})";
+    CHECK(proto::parse_guest(old, std::strlen(old), e) && !e.caps_known);
+    const char *r = R"({"stage":"refused","why":"denied"})";
+    CHECK(proto::parse_guest(r, std::strlen(r), e) && e.type == proto::GuestEvent::refused && !std::strcmp(e.why, "denied"));
+    // Play Rooms refusals as the engine says them: tries left, a name already in the room
+    const char *pw = R"({"stage":"refused","why":"password","tries_left":3})";
+    CHECK(proto::parse_guest(pw, std::strlen(pw), e) && e.type == proto::GuestEvent::refused && e.tries_left == 3);
+    const char *nt = R"J({"stage":"refused","why":"name_taken","suggest":"Sam (2)","name_taken":{"suggest":"Sam (2)"}})J";
+    CHECK(proto::parse_guest(nt, std::strlen(nt), e) && e.type == proto::GuestEvent::name_taken &&
+          !std::strcmp(e.suggest, "Sam (2)"));
+    const char *kn = R"({"knock":"no","why":"password","tries_left":2})";
+    CHECK(proto::parse_guest(kn, std::strlen(kn), e) && e.type == proto::GuestEvent::knock && e.tries_left == 2);
+    // the status beside the room push, in one message (the engine's keys in order)
+    const char *both = R"({"room":{"name":"Couch","size":4,"players":[]},"status":{"player":3,"rtt_ms":7,"host":"Desk"}})";
+    CHECK(proto::parse_guest(both, std::strlen(both), e) && e.type == proto::GuestEvent::status && e.player == 3);
+    const char *st = R"({"status":{"player":2,"state":"playing","rtt_ms":12,"host":"Desk","block_system":true,"stream_seat":false,"plays_as":null,"seat_note":null,"move_first":false,"host_user":null,"took_host":false,"queue":0,"skipped":3,"codec_warning":null}})";
+    CHECK(proto::parse_guest(st, std::strlen(st), e) && e.type == proto::GuestEvent::status && e.rtt_ms == 12 && e.block_system && !std::strcmp(e.host, "Desk"));
+    const char *ru = R"({"rumble":[255,10]})";
+    CHECK(proto::parse_guest(ru, std::strlen(ru), e) && e.has_rumble && e.rumble_lr[0] == 255 && e.rumble_lr[1] == 10);
+    const char *li = R"({"light":[1,2,300]})";
+    CHECK(proto::parse_guest(li, std::strlen(li), e) && e.has_light && e.light_rgb[2] == 255);
+    const char *by = R"({"bye":"kicked"})";
+    CHECK(proto::parse_guest(by, std::strlen(by), e) && e.type == proto::GuestEvent::bye && !std::strcmp(e.why, "kicked"));
+    const char *wa = R"({"watch":{"hevc":true}})";
+    CHECK(proto::parse_guest(wa, std::strlen(wa), e) && e.type == proto::GuestEvent::none);
+    const char *po = R"({"pong":123.5,"engine_us":99})";
+    CHECK(proto::parse_guest(po, std::strlen(po), e) && e.pong_t == 123.5 && e.has_engine_us && e.engine_us == 99);
+}
+
+void test_codes_and_discovery()
+{
+    char c[8], d[8];
+    CHECK(proto::normalize_code("abc-def", c) && !std::strcmp(c, "ABCDEF"));
+    CHECK(!proto::normalize_code("ABCDE0", c)); // 0 is not in the alphabet
+    CHECK(!proto::normalize_code("ABCDEFG", c));
+    proto::code_display("ABCDEF", d);
+    CHECK(!std::strcmp(d, "ABC-DEF"));
+    std::uint8_t p[proto::kProbeSize];
+    proto::probe(p);
+    CHECK(!std::memcmp(p, "PS5UPLOAD_PLAY_DISCOVER v1", 26) && p[511] == ' ');
+    proto::Found f;
+    const char *ans = R"({"name":"Desk","port":19113,"version":"13.0.0","id":"ab12"})";
+    CHECK(proto::parse_found(ans, std::strlen(ans), f) && f.port == 19113 && !std::strcmp(f.name, "Desk"));
+    CHECK(!proto::parse_found("{\"port\":0}", 10, f));
+    CHECK(proto::version_number("13.0.0") == 13000000 && proto::version_number("12.6.44") == 12006044);
+}
+
+void test_keyframes()
+{
+    const std::uint8_t idr[] = {0, 0, 0, 1, 0x67, 1, 0, 0, 1, 0x68, 2, 0, 0, 1, 0x65, 9};
+    const std::uint8_t p[] = {0, 0, 0, 1, 0x09, 0x10, 0, 0, 1, 0x41, 9};
+    CHECK(proto::is_keyframe(idr, sizeof idr, false));
+    CHECK(!proto::is_keyframe(p, sizeof p, false));
+    const std::uint8_t hidr[] = {0, 0, 1, 0x40, 1, 0, 0, 1, 0x26, 1, 7}; // VPS, IDR_W_RADL (19)
+    const std::uint8_t htrail[] = {0, 0, 1, 0x02, 1, 7};                // TRAIL_R (1)
+    CHECK(proto::is_keyframe(hidr, sizeof hidr, true));
+    CHECK(!proto::is_keyframe(htrail, sizeof htrail, true));
+    proto::KeyframeAsk k;
+    CHECK(k.take(5000000) && !k.take(5500000) && k.take(6000001));
+}
+
+void test_jitter()
+{
+    audio::Jitter j;
+    j.set_depth(3, 8);
+    const std::uint8_t *d;
+    std::size_t l;
+    std::uint8_t pkt[4] = {0};
+    auto put = [&](std::uint16_t i) {
+        pkt[0] = static_cast<std::uint8_t>(i);
+        j.insert(i, pkt, 4);
+    };
+    put(65534);
+    put(65535);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::silence); // not primed yet
+    put(0);                                                // wraps
+    CHECK(j.buffered() == 3);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 254);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 255);
+    // 1 is lost, 2 and 3 arrive: 1 comes from 2's redundancy
+    put(2);
+    put(3);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 0);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::fec && d[0] == 2);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 2);
+    // a late copy of 1 is ignored
+    put(1);
+    CHECK(j.stats().late == 1);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 3);
+    // ran dry: silence until 3 frames are held again
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::silence && j.stats().underruns == 1);
+    put(4);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::silence);
+    put(6); // the span 4-6 is held (5 may still come)
+    put(5);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 4);
+    // a frame missing with nothing after it to recover from: concealed
+    put(8);
+    put(9);
+    put(10);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 5);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 6);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::fec && d[0] == 8); // 7 from 8
+    // too much held: the oldest go
+    for (std::uint16_t i = 11; i < 30; ++i)
+        put(i);
+    CHECK(j.next(&d, &l) == audio::Jitter::Act::play && d[0] == 22 && j.stats().dropped > 0);
+
+    audio::PcmRing r;
+    std::int16_t in[480 * 2], out[256 * 2];
+    for (int i = 0; i < 480 * 2; ++i)
+        in[i] = static_cast<std::int16_t>(i);
+    r.push(in, 480);
+    CHECK(r.pop(out, 256) && out[0] == 0 && out[511] == 511);
+    CHECK(!r.pop(out, 256) && r.frames() == 224);
+    r.push(in, 480);
+    CHECK(r.pop(out, 256) && out[0] == 512 && out[2 * 224] == 0);
+}
+
+void test_chords()
+{
+    using proto::pad::kCross;
+    Chords c;
+    const std::uint32_t base = Chords::kBase;
+    auto o = c.update(kCross, 0);
+    CHECK(o.buttons == kCross && !o.ps_sent);
+    o = c.update(base | kCross, 1000);
+    CHECK(o.buttons == kCross && o.ps_progress == 0); // the chord's own buttons are kept back
+    o = c.update(base, 600000);
+    CHECK(o.ps_progress > 0.5f && !o.ps_sent);
+    o = c.update(base, 1001000);
+    CHECK(o.ps_sent && (o.buttons & proto::pad::kPs));
+    o = c.update(base, 1100000);
+    CHECK(!o.ps_sent && (o.buttons & proto::pad::kPs)); // still pressed, once
+    o = c.update(base, 1300000);
+    CHECK(!(o.buttons & proto::pad::kPs));
+    // let go of the touchpad first: Options alone stays kept back until it is up too
+    o = c.update(proto::pad::kOptions, 1400000);
+    CHECK(o.buttons == 0);
+    o = c.update(0, 1500000);
+    o = c.update(proto::pad::kOptions, 1600000);
+    CHECK(o.buttons == proto::pad::kOptions); // a plain Options press goes through
+    c.update(0, 1700000);
+    // leave: all four for 1 s, no PS on the way
+    const std::uint32_t all = Chords::kLeave;
+    o = c.update(all, 2000000);
+    CHECK(o.leave_progress == 0 && o.buttons == (all & ~base));
+    o = c.update(all, 3100000);
+    CHECK(o.leave && !o.ps_sent && !(o.buttons & proto::pad::kPs));
+    o = c.update(all, 3200000);
+    CHECK(!o.leave);
+}
+
+void test_settings()
+{
+    Settings s;
+    s.music = false;
+    s.music_volume = 40;
+    Host *h = s.remember("192.168.1.5", 19113, "Desk|top");
+    CHECK(h && !std::strcmp(h->name, "")); // a '|' never goes into the file
+    h = s.remember("192.168.1.5", 19113, "Desk");
+    std::strcpy(h->token, "abc123");
+    s.remember("10.0.0.9", 9000, "Laptop");
+    char text[2048];
+    s.write(text, sizeof text);
+    Settings t;
+    t.parse(text, std::strlen(text));
+    CHECK(!t.music && t.music_volume == 40);
+    const Host *list[8];
+    CHECK(t.recent(list, 8) == 2);
+    CHECK(!std::strcmp(list[0]->addr, "10.0.0.9") && list[0]->port == 9000 && !std::strcmp(list[0]->name, "Laptop"));
+    CHECK(!std::strcmp(list[1]->token, "abc123") && !std::strcmp(list[1]->name, "Desk"));
+    for (int i = 0; i < 12; ++i)
+    {
+        char a[32];
+        std::snprintf(a, sizeof a, "10.1.1.%d", i);
+        t.remember(a, 19113, "");
+    }
+    CHECK(t.recent(list, 8) == 8 && !std::strcmp(list[0]->addr, "10.1.1.11"));
+    char addr[64];
+    std::uint16_t port;
+    CHECK(split_address("192.168.86.20:19200", addr, sizeof addr, &port, 19113) && port == 19200 &&
+          !std::strcmp(addr, "192.168.86.20"));
+    CHECK(split_address("192.168.86.20", addr, sizeof addr, &port, 19113) && port == 19113);
+    CHECK(!split_address("1.2.3.4:99999", addr, sizeof addr, &port, 19113));
+    CHECK(!split_address("bad/addr", addr, sizeof addr, &port, 19113));
+}
+// A language file as tools/i18n.py writes it: two strings (the second left English), one run.
+void test_i18n()
+{
+    using namespace play::ui;
+    std::uint8_t f[256] = {};
+    std::size_t o = 0;
+    auto u32 = [&](std::uint32_t v) {
+        for (int k = 0; k < 4; ++k)
+            f[o++] = static_cast<std::uint8_t>(v >> (8 * k));
+    };
+    auto u16 = [&](std::uint16_t v) {
+        f[o++] = static_cast<std::uint8_t>(v);
+        f[o++] = static_cast<std::uint8_t>(v >> 8);
+    };
+    const char text[] = "Hallo \xee\x80\x80" "0000!";
+    std::memcpy(f, "PPL1", 4), o = 4;
+    u32(2), u32(1), u32(1), u32(3);
+    u32(24), u32(32), u32(44);
+    u32(0), u32(sizeof text - 1); // string 0
+    u32(0), u32(0);               // string 1: English
+    for (int size = 0; size < 3; ++size)
+        u16(2), u16(1), u16(1), u16(0), u32(0), u32(1); // a 2x1 run, one byte of pixels
+    std::memcpy(f + o, text, sizeof text - 1), o += sizeof text - 1;
+    f[o++] = 0xF1; // level 15, 2 pixels
+    CHECK(i18n::load(f, o) && i18n::strings() == 2); // the app refuses a file of another count
+    CHECK(!std::strcmp(tr(S::app_name), text) && i18n::right_to_left());
+    CHECK(!std::strcmp(tr(S::tagline), "Play together with friends, from the couch."));
+    int table = -1, id = -1;
+    const char *t = tr(S::app_name);
+    CHECK(i18n::run_ref(t + 6, std::strlen(t + 6), &table, &id) && table == 0 && id == 0);
+    i18n::Run r;
+    CHECK(i18n::run(0, 0, 1, r) && r.w == 2 && r.h == 1 && r.len == 1 && r.rle[0] == 0xF1);
+    CHECK(!i18n::run(0, 1, 1, r) && !i18n::run(0, 0, 3, r));
+    CHECK(!i18n::load(f, 10) && i18n::strings() == 0); // cut short: English
+    CHECK(!std::strcmp(tr(S::app_name), "PS5Upload Play"));
+    i18n::use_english();
+    CHECK(i18n::find("pt-BR") > 0 && i18n::find("xx") < 0 && i18n::count() == 21);
+    CHECK(!std::strcmp(i18n::code(i18n::from_system_id(0)), "ja") &&
+          !std::strcmp(i18n::code(i18n::from_system_id(17)), "pt-BR") &&
+          !std::strcmp(i18n::code(i18n::from_system_id(1)), "en") &&
+          !std::strcmp(i18n::code(i18n::from_system_id(99)), "en"));
+}
+// ---- easy join (docs/EASY_JOIN.md) ----------------------------------------------------------
+void test_invite_links()
+{
+    invite::Invite inv;
+    CHECK(invite::add_link("http://192.168.1.20:19113/join#i=abcdefgh123&n=Desk%20PC&fp=AA", inv));
+    CHECK(!std::strcmp(inv.key, "abcdefgh123") && !std::strcmp(inv.name, "Desk PC") && !inv.internet);
+    CHECK(inv.n_routes == 1 && !std::strcmp(inv.routes[0].addr, "192.168.1.20") && inv.routes[0].port == 19113 &&
+          !inv.routes[0].tailnet && !std::strcmp(inv.routes[0].path, "/api/join/ws"));
+    // Under a prefix, and the default port.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("http://10.0.0.5/ps5u/join/#i=abcdefgh123", inv));
+    CHECK(inv.routes[0].port == 80 && !std::strcmp(inv.routes[0].path, "/ps5u/api/join/ws"));
+    // The one link for everywhere: its key, and the home network's and Tailscale's pages.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA:BB"
+                           "&hub=hub.phantomptr.com&lan=http%3A%2F%2F192.168.1.20%3A19113%2Fjoin"
+                           "&ts=http%3A%2F%2F100.101.2.3%3A19113%2Fjoin",
+                           inv));
+    CHECK(inv.internet && !std::strcmp(inv.key, "KEY12345678") && inv.n_routes == 2);
+    CHECK(!std::strcmp(inv.routes[0].addr, "192.168.1.20") && !inv.routes[0].tailnet);
+    CHECK(!std::strcmp(inv.routes[1].addr, "100.101.2.3") && inv.routes[1].tailnet);
+    // The room and the certificate for the bridge (docs/ROUTES.md §6), and the host's first page.
+    CHECK(!std::strcmp(inv.room, "AbCdEfGhIjKlMnOpQrStUh") && !std::strcmp(inv.fp, "AA:BB"));
+    CHECK(!std::strcmp(inv.home_addr, "192.168.1.20") && inv.home_port == 19113);
+    // Internet only: no direct route; the bridge is its way.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA&hub=h", inv));
+    CHECK(inv.internet && inv.n_routes == 0 && !std::strcmp(inv.room, "AbCdEfGhIjKlMnOpQrStUh") && !inv.home_addr[0]);
+    // A room or a certificate that isn't one: the invite still reads, with no bridge.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://x/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA:B&hub=h", inv) && !inv.room[0]);
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://x/join/#room=short&k=KEY12345678&fp=AA:BB&hub=h", inv) && !inv.room[0] && !inv.fp[0]);
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://x/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=ZZ:BB&hub=h", inv) && !inv.room[0]);
+    // Public, https and loopback pages are not direct routes; bad keys and other pages are refused.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("http://8.8.8.8:19113/join#i=abcdefgh123", inv) && inv.n_routes == 0);
+    CHECK(invite::add_link("https://192.168.1.20/join#i=abcdefgh123", inv) && inv.n_routes == 0);
+    CHECK(invite::add_link("http://127.0.0.1:19113/join#i=abcdefgh123", inv) && inv.n_routes == 0);
+    inv = invite::Invite{};
+    CHECK(!invite::add_link("http://192.168.1.20:19113/join#i=short", inv));
+    CHECK(!invite::add_link("http://192.168.1.20:19113/join#i=abc/defgh123", inv));
+    CHECK(!invite::add_link("http://192.168.1.20:19113/other#i=abcdefgh123", inv));
+    CHECK(!invite::add_link("ftp://192.168.1.20/join#i=abcdefgh123", inv));
+    CHECK(!invite::add_link("javascript:alert(1)", inv));
+    CHECK(!invite::add_link("http://192.168.1.20:99999/join#i=abcdefgh123", inv));
+    // A Play Room handed over from the phone: no key, a knock on its lobby (as a card in Rooms).
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#lobby=AAAAAAAAAAAAAAAAAAAAAA&hub=hub.example&n=Sam&tag=4F2A&pw=1&via=friends", inv));
+    CHECK(!std::strcmp(inv.lobby, "AAAAAAAAAAAAAAAAAAAAAA") && !std::strcmp(inv.name, "Sam") && !std::strcmp(inv.tag, "4F2A"));
+    CHECK(inv.pw && !std::strcmp(inv.via, "friends") && !inv.key[0] && inv.n_routes == 0);
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#lobby=AAAAAAAAAAAAAAAAAAAAAA", inv) && !inv.pw &&
+          !std::strcmp(inv.via, "rooms"));
+    CHECK(!invite::add_link("https://ps5upload.phantomptr.com/join/#lobby=short", inv));
+    {
+        const char *h = R"({"invite":{"link":"https://x.example/join/#lobby=BBBBBBBBBBBBBBBBBBBBBB&n=Kai"}})";
+        CHECK(invite::parse_handoff(h, std::strlen(h), inv) && !std::strcmp(inv.lobby, "BBBBBBBBBBBBBBBBBBBBBB"));
+    }
+    // A second link with another key is not mixed in.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("http://192.168.1.20:19113/join#i=abcdefgh123", inv));
+    CHECK(!invite::add_link("http://192.168.1.21:19113/join#i=zzzzzzzz999", inv) && inv.n_routes == 1);
+    bool ts = false;
+    CHECK(invite::private_v4("172.16.0.1", &ts) && !ts && invite::private_v4("100.64.0.1", &ts) && ts);
+    CHECK(!invite::private_v4("172.32.0.1", nullptr) && !invite::private_v4("100.128.0.1", nullptr) &&
+          !invite::private_v4("192.168.1", nullptr) && !invite::private_v4("192.168.1.256", nullptr) &&
+          !invite::private_v4("hub.example", nullptr));
+}
+
+void test_handoff()
+{
+    invite::Invite inv;
+    const char *ok = R"({"invite":{"link":"http://192.168.1.20:19113/join#i=abcdefgh123","links":["http://10.1.2.3:19113/join#i=abcdefgh123","http://10.9.9.9:19113/join#i=otherkey999"],"name":"Desk\u0001PC","t":"nonce123"}})";
+    CHECK(invite::parse_handoff(ok, std::strlen(ok), inv));
+    CHECK(inv.n_routes == 2 && !std::strcmp(inv.routes[1].addr, "10.1.2.3")); // the other key's left out
+    CHECK(!std::strcmp(inv.name, "DeskPC") && !std::strcmp(inv.nonce, "nonce123"));
+    const char *bad[] = {
+        R"({"invite":{"link":"http://example.com/x"}})",
+        R"({"invite":"http://192.168.1.20:19113/join#i=abcdefgh123"})",
+        R"({"other":1})",
+        "not json",
+    };
+    for (const char *b : bad)
+        CHECK(!invite::parse_handoff(b, std::strlen(b), inv));
+    // A nonce that isn't a word is dropped (the push then asks first).
+    const char *odd = R"({"invite":{"link":"http://192.168.1.20:19113/join#i=abcdefgh123","t":"a b"}})";
+    CHECK(invite::parse_handoff(odd, std::strlen(odd), inv) && !inv.nonce[0]);
+    // Too large.
+    char big[3000];
+    std::memset(big, ' ', sizeof big);
+    std::memcpy(big, ok, std::strlen(ok));
+    CHECK(!invite::parse_handoff(big, sizeof big, inv));
+}
+
+void test_waiting_room_ids()
+{
+    // The hub's own (hub.rs room_for_secret): a bound room id.
+    char room[23];
+    invite::room_for_secret("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG", room);
+    CHECK(!std::strcmp(room, "QmC7v41CxdU7YX73vWnXjh"));
+    char b[16];
+    const std::uint8_t x[] = {0xfb, 0xff};
+    CHECK(invite::b64url(x, 2, b, sizeof b) == 3 && !std::strcmp(b, "-_8"));
+    char qr[200];
+    CHECK(invite::qr_link(qr, sizeof qr, "https://p/join/", room, "nn", "hub.example") > 0);
+    CHECK(!std::strcmp(qr, "https://p/join/#ps5=QmC7v41CxdU7YX73vWnXjh&t=nn&hub=hub.example"));
+    char host[64];
+    CHECK(invite::hub_host("wss://hub.phantomptr.com/ws", host, sizeof host) && !std::strcmp(host, "hub.phantomptr.com"));
+    CHECK(invite::hub_host("ws://127.0.0.1:8787/ws", host, sizeof host) && !std::strcmp(host, "127.0.0.1:8787"));
+    CHECK(!invite::hub_host("https://x/ws", host, sizeof host));
+}
+
+void test_friends_and_hello()
+{
+    Friends f;
+    CHECK(f.remember("192.168.1.20", 19113, false, "", "Desk", "pass1"));
+    CHECK(f.remember("100.101.2.3", 19113, true, "/p/api/join/ws", "Laptop", "pass2"));
+    CHECK(!f.remember("1.2.3.4", 1, false, "", "x", "bad|pass"));
+    CHECK(!f.remember("1.2.3.4", 1, false, "", "x", ""));
+    char text[2048];
+    const std::size_t n = f.write(text, sizeof text);
+    Friends g;
+    g.parse(text, n);
+    const Friend *r[Friends::kMax];
+    CHECK(g.recent(r, Friends::kMax) == 2 && !std::strcmp(r[0]->name, "Laptop") && r[0]->tailnet &&
+          !std::strcmp(r[0]->path, "/p/api/join/ws") && !std::strcmp(r[1]->pass, "pass1"));
+    // The last internet invite kept with a host (Play again over the bridge) reads back with it.
+    CHECK(Friends::set_link(*g.find("100.101.2.3", 19113), "AbCdEfGhIjKlMnOpQrStUh", "AA:BB", "KEY12345678"));
+    CHECK(!Friends::set_link(*g.find("100.101.2.3", 19113), "AbCdEfGhIjKlMnOpQrStUh", "AA|BB", "KEY12345678"));
+    {
+        char t2[4096];
+        const std::size_t n2 = g.write(t2, sizeof t2);
+        Friends h2;
+        h2.parse(t2, n2);
+        const Friend *l = h2.find("100.101.2.3", 19113);
+        CHECK(l && !std::strcmp(l->room, "AbCdEfGhIjKlMnOpQrStUh") && !std::strcmp(l->fp, "AA:BB") &&
+              !std::strcmp(l->key, "KEY12345678") && !std::strcmp(l->pass, "pass2"));
+        const Friend *d = h2.find("192.168.1.20", 19113);
+        CHECK(d && !d->room[0] && !d->key[0]);
+        // A link line for a host not read is left out.
+        const char *orphan = "friend=1.2.3.4|5|0|1||pp|n\nlink=9.9.9.9|5|AbCdEfGhIjKlMnOpQrStUh|AA|KEY12345678\n";
+        h2.parse(orphan, std::strlen(orphan));
+        CHECK(h2.find("1.2.3.4", 5) && !h2.find("1.2.3.4", 5)->room[0]);
+    }
+    // Refreshing keeps one entry; the oldest makes room when full.
+    CHECK(g.remember("192.168.1.20", 19113, false, "", "Desk", "pass3"));
+    CHECK(g.recent(r, Friends::kMax) == 2 && !std::strcmp(r[0]->pass, "pass3"));
+    for (int i = 0; i < 10; ++i)
+    {
+        char a[16];
+        std::snprintf(a, sizeof a, "10.0.0.%d", i);
+        g.remember(a, 19113, false, "", "", "p");
+    }
+    CHECK(g.recent(r, Friends::kMax) == Friends::kMax && !g.find("192.168.1.20", 19113));
+    g.forget_all();
+    CHECK(g.recent(r, Friends::kMax) == 0);
+    // A broken file reads as nothing.
+    const char *junk = "friend=|||\nfriend=a|1\nfriend=1.2.3.4|5|0|1||pp|n\n";
+    g.parse(junk, std::strlen(junk));
+    CHECK(g.recent(r, Friends::kMax) == 1 && !std::strcmp(r[0]->pass, "pp"));
+
+    // The hello: the invite's key, the pass (not on a resume), remember and the waiting room.
+    char h[768];
+    proto::ClientCaps caps{"13.0.0", true, false, true, true};
+    proto::HelloExtras x;
+    x.invite = "abcdefgh123";
+    x.again = "pass1";
+    x.remember = true;
+    x.inbox_room = "QmC7v41CxdU7YX73vWnXjh";
+    x.inbox_hub = "hub.phantomptr.com";
+    CHECK(proto::hello_ex(h, sizeof h, "", nullptr, "Sam", caps, x) > 0);
+    json::Token t[64];
+    json::Doc d(t, 64);
+    CHECK(d.parse(h, std::strlen(h)));
+    const int o = d.get(0, "hello");
+    CHECK(d.str_is(d.get(o, "invite"), "abcdefgh123") && d.str_is(d.get(o, "again"), "pass1") &&
+          d.boolean(d.get(o, "remember")) && d.str_is(d.get(d.get(o, "inbox"), "room"), "QmC7v41CxdU7YX73vWnXjh") &&
+          d.get(o, "code") < 0 && d.get(d.get(o, "client"), "caps") >= 0);
+    CHECK(proto::hello_ex(h, sizeof h, "", "tok1", "Sam", caps, x) > 0 && !std::strstr(h, "again"));
+    // Nothing extra: the same hello as before.
+    char a[768], b2[768];
+    proto::hello(a, sizeof a, "ABCDEF", nullptr, "Sam", caps);
+    proto::hello_ex(b2, sizeof b2, "ABCDEF", nullptr, "Sam", caps, proto::HelloExtras{});
+    CHECK(!std::strcmp(a, b2) && !std::strstr(a, "remember"));
+    // joined's pass and discovery's together.
+    proto::GuestEvent e;
+    const char *j = R"({"stage":"joined","player":2,"token":"t","hevc":true,"friend":"PASSPASS"})";
+    CHECK(proto::parse_guest(j, std::strlen(j), e) && !std::strcmp(e.friend_pass, "PASSPASS"));
+    proto::Found fd;
+    const char *ans = R"({"name":"Desk","port":19113,"version":"13.0.0","id":"x","together":2})";
+    CHECK(proto::parse_found(ans, std::strlen(ans), fd) && fd.together == 2);
+    const char *old = R"({"name":"Desk","port":19113,"version":"12.6.0","id":"x"})";
+    CHECK(proto::parse_found(old, std::strlen(old), fd) && fd.together == 0);
+}
+
+// "Back to game" (resume.txt) keeps the way the game was played over (13.0.0 audit: a game played
+// through this home's PS5Upload went back to start()'s address, the wrong engine).
+void test_resume_record()
+{
+    resume::Record r;
+    std::snprintf(r.addr, sizeof r.addr, "%s", "192.168.1.20"); // this home's PS5Upload
+    r.port = 19113;
+    std::snprintf(r.token, sizeof r.token, "%s", "tok-AbC_123");
+    std::snprintf(r.name, sizeof r.name, "%s", "Alex's PC");
+    r.at = 1764300000;
+    r.has_way = true;
+    r.way.kind = route::Kind::internet;
+    r.way.way = route::Way::bridge;
+    std::snprintf(r.way.addr, sizeof r.way.addr, "%s", "192.168.1.20");
+    r.way.port = 19113;
+    std::snprintf(r.way.room, sizeof r.way.room, "%s", "AAAAAAAAAAAAAAAAAAAAAh");
+    std::snprintf(r.way.fp, sizeof r.way.fp, "%s", "AB:CD:EF");
+    char text[512];
+    const std::size_t n = resume::write(r, text, sizeof text);
+    CHECK(n > 0 && text[n - 1] == '\n');
+    resume::Record back;
+    CHECK(resume::parse(text, back));
+    CHECK(back.has_way && back.way.way == route::Way::bridge && back.way.kind == route::Kind::internet);
+    CHECK(!std::strcmp(back.way.room, r.way.room) && !std::strcmp(back.way.fp, "AB:CD:EF"));
+    CHECK(!std::strcmp(back.way.addr, "192.168.1.20") && back.way.port == 19113 && !back.way.lobby);
+    CHECK(!std::strcmp(back.token, r.token) && !std::strcmp(back.name, "Alex's PC") && back.at == r.at);
+    // a Tailscale way through the helper, with the invite's path
+    r.way = route::Candidate{};
+    r.way.kind = route::Kind::tailscale;
+    r.way.way = route::Way::helper;
+    std::snprintf(r.way.addr, sizeof r.way.addr, "%s", "100.101.102.103");
+    r.way.port = 19113;
+    std::snprintf(r.way.path, sizeof r.way.path, "%s", "/ps5/api/join/ws");
+    CHECK(resume::write(r, text, sizeof text) && resume::parse(text, back));
+    CHECK(back.has_way && back.way.way == route::Way::helper && !std::strcmp(back.way.path, "/ps5/api/join/ws"));
+    // a file from before the way was kept: the game, no way (start()'s address, as before)
+    CHECK(resume::parse("10.0.0.5|19113|tok1||Desk|1764300000\n", back));
+    CHECK(!back.has_way && !std::strcmp(back.addr, "10.0.0.5") && !std::strcmp(back.token, "tok1"));
+    // a bridge way without its room is no way
+    CHECK(resume::parse("10.0.0.5|19113|tok1||Desk|1764300000|2|2|10.0.0.5|19113||||0\n", back));
+    CHECK(!back.has_way);
+    // not a game: no token, too few fields; nothing written with a '|' in a field
+    CHECK(!resume::parse("10.0.0.5|19113||||1764300000\n", back));
+    CHECK(!resume::parse("garbage", back));
+    std::snprintf(r.name, sizeof r.name, "%s", "A|B");
+    CHECK(resume::write(r, text, sizeof text) == 0);
+}
+} // namespace
+
+void test_hdr()
+{
+    static hdr::Tables t;
+    hdr::build(t);
+    // PQ code 520 is 100 cd/m2 (ST 2084): linear 100/10000 of full scale, within 2%
+    const double want = 100.0 / 10000.0 * (1u << hdr::kLinBits);
+    CHECK(t.lin[520] > want * 0.98 && t.lin[519] < want * 1.02);
+    CHECK(t.lin[0] == 0 && t.lin[1023] == (1u << hdr::kLinBits));
+    const hdr::Chroma grey = hdr::chroma(512, 512);
+    auto rgb = [](std::uint32_t p, int i) { return static_cast<int>(p >> (8 * i) & 0xff); };
+    // black stays black, greys stay grey, brighter is never darker, the top is white
+    CHECK(hdr::pixel(t, 64, grey) == 0);
+    int last = -1;
+    bool neutral = true, rising = true;
+    for (int y = 64; y <= 940; ++y)
+    {
+        const std::uint32_t p = hdr::pixel(t, y, grey);
+        neutral = neutral && rgb(p, 0) == rgb(p, 1) && rgb(p, 1) == rgb(p, 2);
+        rising = rising && rgb(p, 1) >= last;
+        last = rgb(p, 1);
+    }
+    CHECK(neutral);
+    CHECK(rising);
+    CHECK(last == 255);
+    // 100 cd/m2 (Y' 509) is below the roll-off: (100/203)^(1/2.4) of 255, about 190
+    const int g100 = rgb(hdr::pixel(t, 509, grey), 1);
+    CHECK(g100 >= 187 && g100 <= 193);
+    // 1000 cd/m2 (the assumed peak, PQ 0.7518: Y' 64 + 769 * 876/1023 = 722) is white, 203 not quite
+    CHECK(rgb(hdr::pixel(t, 722, grey), 1) >= 253);
+    const int g203 = rgb(hdr::pixel(t, 64 + 593 * 876 / 1023, grey), 1);
+    CHECK(g203 > 225 && g203 < 245);
+    // a saturated BT.2020 red ends up red (out of BT.709's gamut, clipped, not tinted)
+    const std::uint32_t red = hdr::pixel(t, 400, hdr::chroma(400, 960));
+    CHECK(rgb(red, 0) > 200 && rgb(red, 1) < 40 && rgb(red, 2) < 40);
+    // a row of 16-bit samples, chroma shared by a pixel pair: the decoder's low-aligned 10 bits
+    // (shift 0) and P010's top-aligned (shift 6), each told apart by shift_of
+    for (int shift = 0; shift <= 6; shift += 6)
+    {
+        std::uint8_t y[16 * 8 * 2] = {}, uv[8];
+        const int ys[4] = {64, 509, 940, 509};
+        for (int i = 0; i < 4; ++i)
+        {
+            const int v = ys[i] << shift, c = 512 << shift;
+            for (int r = 0; r < 8; ++r) // every row the same, so shift_of reads real samples
+            {
+                y[r * 16 + 2 * i] = static_cast<std::uint8_t>(v & 0xff);
+                y[r * 16 + 2 * i + 1] = static_cast<std::uint8_t>(v >> 8);
+            }
+            uv[2 * i] = static_cast<std::uint8_t>(c & 0xff);
+            uv[2 * i + 1] = static_cast<std::uint8_t>(c >> 8);
+        }
+        CHECK(hdr::shift_of(y, 16, 4, 8) == shift);
+        std::uint32_t out[4];
+        hdr::row(t, y, uv, 4, shift, out);
+        CHECK(out[0] == 0xff000000u && rgb(out[1], 0) == g100 && out[2] == 0xffffffffu && out[3] == out[1]);
+    }
+}
+
+int main()
+{
+    test_invite_links();
+    test_handoff();
+    test_waiting_room_ids();
+    test_friends_and_hello();
+    test_sha1_base64();
+    test_handshake();
+    test_ws_frames();
+    test_json();
+    test_pad_frame();
+    test_guest_messages();
+    test_codes_and_discovery();
+    test_keyframes();
+    test_jitter();
+    test_chords();
+    test_settings();
+    test_i18n();
+    test_hdr();
+    test_resume_record();
+    std::printf("%d checks, %d failed\n", checks, failures);
+    return failures ? 1 : 0;
+}

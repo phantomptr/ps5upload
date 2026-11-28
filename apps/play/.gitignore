@@ -1,0 +1,5 @@
+.deps/
+build/
+dist/
+# the repo ignores docs/ folders (docs live elsewhere); this app keeps its measured notes here
+!docs/

@@ -468,8 +468,8 @@ static const char *job_kind(uint8_t k) {
     }
 }
 
-int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx), void *ctx,
-                       char *out, size_t cap) {
+int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx),
+                       int64_t (*elapsed)(const uint8_t id[16], void *ctx), void *ctx, char *out, size_t cap) {
     ava1_job_list_result_t r;
     ava1_job_entry_t e;
     ava1_r_t it;
@@ -481,16 +481,19 @@ int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t i
     pos = (size_t)snprintf(out, cap, "{\"jobs\":[");
     ava1_r_init(&it, r.jobs, r.jobs_len);
     while ((rc = ava1_job_entry_next(&it, &e)) == 1) {
-        char hex[33];
+        char hex[33], ran[32];
         int k;
+        int64_t ms = elapsed ? elapsed(e.job_id, ctx) : -1;
         webui_hex16(e.job_id, hex);
+        ran[0] = '\0';
+        if (ms >= 0) snprintf(ran, sizeof ran, ",\"elapsed_s\":%lld", (long long)(ms / 1000));
         k = snprintf(out + pos, cap - pos,
                      "%s{\"job\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\",\"files_done\":%lu,\"files_total\":%lu,"
-                     "\"bytes_done\":%llu,\"bytes_total\":%llu,\"mine\":%s}",
+                     "\"bytes_done\":%llu,\"bytes_total\":%llu,\"mine\":%s%s}",
                      written ? "," : "", hex, job_kind(e.kind),
                      e.state == 0 ? "running" : (e.state == 1 ? "done" : "failed"), (unsigned long)e.files_done,
                      (unsigned long)e.files_total, (unsigned long long)e.bytes_done, (unsigned long long)e.bytes_total,
-                     mine && mine(e.job_id, ctx) ? "true" : "false");
+                     mine && mine(e.job_id, ctx) ? "true" : "false", ran);
         if (k < 0 || (size_t)k >= cap - pos) {
             out[0] = '\0';
             return -1;
@@ -617,7 +620,7 @@ fail:
 }
 
 int webui_extract_tail(char *out, size_t cap, const char *dest, const char *password, int merge, int replace,
-                       int list, const char *top) {
+                       int list, const char *top, int free_archive) {
     size_t pos = 0, k;
     if (!cap) return -1;
     out[0] = '\0';
@@ -629,8 +632,8 @@ int webui_extract_tail(char *out, size_t cap, const char *dest, const char *pass
         out[pos++] = ',';
         if (put_jstr(out, cap, &pos, "password", password, strlen(password)) != 0) goto fail;
     }
-    k = (size_t)snprintf(out + pos, cap - pos, ",\"merge\":%s,\"replace\":%s%s", merge ? "true" : "false",
-                         replace ? "true" : "false", list ? ",\"list\":true" : "");
+    k = (size_t)snprintf(out + pos, cap - pos, ",\"merge\":%s,\"replace\":%s%s%s", merge ? "true" : "false",
+                         replace ? "true" : "false", list ? ",\"list\":true" : "", free_archive ? ",\"free\":true" : "");
     if (k >= cap - pos) goto fail;
     pos += k;
     if (top && top[0]) {
@@ -1173,6 +1176,32 @@ int webui_proc_game_running(const char *json, size_t n, const char *tid, int oth
     g.tid = tid ? tid : "";
     g.other = other;
     return each_process(json, n, game_find_fn, &g);
+}
+
+struct app_id_find {
+    const char *tid;
+    uint64_t id;
+};
+
+static int app_id_find_fn(const char *el, size_t len, void *ctx) {
+    struct app_id_find *f = (struct app_id_find *)ctx;
+    char kind[16], tid[32];
+    uint64_t id;
+    if (webui_json_str(el, len, "kind", kind, sizeof kind) != 1 || strcmp(kind, "app") != 0) return 0;
+    if (webui_json_str(el, len, "title_id", tid, sizeof tid) != 1 || strcmp(tid, f->tid) != 0) return 0;
+    if (webui_json_u64(el, len, "app_id", &id) != 1 || id == 0 || id > 0xffffffffu) return 0;
+    f->id = id;
+    return 1;
+}
+
+int webui_proc_title_app_id(const char *json, size_t n, const char *tid, uint64_t *app_id) {
+    struct app_id_find f;
+    int r;
+    f.tid = tid ? tid : "";
+    f.id = 0;
+    r = each_process(json, n, app_id_find_fn, &f);
+    if (r == 1 && app_id) *app_id = f.id;
+    return r;
 }
 
 /* ---- search index ---- */

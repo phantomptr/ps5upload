@@ -17,7 +17,9 @@
 //!   With no page attached, a session started here ends after `keep_alive_s` (300 by default, 600
 //!   at most) without a call to this API and without a reader of the live feed (Go live, OBS), so a
 //!   script that dies does not hold the console's one Remote Play slot.
-//! * `POST /api/ps5/rp/stop {host, session?}`: ends it. The console holds its slot for 12-30 s after.
+//! * `POST /api/ps5/rp/stop {host, session?, confirm_friends?}`: ends it. The console holds its slot
+//!   for 12-30 s after. With friends playing through Play Together: 409 `friends_playing` unless
+//!   confirmed (together_guard.rs).
 //! * `POST /api/ps5/rp/settings {host, session?, keyframe?, replay_s?}`: what can change while it
 //!   runs. Resolution, frame rate, bitrate and codec are set when a session starts, so asking for
 //!   one answers 409 `restart_needed`: stop, then start with the new values.
@@ -488,12 +490,17 @@ pub struct StopReq {
     host: String,
     #[serde(default)]
     session: Option<u64>,
+    /// Stop even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-/// `POST /api/ps5/rp/stop`.
+/// `POST /api/ps5/rp/stop`. With friends playing through Play Together: 409 `friends_playing`
+/// unless confirmed (together_guard.rs).
 pub async fn stop(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<crate::together_guard::ConfirmQuery>,
     Json(r): Json<StopReq>,
 ) -> Response {
     if let Some(res) = gate(&peer, &headers) {
@@ -503,6 +510,11 @@ pub async fn stop(
         Ok(l) => l,
         Err(e) => return *e,
     };
+    if let Some(res) =
+        crate::together_guard::check(Some(&live.host), &headers, r.confirm_friends || q.yes())
+    {
+        return res;
+    }
     crate::log_at!(
         Info,
         "rp",
@@ -825,6 +837,53 @@ mod tests {
 
     fn session() -> Live {
         Live::new("10.0.0.9".into(), false, Duration::from_secs(60))
+    }
+
+    /// Stopping a session friends play on asks first; any of the three confirms stops it.
+    #[tokio::test]
+    async fn a_stop_with_friends_in_asks_first() {
+        use crate::together_guard::{tests::body_of, tests::confirm_header, ConfirmQuery};
+        let _g = super::super::LIVE_TEST_LOCK.lock().await;
+        let host = "10.0.92.1";
+        let live = std::sync::Arc::new(Live::new(host.into(), false, Duration::from_secs(60)));
+        *LIVE.lock().unwrap() = Some(live.clone());
+        crate::join::test_party_with_guest(host, "Mia");
+        let mut local = HeaderMap::new();
+        local.insert(axum::http::header::HOST, "127.0.0.1:19113".parse().unwrap());
+        let peer = || ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50_000)));
+        let req = |confirm: bool| StopReq {
+            host: host.into(),
+            session: None,
+            confirm_friends: confirm,
+        };
+        let q = |yes: bool| axum::extract::Query(ConfirmQuery::given(yes));
+
+        let r = stop(peer(), local.clone(), q(false), Json(req(false))).await;
+        let (status, v) = body_of(r).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(v["error"], "friends_playing");
+        assert_eq!(v["friends"], json!(["Mia"]));
+        assert!(!live.stop.load(Ordering::Relaxed), "nothing stopped");
+
+        let mut with_header = confirm_header();
+        with_header.insert(axum::http::header::HOST, "127.0.0.1:19113".parse().unwrap());
+        for (headers, query, body) in [
+            (with_header, false, false),
+            (local.clone(), true, false),
+            (local.clone(), false, true),
+        ] {
+            live.stop.store(false, Ordering::Relaxed);
+            let r = stop(peer(), headers, q(query), Json(req(body))).await;
+            assert_eq!(r.status(), StatusCode::OK);
+            assert!(live.stop.load(Ordering::Relaxed));
+        }
+
+        // Nobody in: a plain stop.
+        crate::join::test_close_party(host);
+        live.stop.store(false, Ordering::Relaxed);
+        let r = stop(peer(), local, q(false), Json(req(false))).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        *LIVE.lock().unwrap() = None;
     }
 
     #[test]

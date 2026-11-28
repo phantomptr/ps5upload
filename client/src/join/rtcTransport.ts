@@ -15,6 +15,7 @@
 
 import { NET_CLOSE, netFailure, type InternetInvite, type NetWhy, type TrackMedia } from "../lib/joinProtocol";
 import { selectedPath, type NetPath } from "./netPath";
+import { readKnockReply, seal, type KnockSecret } from "../lib/room/knock";
 
 /** What an internet invite link's fragment carries:
  *  `#room=<id>&k=<invite key>&fp=<SHA-256, upper-case hex with colons>&hub=<host[:port]>`. */
@@ -192,6 +193,12 @@ export interface RtcTransportOptions {
    *  names one; a link without (an older host, a typed address) takes the one certificate the
    *  answer has, no less than its plain WebSocket would (that has none). */
   lan?: boolean;
+  /** Play Rooms (design 9.3, 10.2): the room was found in Rooms, Friends or Play again, so the
+   *  hub room is a lobby and this page knocks first. Only knock signals go until the host says ok;
+   *  then the offer goes as for an invite. A secret (password, friend pass) is sealed to the room
+   *  key over the host's challenge. The host's answers reach the session as its own stages
+   *  (`asking`, `refused`). */
+  knock?: { hello: Record<string, unknown>; secret: KnockSecret | null; pk: string | null };
 }
 
 /** The video codecs the track may use, H.264 first (H.265 only where this browser has it: the
@@ -292,6 +299,18 @@ export function resetPrejoin(): void {
 }
 
 /** The WebSocket-shaped transport for an internet invite. Each instance is one attempt. */
+/** The session's hello after a let-in knock: it resumes the seat the engine holds (`token`), as
+ *  join_net/lobby.rs says; any other message goes as it is. */
+export function withKnockToken(text: string, token: string): string {
+  try {
+    const m = JSON.parse(text) as { hello?: Record<string, unknown> };
+    if (!m || typeof m !== "object" || !m.hello || typeof m.hello !== "object" || m.hello.resume) return text;
+    return JSON.stringify({ ...m, hello: { ...m.hello, resume: token } });
+  } catch {
+    return text;
+  }
+}
+
 export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): JoinTransport {
   const WS = o.WebSocketImpl ?? (typeof WebSocket === "undefined" ? undefined : WebSocket);
   const PC = o.PeerConnection ?? (typeof RTCPeerConnection === "undefined" ? undefined : RTCPeerConnection);
@@ -329,6 +348,11 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
     private offerSent = false;
     /** This page's candidates found before the offer went: sent right behind it. */
     private ownEarly: Record<string, unknown>[] = [];
+    /** Play Rooms: knocking (no offer until the host says ok), this page's gid in the lobby. */
+    private knocking = false;
+    private gid = "";
+    /** The seat the host's engine holds for a let-in knock: the hello resumes it. */
+    private knockToken: string | null = null;
     /** The video track, once the answer brought it (the session reads it when joined). */
     media: TrackMedia | null = null;
 
@@ -402,21 +426,88 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       switch (m.t) {
         case "joined":
           log(`hub: joined room as ${m.gid ?? "?"}`);
+          this.gid = m.gid ?? "";
+          if (o.knock) {
+            this.knocking = true;
+            this.signal(o.knock.hello);
+            return;
+          }
           void this.sendOffer();
           return;
         case "signal":
-          if (m.from === "host" && m.data && typeof m.data === "object") void this.onSignal(m.data);
+          if (m.from === "host" && m.data && typeof m.data === "object") {
+            if (this.knocking && "knock" in m.data) void this.onKnock(m.data);
+            else void this.onSignal(m.data);
+          }
           return;
         case "closed":
           this.fail("no_room");
           return;
         case "error":
           log(`hub: error ${m.why ?? "?"}`);
+          // A knock past the hub's limit: wait what it says and knock again, quietly (people are
+          // never shown a limit, PROTOCOL.md Rooms › Knocks).
+          if (this.knocking && m.why === "rate_limited") {
+            const retry = Math.max(1, Math.min(300, Number((m as { retry_s?: unknown }).retry_s) || 5));
+            setTimeout(() => {
+              if (this.knocking && this.readyState === 0 && o.knock) this.signal(o.knock.hello);
+            }, retry * 1000 * (1 + 0.3 * Math.random()));
+            return;
+          }
+          if (m.why === "knock_pending" || m.why === "not_approved") return;
+          if (m.why === "knocks_off" || m.why === "no_lobby") {
+            this.refused("not_listed");
+            return;
+          }
           // Back from a restart before the host is: its room opens again in a moment.
           if (m.why === "no_room" && this.hubBackUntil && this.hubRestarting()) return;
           this.fail(m.why === "no_room" ? "no_room" : m.why === "room_full" ? "net_full" : "no_hub");
           return;
       }
+    }
+
+    /** A knock answer from the host. */
+    private async onKnock(d: Record<string, unknown>): Promise<void> {
+      const r = readKnockReply(d);
+      if (!r || !o.knock) return;
+      switch (r.kind) {
+        case "challenge": {
+          const pk = r.pk ?? o.knock.pk;
+          const blob = pk && o.knock.secret ? await seal(pk, this.gid, r.c, o.knock.secret) : null;
+          // No key or no secret to seal: the host's check says no (a wrong password).
+          this.signal(blob ? { knock: "sealed", blob } : { knock: "sealed", blob: "" });
+          return;
+        }
+        case "wait":
+          this.emitText({ stage: "asking" });
+          return;
+        case "ok":
+          this.knocking = false;
+          this.knockToken = r.token;
+          log("knock: let in");
+          void this.sendOffer();
+          return;
+        case "no":
+          this.knocking = false;
+          this.refused(r.why, r.triesLeft, r.suggest);
+          return;
+      }
+    }
+
+    /** A refusal as the session hears one from the engine, then closed. */
+    private refused(why: string, triesLeft: number | null = null, suggest: string | null = null): void {
+      this.emitText({
+        stage: "refused",
+        why: why === "no" ? "denied" : why,
+        ...(triesLeft != null ? { tries_left: triesLeft } : {}),
+        ...(suggest ? { suggest } : {}),
+      });
+      this.teardown();
+      this.emitClose(1000, "", true);
+    }
+
+    private emitText(m: Record<string, unknown>): void {
+      this.onmessage?.({ data: JSON.stringify(m) } as MessageEvent);
     }
 
     /** The peer connection, its channel and tracks, and the offer (made now, sent once joined). */
@@ -608,7 +699,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       const dc = this.dc;
       if (this.readyState !== 1 || !dc || dc.readyState !== "open") throw new Error("not open");
       if (typeof data === "string") {
-        dc.send(data);
+        dc.send(this.knockToken ? withKnockToken(data, this.knockToken) : data);
         return;
       }
       const bytes = ArrayBuffer.isView(data)

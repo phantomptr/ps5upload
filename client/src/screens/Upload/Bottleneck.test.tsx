@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
+import { BottleneckLine, JobLiveNotes, LinkLine, UnsettledLine } from "./Bottleneck";
 import type { BottleneckCause, JobLive } from "../../lib/jobLive";
 
 const live = (over: Partial<JobLive>): JobLive => ({
@@ -111,5 +111,35 @@ describe("a finished upload the console did not confirm", () => {
   it("shows nothing for a clean finish or no notes", () => {
     expect(renderToStaticMarkup(<UnsettledLine live={live({})} />)).toBe("");
     expect(renderToStaticMarkup(<UnsettledLine live={undefined} />)).toBe("");
+  });
+});
+
+describe("link_line_says_which_network", () => {
+  const cases: Array<[number | undefined, string]> = [
+    [2500, "Via USB 2.5G adapter"],
+    [5000, "Via USB 5G adapter"],
+    [10000, "Via USB 10G adapter"],
+    [1000, "Via USB 1G adapter"],
+    [100, "Via USB 100M adapter"],
+    [undefined, "Via USB adapter"],
+  ];
+  it.each(cases)("usb at %s Mbit/s", (mbps, text) => {
+    const html = renderToStaticMarkup(<LinkLine live={live({ link: "usb", linkMbps: mbps })} />);
+    expect(html).toContain('data-testid="queue-link"');
+    expect(html).toContain(text);
+  });
+  it("names the console's own network", () => {
+    expect(renderToStaticMarkup(<LinkLine live={live({ link: "console" })} />)).toContain("Via console network");
+  });
+  it("shows nothing for a console without an adapter", () => {
+    expect(renderToStaticMarkup(<LinkLine live={live({})} />)).toBe("");
+    expect(renderToStaticMarkup(<LinkLine live={undefined} />)).toBe("");
+  });
+  it("is part of the live notes the queue row and the transfer view show", () => {
+    const html = renderToStaticMarkup(
+      <JobLiveNotes live={live({ link: "usb", linkMbps: 2500, bottleneck: "network" })} />,
+    );
+    expect(html).toContain("Via USB 2.5G adapter");
+    expect(html).toContain("Limited by: network");
   });
 });

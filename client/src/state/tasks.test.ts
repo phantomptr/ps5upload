@@ -267,27 +267,26 @@ describe("bounded task history", () => {
 });
 
 describe("deriveRate", () => {
-  it("derives a smoothed speed and time left from byte samples", async () => {
+  const MiB = 2 ** 20;
+  it("derives speed and time left from byte samples over a trailing window (#981)", async () => {
     const { deriveRate } = await import("./tasks");
     const samples = new Map();
-    const p = (current: number) => ({ current, total: 10_000, unit: "bytes" as const });
-    // The first sample only sets the baseline.
-    expect(deriveRate(samples, "a", p(0), 0)).toBeNull();
-    // 1000 bytes in a second.
-    expect(deriveRate(samples, "a", p(1000), 1000)).toEqual({ rate: { bytesPerSec: 1000 }, eta: 9 });
-    // A sample too close to the last keeps the speed and updates the time left.
-    expect(deriveRate(samples, "a", p(1100), 1100)).toMatchObject({ rate: { bytesPerSec: 1000 } });
-    // Next second: 3000 bytes/s; smoothed, 1000 + 0.3 × 2000.
-    const next = deriveRate(samples, "a", p(4000), 2000);
-    expect(next?.rate.bytesPerSec).toBeCloseTo(1600);
-    expect(next?.eta).toBeCloseTo(6000 / 1600);
+    const p = (current: number) => ({ current, total: 100 * MiB, unit: "bytes" as const });
+    // The first sample only sets the baseline: nothing to show yet.
+    expect(deriveRate(samples, "a", p(0), 0)).toEqual({ rate: undefined, eta: undefined });
+    // 1 MiB in a second: a speed, but no time left until a few seconds of data.
+    expect(deriveRate(samples, "a", p(MiB), 1000)).toEqual({ rate: { bytesPerSec: MiB }, eta: undefined });
+    for (let s = 2; s <= 4; s++) deriveRate(samples, "a", p(s * MiB), s * 1000);
+    const steady = deriveRate(samples, "a", p(5 * MiB), 5000);
+    expect(steady?.rate?.bytesPerSec).toBeCloseTo(MiB);
+    expect(steady?.eta).toBeCloseTo(95);
     // Bytes went backwards (a new leg): start over.
-    expect(deriveRate(samples, "a", p(10), 3000)).toBeNull();
+    expect(deriveRate(samples, "a", p(10), 6000)).toEqual({ rate: undefined, eta: undefined });
     // Counts of files or items have no speed.
     expect(deriveRate(samples, "b", { current: 1, total: 2, unit: "files" }, 0)).toBeNull();
   });
 
-  it("a long step with no bytes moving ends with no speed, not one decayed to nothing", async () => {
+  it("a long step with no bytes moving shows as stalled, then a real speed comes back", async () => {
     const { deriveRate } = await import("./tasks");
     const samples = new Map();
     const p = (current: number) => ({ current, total: 100 * 2 ** 30, unit: "bytes" as const });
@@ -296,9 +295,9 @@ describe("deriveRate", () => {
     // A conversion's hashing pass: the byte count stands still for thousands of samples.
     let last: ReturnType<typeof deriveRate> = null;
     for (let i = 2; i < 3000; i++) last = deriveRate(samples, "c", p(10 * 2 ** 30), i * 1000);
-    expect(last).toBeNull();
+    expect(last).toEqual({ rate: { bytesPerSec: 0, stalled: true }, eta: undefined });
     // Bytes moving again: a real speed comes back.
-    expect(deriveRate(samples, "c", p(11 * 2 ** 30), 3000 * 1000)?.rate.bytesPerSec).toBeGreaterThan(1);
+    expect(deriveRate(samples, "c", p(11 * 2 ** 30), 3000 * 1000)?.rate?.bytesPerSec).toBeGreaterThan(1);
   });
 
   it("#669: a speed fades out once the bytes stop, and never shows a few bytes a second", async () => {
@@ -310,14 +309,14 @@ describe("deriveRate", () => {
     const shown: number[] = [];
     for (let i = 2; i < 100; i++) {
       const r = deriveRate(samples, "f", p(2 ** 30), i * 1000);
-      if (r) shown.push(r.rate.bytesPerSec);
+      if (r?.rate && r.rate.bytesPerSec > 0) shown.push(r.rate.bytesPerSec);
     }
     expect(shown.length).toBeGreaterThan(0);
     expect(Math.min(...shown)).toBeGreaterThanOrEqual(1024);
     // A real slow transfer, where bytes do move, still shows its speed.
     const slow = new Map();
     deriveRate(slow, "s", p(0), 0);
-    expect(deriveRate(slow, "s", p(500), 1000)?.rate.bytesPerSec).toBe(500);
+    expect(deriveRate(slow, "s", p(5000), 1000)?.rate?.bytesPerSec).toBe(5000);
   });
 
   it("fills in speed for an update that reports only bytes, and never overrides one that has a speed", async () => {
@@ -327,12 +326,15 @@ describe("deriveRate", () => {
       const { useTaskStore } = await import("./tasks");
       const s = useTaskStore.getState();
       const id = s.registerTask({ kind: "download", origin: "t", label: "x", consoleId: "h" });
-      s.updateTask(id, { progress: { current: 0, total: 4000, unit: "bytes" } });
+      s.updateTask(id, { progress: { current: 0, total: 40_000, unit: "bytes" } });
       vi.setSystemTime(11_000);
-      s.updateTask(id, { progress: { current: 2000, total: 4000, unit: "bytes" } });
-      expect(useTaskStore.getState().getTask(id)).toMatchObject({ rate: { bytesPerSec: 2000 }, eta: 1 });
-      vi.setSystemTime(12_000);
-      s.updateTask(id, { progress: { current: 3000, total: 4000, unit: "bytes" }, rate: { bytesPerSec: 7 } });
+      s.updateTask(id, { progress: { current: 2000, total: 40_000, unit: "bytes" } });
+      expect(useTaskStore.getState().getTask(id)).toMatchObject({ rate: { bytesPerSec: 2000 } });
+      vi.setSystemTime(14_000);
+      s.updateTask(id, { progress: { current: 8000, total: 40_000, unit: "bytes" } });
+      expect(useTaskStore.getState().getTask(id)).toMatchObject({ rate: { bytesPerSec: 2000 }, eta: 16 });
+      vi.setSystemTime(15_000);
+      s.updateTask(id, { progress: { current: 30000, total: 40_000, unit: "bytes" }, rate: { bytesPerSec: 7 } });
       expect(useTaskStore.getState().getTask(id)?.rate).toEqual({ bytesPerSec: 7 });
     } finally {
       vi.useRealTimers();

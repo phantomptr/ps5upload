@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Heart } from "lucide-react";
 import { ApiError, call, isOffline } from "../api";
 import { fullscreenState, setFullscreenPref, watchFullscreen } from "../fullscreen";
 import { onNavAction } from "../nav";
@@ -20,7 +21,12 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { forgetPhoneUrl } from "../ui/PhoneHandoff";
 import { formatZone, setConsoleZone, stepZone, timeInZone, ZONE_OFFSETS } from "../time";
 import { TailscaleSection } from "./Tailscale";
+import { UsbNetSection } from "./UsbNet";
 import { DevicesSection } from "./Devices";
+
+/** Where legal questions and takedown requests go (DISCLAIMER.md § 13). */
+const LEGAL_EMAIL = "phantomptr@gmail.com";
+const ISSUES_URL = "github.com/phantomptr/ps5upload/issues";
 
 /** /api/settings (payload/src/webui_api.c send_settings). */
 export interface WebSettings {
@@ -175,6 +181,10 @@ export interface SettingsViewProps {
   /** The Controls screen and the first-run tips (App's overlays); each button shows only when given. */
   onOpenControls?: () => void;
   onShowTips?: () => void;
+  /** About › Thanks & Support (the section opens its page). */
+  onOpenThanks?: () => void;
+  /** About › Rules & responsibility (Play Rooms' notice). */
+  onOpenRules?: () => void;
   /** Read /api/settings again after a failed load. */
   onRetry?: () => void;
   /** Turn off PS5Upload Minion: the confirm dialog is open (askOff), and its answers. */
@@ -486,6 +496,8 @@ export function SettingsView(p: SettingsViewProps) {
 
       {p.turnedOff || p.noTailscale ? null : <TailscaleSection />}
 
+      {p.turnedOff ? null : <UsbNetSection />}
+
       {p.turnedOff ? null : <DevicesSection />}
 
       <section className="cw-home-section" data-setting="about">
@@ -493,6 +505,33 @@ export function SettingsView(p: SettingsViewProps) {
         <p className="cw-dim">
           {t("cw_settings_app_name")}
           {s ? ` · ${t("cw_settings_version", { version: s.version })}` : ""}
+        </p>
+        <div className="cw-quick">
+          {p.onOpenThanks ? (
+            <button type="button" className="cw-focusable cw-button" data-action="open-thanks" onClick={p.onOpenThanks}>
+              <Heart aria-hidden />
+              <span>{t("cw_thanks_title")}</span>
+            </button>
+          ) : null}
+          {p.onOpenRules ? (
+            <button type="button" className="cw-focusable cw-button" data-action="open-rules" onClick={p.onOpenRules}>
+              <span>{t("cw_room_rules")}</span>
+            </button>
+          ) : null}
+        </div>
+        <p className="cw-dim cw-setting-note">{t("cw_about_disclaimer")}</p>
+        {/* 13.0.0 legal audit: the same words as DISCLAIMER.md in short. */}
+        <p className="cw-dim cw-setting-note" data-about="risk">
+          {t("cw_about_risk")}
+        </p>
+        <p className="cw-dim cw-setting-note" data-about="responsibility">
+          {t("cw_about_responsibility")}
+        </p>
+        <p className="cw-dim cw-setting-note" data-about="privacy">
+          {t("cw_about_privacy")}
+        </p>
+        <p className="cw-dim cw-setting-note" data-about="contact">
+          {t("cw_about_contact", { email: LEGAL_EMAIL, url: ISSUES_URL })}
         </p>
       </section>
 
@@ -522,7 +561,12 @@ export function SettingsView(p: SettingsViewProps) {
 }
 
 /** The Settings section: theme, language, full screen, controls and tips, network, About. */
-export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () => void; onShowTips?: () => void } = {}) {
+export function Settings({
+  onOpenControls,
+  onShowTips,
+  onOpenThanks,
+  onOpenRules,
+}: { onOpenControls?: () => void; onShowTips?: () => void; onOpenThanks?: () => void; onOpenRules?: () => void } = {}) {
   const [settings, setSettings] = useState<WebSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [askLan, setAskLan] = useState(false);
@@ -675,6 +719,8 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
       }}
       onOpenControls={onOpenControls}
       onShowTips={onShowTips}
+      onOpenThanks={onOpenThanks}
+      onOpenRules={onOpenRules}
       onRetry={() => setTick((n) => n + 1)}
       askOff={askOff}
       turnedOff={turnedOff}

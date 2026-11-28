@@ -331,6 +331,9 @@ function TaskRow({ task }: { task: Task }) {
         {rate > 0 && isActive && (
           <span>{formatBytes(rate)}/s</span>
         )}
+        {task.rate?.stalled && isActive && (
+          <span className="text-[var(--color-warn)]">{tr("task_stalled", undefined, "Stalled")}</span>
+        )}
         {task.eta != null && isActive && task.eta > 0 && (
           <span>
             {tr("task_eta", undefined, "ETA")} {formatEta(task.eta)}

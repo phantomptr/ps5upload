@@ -30,6 +30,7 @@ import { log } from "../../state/logs";
 import { visibleArea } from "./pipArea";
 import { phaseText } from "../../lib/rpPhaseText";
 import { friendsPlaying } from "../../lib/rpStopConfirm";
+import { friendsConfirmed } from "../../lib/friendsGuard";
 import { closeTauriPopups, TAURI_PIP_PREFIX } from "../../lib/pipPopups";
 import { PadAsks, usePadLink } from "./PhonePads";
 import { JoinAsks } from "./PlayTogether";
@@ -430,12 +431,13 @@ function MiniPlayer({ win, onBack }: { win: Window; onBack: () => void }) {
       )}
       {stopAsk !== null && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/80 px-3 text-center text-sm text-white" role="alertdialog" data-testid="rp-pip-stop-ask">
-          {tr("pt_confirm_stop", { n: stopAsk }, `Stopping Play ends Play Together for ${stopAsk} friend(s). Continue?`)}
+          {tr("pt_confirm_stop", { n: stopAsk }, `Stopping Play ends the Play Room for ${stopAsk} friend(s). Continue?`)}
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => {
                 setStopAsk(null);
+                friendsConfirmed();
                 stop();
               }}
               className="rounded-full bg-[var(--color-danger,#dc2626)] px-3 py-1 text-xs font-medium text-white"

@@ -69,6 +69,13 @@ export default function ThanksScreen({ list = supporters as SupporterList }: { l
           <KofiCard />
           <CryptoCard />
         </div>
+        <p className="text-xs text-[var(--color-muted)]" data-testid="thanks-voluntary">
+          {tr(
+            "thanks_voluntary",
+            undefined,
+            "Support is voluntary: a donation is a gift that buys nothing, unlocks nothing, creates no obligation and isn't refundable. Ko-fi and the crypto networks handle payments under their own terms.",
+          )}
+        </p>
       </section>
 
       {/* The wall: everyone, most first, one list. */}

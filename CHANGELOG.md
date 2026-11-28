@@ -6,6 +6,73 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Help us test**
+- 13.0.0 brings a lot that runs on the PS5: Play Rooms, PS5Upload Play, Minion's queue, save sync, freeing space while extracting and the USB adapter. They have been tried on only a few consoles, so your reports matter. If something goes wrong, open **Bug Report** in the sidebar, save the zip and post it on GitHub (the "Remote Play, Play Room or PS5Upload Play problem" form asks the useful questions) or on Discord. For a Play Room, make it on the computer or phone that hosts the room.
+- Bug reports now carry the Play Room's state (listed or not, locked, how many are blocked), PS5Upload Play's connection (paired, connected, app version) and the USB adapter's state: counts and states only, never chat, names or addresses.
+
+**Terms, privacy and credits**
+- About › Disclaimer, Minion's About and Rules & responsibility, and PS5Upload Play's new Terms & privacy screen (△ on Rules & responsibility) say plainly: PS5Upload is unofficial and not affiliated with Sony, comes with no warranty, and isn't liable for lost data, damage, bans or account actions; you're responsible for what you install, copy and share; what stays on your devices and what the Play Rooms hub briefly sees; donations are voluntary gifts; and where legal or takedown requests go. The Play Rooms notice adds how to stay safe. Thanks & Support, the USB adapter settings, the first-run screen, the join page and the website say their part too. [DISCLAIMER.md](DISCLAIMER.md) has the full terms.
+- The credits now include everything PS5Upload Play and the tailnet core build on, and PS5Upload Play carries the license texts of the code inside it.
+
+**PS5Upload Play: a PS5 app to play together**
+- **Join a friend's game on your own PS5.** PS5Upload Play runs on the PS5 and plays a friend's Play Room full screen with your own controller: picture, sound, rumble, and chat and voice with the DualSense mic. Several controllers on one PS5 can each be a player.
+- **Find games with no typing:** a friend's room on your network, Play again with people you've played with, rooms your friends opened, the public Rooms list, an invite sent to your PS5, or scan the QR code on the TV with your phone and tap "Play on my PS5". A 6-character code and an address still work.
+- **Host from the couch** on your own PS5: who's asking (let them in or not), who's playing, the invite code and QR code, your room's settings.
+- **Install it from ProsperoStore, or from PS5Upload** (Settings › This PS5, the Play Room screen, or Minion on the PS5), which also updates and removes it; either one can update the other's copy. Thanks & Support, the controls and Rules & responsibility are in its Settings.
+
+**Play Rooms**
+- **Your Play Together is now your room.** Keep it Private (only people you invite), make it Friends (people you've played with see it's open) or Public (anyone can find it in Rooms). Changing who can see it never removes anyone, and your invite links keep working.
+- **An optional password** for people who find your room. Five wrong tries and they wait 10 minutes.
+- **You still decide who plays.** People you've played with can get in without asking (you can turn that off); the password can let people in too, if you want.
+- **Host controls:** remove someone (and keep them out of the room, or off this computer), move players between seats, give Player 1 and take it back, lock the room, close it (it asks first while friends are in).
+- **Names are unique in a room.** Two "Sam"s? The second is offered "Sam (2)".
+- **Details before joining:** who's playing, the game, the picture quality and how long it's been going. Never anyone's address.
+- **People from the public list never get your PS5 user,** and PS & Create stay off for them.
+- **Friends keep their controllers** while your stream restarts: nobody picks a user again.
+- Minion and PS5Upload Play show the room the computer is hosting.
+- **Rooms:** find public rooms and your friends' rooms in Play › Play Room › Rooms, on the website's Rooms page, or in PS5Upload Play, with the game, players, room size, a lock for a password, and a ping before you join. Filter by game, space, language and more.
+- **Chat and voice in the room.** Quick messages and short text (quick messages only in public rooms, unless the host changes it), and voice (push-to-talk in public rooms, open mic allowed in private ones). Your mic is off until you turn it on; the host can mute anyone or turn chat and voice off. Nothing goes through our server and nothing is kept. Before the first chat, voice or public room, each app asks you to accept the room rules.
+- **Each player's ping** and the way they play (Home network, Tailscale or Internet) with a word for how good it is: Excellent, Good, Playable or Poor.
+
+**Play Rooms: friends keep playing**
+- **The app asks before ending friends' game.** While friends are in, stopping Remote Play, putting the PS5 in rest mode, restarting or turning it off, closing or switching the game, and replacing or stopping the helper first ask "Friends are playing on this PS5. Stop anyway?" with their names.
+- **Friends keep playing when your phone sleeps or you close the app.** The game goes on for up to 4 hours without you, then ends as before.
+
+**PS5Upload Play pairing**
+- With the helper running, PS5Upload Play pairs with PS5Upload by itself: no code to type.
+- Without the helper, PS5Upload shows the code from the TV and you pair with one click. Typing the code still works.
+- A PS5 that gets a new address stays paired. If PS5Upload can't tell it's the same PS5, it asks you to confirm with one click.
+- PS5Upload Play finds the computer that runs your PS5 by itself, and can tell an old helper from a missing one.
+
+**USB Ethernet adapter on the PS5 (experimental, #986)**
+- **Faster transfers with a USB 2.5G, 5G or 10G network adapter.** Plug one with a Realtek RTL8156B (2.5G), RTL8157 (5G) or RTL8159 (10G) chip into the PS5 and connect it to your network. PS5Upload starts it by itself and gives it its own address; transfers from your computer go through it whenever your computer can reach it, and through the PS5's own network otherwise, without you doing anything. The PS5's own network setting is never changed.
+- **See whether it's working** in Settings › This PS5 › USB Ethernet adapter (and in Minion's Settings): the chip, the link speed, its address, the data it carried, and whether this computer uses it. A transfer says "Via USB 2.5G adapter" or "Via console network". You can turn it off there, or give it a fixed address for a network without a router handing out addresses.
+- Experimental: not yet tried with an adapter on a PS5. If it stops working, unplug the adapter and plug it back in. It pauses while the PS5 rests and starts again after.
+
+**Controllers**
+- **Stick dead zones per controller (#973).** A stick that moves by itself (drift) gets its own dead zone in Play › Settings › Controls › Controllers › Stick dead zones, with a readout of where the stick rests. It applies in Remote Play, Play Rooms and the phone pad. Thanks, elBarto.
+
+**Thanks & Support everywhere**
+- Minion and PS5Upload Play have the same Thanks & Support page as the app, from one supporter list.
+
+**Minion queue (#982)**
+- **Queue game copies and installs on the PS5.** In Minion, Install and Copy to the PS5 in the Library, and Add to queue in Files (a package, or anything on a network share), add to a queue that runs one item after another, with Minion closed too. Home shows the queue: what runs now with its speed and time left, then what waits in order, with Remove, Move to top, Pause and Clear finished. A failure doesn't stop the rest; it stays listed with the reason. An install waits while the PS5 installs something else. The queue is kept on the PS5: if the helper restarts during an install, the queue pauses and says so.
+- A game's page shows only its own copy or install, and other games can be copied or installed while one runs. The app lists what waits in the PS5's queue too.
+
+**Transfer speed everywhere (#981)**
+- **Minion shows how fast a copy goes.** A copy from a network share (NAS), a copy or move on the console, an extract, an install, an upload from your phone, a check and a conversion now show the current speed (MiB/s), the time elapsed and about how long is left, next to the percentage. "Stalled" appears when nothing has moved for 15 seconds.
+- In the app, the same figures for a download through Files or Games, a library move, a link download, a decompress or extract, an archive unpack, the console backup, a restore to the home screen, the app update and the speed test. A task started on the console counts its time from when it started there. The Activity panel says "Stalled" too, and a staged install's speed no longer reads nothing and then jumps.
+
+**Files**
+- **Delete the archive as it's unpacked.** Extracting on the console can now free space as it goes, so a game needs about its own size of free space instead of the archive's and its own. A split archive (`.part1.rar`, `.7z.001`, `.zip.001`…) loses each part as soon as everything in it is unpacked; the dialog says how much less space that needs. The whole archive is checked first, so a damaged one is found before anything is deleted. A single-file or solid archive is deleted once everything is out. Off unless you turn it on, since the archive can't be used again; if it stops part way, everything unpacked so far is kept. Convert shows how much less space its own "Free the archive's space" option needs, and keeps a solid multi-part RAR whole until it's all unpacked.
+
+**Save sync**
+- **Keep a game's save in step between two PS5s.** In Saves › Save sync, turn on "Keep this game's save in step" for a game. After you close it on one PS5, its save is copied to the other, as long as the game isn't running there and that save hasn't changed since the last sync. If both changed, both are backed up and you choose which to keep; nothing is overwritten without asking. A PS5 that's off or resting gets the save when it's back (it's only woken if you turn that on). Each game shows In step, Waiting, Conflict or Can't sync (with the reason), and has **Sync now**. The save that gets replaced is always backed up first. PS4 saves can't be kept in step: they can only go back to the same user on the same PS5.
+- **A game the other user hasn't saved yet.** Save sync shows **Copy to <console> (<user> has no save yet)**: the save is copied there once and made theirs, and nothing there is replaced. After that it's kept in step like the others. When it can't be done (the helper there is too old, or that user has never saved a PS5 game on that console), it says so and what to do. A game turned on before that waits, and asks which save to keep once the game saves there by itself.
+- **The PS5's own page shows save sync.** Saves on the console page lists the games kept in step for that user, where each one stands (in step, waiting for the other PS5, choose which to keep, or can't sync) and when the app last updated it. Changes are still made in the app.
+
+## 12.6.46
+
 **Installs**
 - **Deleting a package right after installing it from the console gives its space back (#979).** The installer kept the package open for 10 minutes after the install (longer if the PS5 skipped part of it), so the space stayed used after the delete. It now opens the package only while the PS5 is reading it.
 

@@ -1,6 +1,7 @@
 // Save sync: one user's saves kept in step across two consoles (engine save_sync.rs). The engine
-// decides what changed by fingerprints kept at the last copy, never by dates, and copies only
-// when asked, each copy through Copy to another console (the target backed up first).
+// decides what changed by fingerprints kept at the last copy, never by dates, each copy through
+// Copy to another console (the target backed up first). A save the user turned on is kept in step
+// by the engine itself (save_sync_auto.rs); the rest are copied only when asked.
 
 import { getEngineUrl } from "../state/engine";
 import { ENGINE_LONG_TIMEOUT_MS, engineFetch, type EngineFetchInit } from "../lib/engineFetch";
@@ -16,6 +17,53 @@ export interface SyncPair {
   b: SyncSide;
   /** Saves left out, by key. */
   excluded: string[];
+  /** Saves kept in step automatically, by key. */
+  auto?: string[];
+  /** A console in rest is woken to take a waiting copy. */
+  wake?: boolean;
+}
+
+export type AutoState = "in_step" | "waiting" | "conflict" | "cant_sync";
+
+export type AutoReason =
+  | "offline"
+  | "settling"
+  | "running"
+  | "queued"
+  | "error"
+  | "ps4"
+  | "no_save"
+  | "refused"
+  | "failed";
+
+/** Where a save kept in step stands (engine save_sync_auto.rs AutoView). */
+export interface AutoView {
+  state: AutoState;
+  title_id: string;
+  kind: string;
+  /** The console the state is about: the one waited for, or the one the reason names. */
+  side: "a" | "b" | null;
+  reason: AutoReason | null;
+  detail: string | null;
+  direction: SyncDirection | null;
+  /** Conflict: never synced before. */
+  first: boolean;
+  /** Conflict: the backups taken of both sides. */
+  kept: string[];
+  since_ms: number;
+  fails: number;
+  woke_ms: number | null;
+  copied_ms: number | null;
+  copied_direction: SyncDirection | null;
+}
+
+/** One save kept in step (GET /api/save-sync/games). */
+export interface SyncGame extends AutoView {
+  pair: string;
+  key: string;
+  a: SyncSide;
+  b: SyncSide;
+  synced_ms: number | null;
 }
 
 export type SyncStatus =
@@ -51,6 +99,16 @@ export interface SyncRow {
   b: SyncSideView | null;
   synced_ms: number | null;
   last_error: string | null;
+  /** Kept in step automatically: where it stood at this check. */
+  auto?: AutoView | null;
+  /** A PS5 save on one side only: whether the one-time first copy to the other user can be made,
+   *  and if not, why (engine words). */
+  first_copy?: {
+    ok: boolean;
+    why?: string | null;
+    /** `why` as a code the app words itself; null for anything else. */
+    code?: "old_helper" | "no_saved_data" | "no_backup_place" | null;
+  } | null;
 }
 
 export interface SyncSuggestion {
@@ -106,14 +164,50 @@ async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
 
 export const saveSyncApi = {
   view: async () => syncView(await call<unknown>("")),
-  setPair: (a: SyncSide, b: SyncSide, excluded?: string[]) =>
+  setPair: (a: SyncSide, b: SyncSide, excluded?: string[], wake?: boolean) =>
     call<{ pair: SyncPair }>("/pair", {
       method: "PUT",
       body: JSON.stringify({
         a: { host: a.host, user_id: a.user_id >>> 0 },
         b: { host: b.host, user_id: b.user_id >>> 0 },
         excluded,
+        wake,
       }),
+    }),
+  /** Every save kept in step and where it stands (reads no console). */
+  games: async () => {
+    const r = await call<{ games?: unknown }>("/games");
+    return Array.isArray(r?.games) ? (r.games as SyncGame[]) : [];
+  },
+  /** Keep one save in step automatically, or stop. Turning it on checks it first (both consoles
+   *  read, nothing copied) and is refused with the reason when it can't be done safely. */
+  setAuto: (pair: string, key: string, on: boolean) =>
+    call<{ ok: boolean; auto: AutoView | null }>("/auto", {
+      method: "PUT",
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
+      body: JSON.stringify({ pair, key, on }),
+    }),
+  /** Does now what the background look would for one save kept in step. */
+  syncNow: (pair: string, key: string) =>
+    call<{ ok: boolean; auto: AutoView }>("/sync-now", {
+      method: "POST",
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
+      body: JSON.stringify({ pair, key }),
+    }),
+  /** The pick in a conflict: `keep`'s save is copied over the other (backed up first). */
+  resolve: (pair: string, key: string, keep: "a" | "b") =>
+    call<{ ok: boolean; auto: AutoView | null }>("/resolve", {
+      method: "POST",
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
+      body: JSON.stringify({ pair, key, keep }),
+    }),
+  /** The one-time first copy of a PS5 save only one side has, to the other user (made theirs
+   *  there). `keepInStep`: keep it in step from then on. */
+  firstCopy: (pair: string, key: string, keepInStep = false) =>
+    call<{ ok: boolean; auto: AutoView | null }>("/first-copy", {
+      method: "POST",
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
+      body: JSON.stringify({ pair, key, keep_in_step: keepInStep }),
     }),
   removePair: (pair: string) =>
     call<{ ok: boolean }>("/pair/remove", { method: "POST", body: JSON.stringify({ pair }) }),

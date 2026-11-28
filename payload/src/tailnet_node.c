@@ -14,17 +14,19 @@
 #include <unistd.h>
 
 #include "atomic_file.h"
+#include "config.h"
 #include "json_escape.h"
 #include "proc_identity.h"
 #include "tailnet.h"
 #include "webui_codec.h"
 
-/* The allow-list. The core accepts nothing else from the tailnet. */
+/* The allow-list. The core accepts nothing else from the tailnet. Plain splices (flags 0): the
+ * helper and Remote Play take a tailnet peer as they take a LAN one. */
 static const tn_serve SERVE[] = {
-    {6, 9295, 0},  /* Remote Play session (TCP) */
-    {17, 9296, 0}, /* Remote Play stream (UDP) */
-    {17, 9302, 0}, /* Remote Play discovery / wake (UDP) */
-    {6, 9120, 0},  /* the helper (AVA1, TCP) */
+    {6, 9295, 0, 0},  /* Remote Play session (TCP) */
+    {17, 9296, 0, 0}, /* Remote Play stream (UDP) */
+    {17, 9302, 0, 0}, /* Remote Play discovery / wake (UDP) */
+    {6, 9120, 0, 0},  /* the helper (AVA1, TCP) */
 };
 
 #define ALLOW_MAX 32
@@ -447,11 +449,116 @@ int tailnet_node_allows(unsigned int ip) {
     return ok;
 }
 
+/* PS5Upload Play's forward (tailnet_node_forward_open), under g_mu: the one mapping, or none. */
+static int g_fwd_on;
+static uint32_t g_fwd_peer;
+static uint16_t g_fwd_port, g_fwd_lport;
+
 static void stop_locked(void) {
     if (!g_ctx) return;
     tn_ctx *c = g_ctx;
     g_ctx = NULL;
+    g_fwd_on = 0; /* the node's mappings go with it */
     tn_destroy(c);
+}
+
+/* ---- PS5Upload Play's forward: the ONE exception to "the console never dials out" ----
+ *
+ * Everything else here serves (the four ports in SERVE) and never dials out on the tailnet. This
+ * forward lets PS5Upload Play on a friend's PS5 reach the host's PS5Upload engine over the tailnet:
+ * the app connects to 127.0.0.1:PLAY_APP_FORWARD_PORT and the core dials that TCP connection to the
+ * one (peer, port) the app named through its loopback API (app_api.h, POST /v1/tailnet/forward).
+ * Kept narrow on purpose:
+ *   - TCP only, one mapping at a time (a new target replaces the old one);
+ *   - the peer must be a tailnet address the node knows NOW (in its netmap), never anything else;
+ *   - the local side is 127.0.0.1 only (tn_map binds the loopback), so only apps on this console
+ *     can use it, and only the app API (loopback, no Origin) can set it;
+ *   - in memory only: it goes with the node (off, sign-out, rename, helper restart) and the app
+ *     asks again; it is never saved.
+ * The core lets in only the replies on connections it dialed (tn_fwd_tcp_known); the inbound
+ * allow-list (SERVE, the peer list, the tailnet ACL) is unchanged. */
+
+/* Is ip (host order) a peer in the node's netmap now? Caller holds g_mu, node running. */
+static int peer_known_locked(uint32_t ip) {
+    tn_status st;
+    tn_peer_status *ps = calloc(64, sizeof *ps);
+    int found = 0;
+    if (!ps) return 0;
+    memset(&st, 0, sizeof st);
+    tn_get_status(g_ctx, &st, ps, 64);
+    for (uint32_t i = 0; i < st.n_peers && i < 64 && !found; i++) found = ps[i].addr4 == ip;
+    free(ps);
+    return found;
+}
+
+int tailnet_node_forward_open(unsigned int peer, unsigned int port, unsigned int *local_port, const char **err) {
+    const char *dummy;
+    uint16_t lport = 0;
+    int r;
+    if (!err) err = &dummy;
+    if (port == 0 || port > 65535) {
+        *err = "bad_port";
+        return -1;
+    }
+    pthread_mutex_lock(&g_mu);
+    if (!g_ctx) {
+        pthread_mutex_unlock(&g_mu);
+        *err = "tailnet_off";
+        return -1;
+    }
+    if ((peer >> 22) != (100u << 2 | 1u) || !peer_known_locked(peer)) {
+        pthread_mutex_unlock(&g_mu);
+        *err = "unknown_peer";
+        return -1;
+    }
+    if (g_fwd_on && g_fwd_peer == peer && g_fwd_port == port) {
+        if (local_port) *local_port = g_fwd_lport;
+        pthread_mutex_unlock(&g_mu);
+        return 0;
+    }
+    if (g_fwd_on) {
+        tn_unmap(g_ctx, 6, g_fwd_lport);
+        g_fwd_on = 0;
+    }
+    r = tn_map(g_ctx, 6, peer, (uint16_t)port, PLAY_APP_FORWARD_PORT, &lport);
+    if (r != 0) {
+        pthread_mutex_unlock(&g_mu);
+        *err = r == TN_E_IO ? "port_busy" : "failed";
+        fprintf(stderr, "[tailnet] PS5Upload Play forward not opened: %s\n", tn_strerror(r));
+        return -1;
+    }
+    g_fwd_on = 1;
+    g_fwd_peer = peer;
+    g_fwd_port = (uint16_t)port;
+    g_fwd_lport = lport;
+    pthread_mutex_unlock(&g_mu);
+    {
+        char ip[16];
+        fprintf(stderr, "[tailnet] PS5Upload Play forward: 127.0.0.1:%u -> %s:%u\n", (unsigned)lport,
+                tn_ip4_str(peer, ip), port);
+    }
+    if (local_port) *local_port = lport;
+    return 0;
+}
+
+void tailnet_node_forward_close(void) {
+    pthread_mutex_lock(&g_mu);
+    if (g_ctx && g_fwd_on) tn_unmap(g_ctx, 6, g_fwd_lport);
+    g_fwd_on = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
+int tailnet_node_forward_json(char *out, size_t cap) {
+    char ip[16];
+    int n;
+    pthread_mutex_lock(&g_mu);
+    if (!g_ctx) n = snprintf(out, cap, "{\"state\":\"tailnet_off\"}");
+    else if (!g_fwd_on) n = snprintf(out, cap, "{\"state\":\"off\"}");
+    else
+        n = snprintf(out, cap, "{\"state\":\"on\",\"local_port\":%u,\"peer\":\"%s\",\"port\":%u}", (unsigned)g_fwd_lport,
+                     tn_ip4_str(g_fwd_peer, ip), (unsigned)g_fwd_port);
+    pthread_mutex_unlock(&g_mu);
+    return n < 0 || (size_t)n >= cap ? -1 : n;
 }
 
 int tailnet_node_boot(void) {

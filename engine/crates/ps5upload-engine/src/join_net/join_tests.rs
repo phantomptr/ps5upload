@@ -39,13 +39,7 @@ async fn open_party(console: &str) -> serde_json::Value {
 
 async fn close_party(console: &str) {
     let (ci, h) = local();
-    close(
-        ci,
-        h,
-        Json(AddrBody {
-            addr: console.into(),
-        }),
-    )
+    close(ci, h, Query(Default::default()), Json(CloseBody { addr: console.into(), confirm_friends: true }))
     .await;
 }
 
@@ -102,6 +96,7 @@ fn settings_body() -> SettingsBody {
         upnp: None,
         port: None,
         video_track: None,
+        play_discovery: None,
     }
 }
 
@@ -228,6 +223,48 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
             .any(|s| s.slot == 2 && s.state.buttons & pad::CROSS != 0)
     })
     .await;
+
+    // Play Rooms voice on the page's own unordered `voice` channel (join_comms.rs): the host hears
+    // the guest's frames, and the host's bundles come back on that channel.
+    g.text(serde_json::json!({"notice": 1}));
+    g.text(serde_json::json!({"mic": "on"}));
+    let _ = g.tx.send(GOut::OpenVoice);
+    let mut host = crate::join_comms::attach(console, crate::join_comms::HOST_PID, "H", None, true);
+    host.on_text(r#"{"notice": 1}"#);
+    host.on_text(r#"{"room_mic": "on"}"#);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seq = 0u16;
+    'heard: loop {
+        assert!(Instant::now() < deadline, "the host never heard the guest");
+        seq += 1;
+        let _ = g.tx.send(GOut::Voice(crate::join_voice::up_frame(seq, 90, &[1; 40])));
+        while let Ok(m) = tokio::time::timeout(Duration::from_millis(40), host.next(false)).await {
+            if let Message::Binary(b) = m {
+                let f = crate::join_voice::parse_bundle(&b).unwrap();
+                assert_eq!(f[0].2.len(), 40);
+                break 'heard;
+            }
+        }
+    }
+    'back: loop {
+        assert!(Instant::now() < deadline, "the guest never heard the host");
+        seq += 1;
+        host.on_binary(&crate::join_voice::up_frame(seq, 90, &[2; 30]));
+        while let Ok(Some(m)) = tokio::time::timeout(Duration::from_millis(40), g.rx.recv()).await {
+            match m {
+                GIn::Voice(b) => {
+                    let f = crate::join_voice::parse_bundle(&b).unwrap();
+                    assert_eq!((f[0].0, f[0].2.len()), (0, 30), "the host's sid 0");
+                    break 'back;
+                }
+                GIn::Binary(b) => {
+                    assert_ne!(b.first(), Some(&crate::join_voice::KIND_VOICE_DOWN), "voice on the reliable channel")
+                }
+                _ => {}
+            }
+        }
+    }
+    drop(host);
 
     // The host's panel: an internet guest, direct, with round trips (the channel's ping).
     let st = until_state(console, "a direct guest with a round trip", |s| {
@@ -516,7 +553,7 @@ async fn an_internet_room_takes_no_hello_without_the_current_invite() {
     let mut g = connect_guest(&hub.url, &room).await;
     g.text(serde_json::json!({"hello": {"invite": old, "name": "Old link"}}));
     let v = g.next_with("stage").await;
-    assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"key".into()), "{v}");
+    assert_eq!((&v["stage"], &v["why"]), (&"refused".into(), &"expired".into()), "{v}");
     assert_eq!(
         host_state(console).await["pending"],
         serde_json::json!([]),
@@ -867,6 +904,13 @@ async fn e2e_internet_guest_fixture() {
         upnp: false,
         ..Settings::default()
     });
+    // With PS5UPLOAD_E2E_LOBBY the Play Room's lobby runs too (it never starts under test
+    // otherwise): a Public or Friends room set through `/api/join/room` lists on the hub.
+    let lobby = std::env::var_os("PS5UPLOAD_E2E_LOBBY").is_some();
+    if lobby {
+        crate::join_room::test_clear_blocks();
+        crate::join_net::lobby::TEST_LOBBY.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let console = "10.77.0.60";
     set_helper(console, Arc::new(FakeHelper::default()));
     set_live(console, 1);
@@ -914,6 +958,11 @@ async fn e2e_internet_guest_fixture() {
     });
     let _ = served.await;
     close_party(console).await;
+    if lobby {
+        crate::join_net::lobby::changed();
+        crate::join_net::lobby::TEST_LOBBY.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = crate::join_room::set_password(None);
+    }
     set_live(console, 0);
     *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
@@ -1312,6 +1361,7 @@ fn host_switches_survive_a_save_and_load() {
         max_players: 2,
         upnp: false,
         video_track: false,
+        play_discovery: false,
         ..Settings::default()
     };
     write_invites(&p, &chosen, d).unwrap();
@@ -1325,7 +1375,14 @@ fn host_switches_survive_a_save_and_load() {
     // Back to the defaults: none of the switches stays in the file.
     write_invites(&p, &Settings::default(), d).unwrap();
     let text = std::fs::read_to_string(&p).unwrap();
-    for k in ["block_system_buttons", "stream_seat", "max_players", "upnp", "video_track"] {
+    for k in [
+        "block_system_buttons",
+        "stream_seat",
+        "max_players",
+        "upnp",
+        "video_track",
+        "play_discovery",
+    ] {
         assert!(!text.contains(k), "{k} left in {text}");
     }
     assert_eq!(load(&p), Settings::default());

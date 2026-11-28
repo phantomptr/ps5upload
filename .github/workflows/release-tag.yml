@@ -117,7 +117,9 @@ jobs:
           node scripts/release/changelog-release.mjs "$VERSION" --previous "$PREVIOUS"
           allowed=" VERSION client/package.json client/package-lock.json client/src-tauri/tauri.conf.json"
           allowed="$allowed client/src-tauri/Cargo.toml payload/include/config.h engine/Cargo.toml"
-          allowed="$allowed engine/Cargo.lock client/src-tauri/Cargo.lock CHANGELOG.md "
+          allowed="$allowed engine/Cargo.lock client/src-tauri/Cargo.lock CHANGELOG.md"
+          # PS5Upload Play's contentVersion (13.0.0 -> 13.000.000), once the app is in the tree.
+          allowed="$allowed apps/play/sce_sys/param.json "
           changed="$(git status --porcelain --untracked-files=all | cut -c4-)"
           for f in $changed; do
             case "$allowed" in
@@ -202,6 +204,7 @@ jobs:
             git add -- VERSION client/package.json client/package-lock.json client/src-tauri/tauri.conf.json \
               client/src-tauri/Cargo.toml payload/include/config.h engine/Cargo.toml engine/Cargo.lock \
               client/src-tauri/Cargo.lock CHANGELOG.md
+            if [ -f apps/play/sce_sys/param.json ]; then git add -- apps/play/sce_sys/param.json; fi
             git commit -q -m "$VERSION"
           fi
           commit="$(git rev-parse HEAD)"

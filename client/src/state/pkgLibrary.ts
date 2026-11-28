@@ -2440,8 +2440,11 @@ export async function runPkgInstall(
         },
       },
       (sample) => {
+        // The bytes the console has pulled so far (#981): installedBytes alone reads 0 while the
+        // package streams, then jumps to the whole size, so the row showed no speed and then a
+        // spike. The stream path reads the same max.
         latestProgress = {
-          current: sample.installedBytes,
+          current: Math.max(sample.transferBytes, sample.installedBytes),
           total: sample.total,
           unit: "bytes",
         };

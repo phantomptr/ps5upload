@@ -139,6 +139,7 @@ async fn a_typed_node_status_rebuilds_the_legacy_json_with_a_bool_and_replaced()
                 fan_threshold: 70,
                 fan_reapply_sec: 30,
                 prior_instance: Some("replaced".into()),
+                usbnet: None,
             }
             .to_bytes()
             .unwrap())

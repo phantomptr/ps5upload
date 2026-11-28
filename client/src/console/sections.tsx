@@ -7,6 +7,8 @@ import { GamesSection } from "./games/GamesSection";
 import { Home } from "./home/Home";
 import { Saves } from "./saves/Saves";
 import { Settings as SettingsSection } from "./settings/Settings";
+import { Thanks } from "./thanks/Thanks";
+import { RoomRules } from "./room/RoomRules";
 import type { ConsoleStatus } from "./shell/TopBar";
 import { SystemSection } from "./system/SystemSection";
 
@@ -100,9 +102,24 @@ export const SECTIONS: Section[] = [
     acceptsParams: true,
   },
   {
+    // Settings; About opens Thanks & Support (params.view "thanks", also Home's heart) and Play
+    // Rooms' rules (params.view "rules", also the "Your room" card) as pages of their own.
     id: "settings",
     icon: Settings,
     labelKey: "cw_nav_settings",
-    render: (ctx) => <SettingsSection onOpenControls={ctx.openControls} onShowTips={ctx.showTips} />,
+    render: (ctx) => {
+      const back = () => ctx.openSection("settings");
+      if (ctx.params?.view === "thanks") return <Thanks key="thanks" onBack={back} />;
+      if (ctx.params?.view === "rules") return <RoomRules key="rules" onBack={back} />;
+      return (
+        <SettingsSection
+          onOpenControls={ctx.openControls}
+          onShowTips={ctx.showTips}
+          onOpenThanks={() => ctx.openSection("settings", { view: "thanks" })}
+          onOpenRules={() => ctx.openSection("settings", { view: "rules" })}
+        />
+      );
+    },
+    acceptsParams: true,
   },
 ];

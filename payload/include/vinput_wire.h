@@ -37,6 +37,14 @@
  *           pad is then watched: an owner the console changes (someone answered the question
  *           after all) is put back, VWIRE_KEEP_FIXES times at most.
  *   FORGET  u32 device                   -> rc  (the pad was removed: no longer watched)
+ *   OWNERS  u8 n, n x u32 device (1 <= n <= VWIRE_OWNERS_MAX)
+ *                                        -> rc, n x (i32 sce rc, u32 owner)
+ *           who each pad is seated in now (sceMbusGetDeviceInfo_'s owner; 0: nobody yet, the
+ *           console has not been told who uses it), in the order asked. Read only: nothing is
+ *           bound, moved or watched. Play Together reads its guests' pads with it about once a
+ *           second (vpad.c): has a user been picked on that pad, and which. A device that is not a
+ *           handle (0 or above 0x7FFFFFFF) answers sce VWIRE_RC_BAD_REQUEST, owner 0. rc
+ *           VWIRE_RC_UNSUPPORTED when sceMbusInit failed (no reads can be made).
  *
  * The companion lets go of everything and removes its devices after VWIRE_HB_TIMEOUT_MS with no
  * frame from the helper; it exits when the helper's connection closes, when nobody presented the
@@ -80,6 +88,7 @@ enum {
     VWIRE_HOLD = 7,
     VWIRE_BIND = 8,
     VWIRE_FORGET = 9,
+    VWIRE_OWNERS = 10,
 };
 
 /* BIND (ProsperoSunshine PR #33, src/platform/ps5/profile_seat.c, measured on FW 10.20). */
@@ -88,6 +97,8 @@ enum {
 #define VWIRE_MBUS_NO_DEVICE 0x809b0005u
 #define VWIRE_KEEP_FIXES 5
 #define VWIRE_WATCH_MAX 8
+/* OWNERS: the pads asked about in one frame (4 + 7 x 8 answer bytes fit VWIRE_MAX_PAYLOAD). */
+#define VWIRE_OWNERS_MAX 7
 
 #define VWIRE_RC_OK 0
 #define VWIRE_RC_UNSUPPORTED (-1) /* = VINPUT_E_UNSUPPORTED */

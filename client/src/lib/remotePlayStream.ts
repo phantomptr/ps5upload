@@ -8,6 +8,7 @@
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
 import { isPasscode } from "./passcode";
+import { friendsRecentlyConfirmed } from "./friendsGuard";
 import { DEFAULT_PICTURE, PicturePass, PlaneReader, chromaBlank, cropRect, isPlaneFormat, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import { isLinuxDesktop } from "./platform";
 import { linuxCompositingOff } from "./linuxGraphics";
@@ -849,13 +850,33 @@ const LATENCY_LOG_MS = 60_000;
 const VIDEO_BACKLOG = 4;
 const VIDEO_BACKLOG_LOW_LATENCY = 2;
 
+/** The host's Play Room chat and voice on this socket (lib/room/hostRoom registers it; the phone
+ *  link's page, which shares this module, never does, so it carries none of it). */
+export interface RoomTap {
+  text(t: string): boolean;
+  binary(d: ArrayBuffer): boolean;
+  attach(ws: WebSocket | null): void;
+}
+let roomTap: RoomTap | null = null;
+let roomWs: WebSocket | null = null;
+export function setRoomTap(t: RoomTap | null): void {
+  roomTap = t;
+  if (t && roomWs && roomWs.readyState === WebSocket.OPEN) t.attach(roomWs);
+}
+
+/** `{"stop": true}`, with `confirm_friends` when the person just said yes to ending friends' game
+ *  (the engine's guard answers a plain stop with friends in by asking, and stops nothing). */
+export function stopMessage(): { stop: true; confirm_friends?: true } {
+  return friendsRecentlyConfirmed() ? { stop: true, confirm_friends: true } : { stop: true };
+}
+
 /** End the session the engine runs for `host` without showing it (it moved to another window,
  *  or this page was reloaded). */
 export function stopEngineSession(host: string): void {
   const ws = new WebSocket(getEngineUrl().replace(/^http/, "ws") + "/api/ps5/rp/ws");
   ws.onopen = () => {
     ws.send(JSON.stringify({ host, regist_key: "", rp_key: "", attach_only: true }));
-    ws.send(JSON.stringify({ stop: true }));
+    ws.send(JSON.stringify(stopMessage()));
     window.setTimeout(() => ws.close(), 1000);
   };
 }
@@ -1921,10 +1942,17 @@ export class RemotePlayStream {
       );
       // Attaching turns the console's mic off in the engine: a page that has it on says so.
       if (this.micOn) ws.send(JSON.stringify({ mic: true }));
+      // The host's own chat and voice in their Play Room ride this socket (lib/room/hostRoom).
+      roomWs = ws;
+      roomTap?.attach(ws);
     };
     ws.onmessage = (m) => {
       if (ws !== this.ws) return;
-      if (typeof m.data === "string") return this.onStatus(m.data);
+      if (typeof m.data === "string") {
+        if (roomTap?.text(m.data)) return;
+        return this.onStatus(m.data);
+      }
+      if (roomTap?.binary(m.data as ArrayBuffer)) return;
       const recv = performance.now();
       const b = new Uint8Array(m.data as ArrayBuffer);
       const kind = b[0];
@@ -2246,7 +2274,7 @@ export class RemotePlayStream {
       if (!ws || ws.readyState !== WebSocket.OPEN) stopEngineSession(this.o.host);
       return;
     }
-    ws.send(JSON.stringify({ stop: true }));
+    ws.send(JSON.stringify(stopMessage()));
     window.setTimeout(() => ws.close(), 3000);
   }
 

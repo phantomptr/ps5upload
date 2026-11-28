@@ -192,6 +192,12 @@ static void status_locked(const job_t *j, sj_buf_t *b) {
     sj_fmt(b, ",\"skipped\":%u", (unsigned)j->pr.skipped);
     sj_fmt(b, ",\"reconnects\":%u,\"dialect\":%u,\"started\":%lld,\"ended\":%lld", (unsigned)j->pr.reconnects, j->dialect,
            (long long)j->started, (long long)(j->state == ST_RUNNING ? 0 : j->ended));
+    {
+        /* How long it has run (or ran), on the console's clock, so the page needs no clock of its own
+         * (#981). A clock that went back reads 0. */
+        time_t end = j->state == ST_RUNNING ? time(NULL) : j->ended;
+        sj_fmt(b, ",\"elapsed_s\":%lld", (long long)(end > j->started ? end - j->started : 0));
+    }
     sj_kv_str(b, 1, "current", cur);
     sj_kv_str(b, 1, "src", j->src);
     sj_kv_str(b, 1, "dest", j->dst);

@@ -678,53 +678,61 @@ fn apply_console_settings(
     Ok(())
 }
 
+/// One console's own settings changed (`changes` as [`apply_console_settings`] takes them), by its
+/// id, name or address: the console list as it is now. Blocking (the list's lock and its file).
+fn patch_console_settings(
+    console: &str,
+    changes: &Map<String, Value>,
+) -> Result<Value, Box<Response>> {
+    migrate();
+    let _g = ROSTER.lock().unwrap_or_else(|e| e.into_inner());
+    let doc = shared_state::read(DOC);
+    let mut list = profiles_of(doc.value.as_ref());
+    let want = console.trim();
+    let at = list.iter().position(|p| {
+        str_of(p, "id") == want
+            || str_of(p, "name").eq_ignore_ascii_case(want)
+            || (!key_of(want).is_empty() && key_of(str_of(p, "host")) == key_of(want))
+    });
+    let Some(at) = at else {
+        return Err(Box::new(json_error(
+            StatusCode::NOT_FOUND,
+            "no_console",
+            format!("no console {want} on the list"),
+        )));
+    };
+    let mut current = list[at]
+        .get("settings")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    apply_console_settings(&mut current, changes)
+        .map_err(|m| Box::new(json_error(StatusCode::BAD_REQUEST, "bad_setting", m)))?;
+    if let Some(p) = list[at].as_object_mut() {
+        p.insert("settings".into(), Value::Object(current));
+    }
+    let mut value = doc
+        .value
+        .clone()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    value["profiles"] = Value::Array(list);
+    shared_state::write(DOC, doc.rev, value).map_err(|m| {
+        Box::new(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "save_failed",
+            m,
+        ))
+    })?;
+    Ok(view(&shared_state::read(DOC), &lock_keys()))
+}
+
 /// `PATCH /api/consoles/settings`: one console's own settings, by its id, name or address. The
 /// app picks the change up through the console list, as it does a renamed console.
 pub async fn patch_settings(Json(req): Json<SettingsPatch>) -> Response {
-    let done = tokio::task::spawn_blocking(move || -> Result<Value, Box<Response>> {
-        migrate();
-        let _g = ROSTER.lock().unwrap_or_else(|e| e.into_inner());
-        let doc = shared_state::read(DOC);
-        let mut list = profiles_of(doc.value.as_ref());
-        let want = req.console.trim();
-        let at = list.iter().position(|p| {
-            str_of(p, "id") == want
-                || str_of(p, "name").eq_ignore_ascii_case(want)
-                || (!key_of(want).is_empty() && key_of(str_of(p, "host")) == key_of(want))
-        });
-        let Some(at) = at else {
-            return Err(Box::new(json_error(
-                StatusCode::NOT_FOUND,
-                "no_console",
-                format!("no console {want} on the list"),
-            )));
-        };
-        let mut current = list[at]
-            .get("settings")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        apply_console_settings(&mut current, &req.settings)
-            .map_err(|m| Box::new(json_error(StatusCode::BAD_REQUEST, "bad_setting", m)))?;
-        if let Some(p) = list[at].as_object_mut() {
-            p.insert("settings".into(), Value::Object(current));
-        }
-        let mut value = doc
-            .value
-            .clone()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
-        value["profiles"] = Value::Array(list);
-        shared_state::write(DOC, doc.rev, value).map_err(|m| {
-            Box::new(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "save_failed",
-                m,
-            ))
-        })?;
-        Ok(view(&shared_state::read(DOC), &lock_keys()))
-    })
-    .await;
+    let done =
+        tokio::task::spawn_blocking(move || patch_console_settings(&req.console, &req.settings))
+            .await;
     match done {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(r)) => *r,
@@ -734,6 +742,47 @@ pub async fn patch_settings(Json(req): Json<SettingsPatch>) -> Response {
             e.to_string(),
         ),
     }
+}
+
+// ── For PS5Upload Play (play_app.rs) ────────────────────────────────────────────────────────────
+
+/// The console at `host` on the list: its name (None when unnamed) and its own settings (Settings ›
+/// This PS5). None when it is not on the list.
+pub(crate) fn console_brief(host: &str) -> Option<(Option<String>, Map<String, Value>)> {
+    let want = key_of(host);
+    if want.is_empty() {
+        return None;
+    }
+    let doc = shared_state::read(DOC);
+    let list = profiles_of(doc.value.as_ref());
+    let p = list.iter().find(|p| key_of(str_of(p, "host")) == want)?;
+    let name = Some(str_of(p, "name").trim().to_string()).filter(|n| !n.is_empty());
+    let settings = p
+        .get("settings")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    Some((name, settings))
+}
+
+/// Sets one console's own settings, by its address (blocking). Err: why, in a word ("no_console",
+/// "bad_setting", "save_failed").
+pub(crate) fn set_console_settings(host: &str, changes: &Map<String, Value>) -> Result<(), String> {
+    patch_console_settings(host, changes)
+        .map(|_| ())
+        .map_err(|r| {
+            match r.status() {
+                StatusCode::NOT_FOUND => "no_console",
+                StatusCode::BAD_REQUEST => "bad_setting",
+                _ => "save_failed",
+            }
+            .to_string()
+        })
+}
+
+/// Whether Remote Play is paired with the console at `host` on this engine.
+pub(crate) fn rp_paired(host: &str) -> bool {
+    rp_keys_for(host, None).is_ok()
 }
 
 // ── For the rest of the engine ──────────────────────────────────────────────────────────────────
@@ -822,6 +871,31 @@ pub(crate) fn user_name_of(host: &str, regist_key_hex: &str) -> Option<String> {
                 .eq_ignore_ascii_case(regist_key_hex.trim())
         })
         .map(|i| display_name(i, &users[i]))
+}
+
+/// The keys (regist, rp; hex) of the paired user of `host` whose regist key this is: a session
+/// started again as the same user (Play Rooms' restart after a friend took the host's user).
+pub(crate) fn rp_keys_by_regist(host: &str, regist_key_hex: &str) -> Option<(String, String)> {
+    migrate();
+    let keys = lock_keys();
+    users_of(keys.get(host)?)
+        .into_iter()
+        .find(|u| {
+            u.wake_regist_key
+                .eq_ignore_ascii_case(regist_key_hex.trim())
+        })
+        .map(|u| (u.wake_regist_key, u.wake_rp_key))
+}
+
+/// Who owns the console at `host`, as far as this engine knows: the first PS5 user paired for
+/// Remote Play here that has a name (the one who set this console up with PS5Upload). None when no
+/// paired user has a name.
+pub(crate) fn owner_name(host: &str) -> Option<String> {
+    let keys = lock_keys();
+    users_of(keys.get(host)?)
+        .into_iter()
+        .map(|u| u.name)
+        .find(|n| !n.trim().is_empty())
 }
 
 // ── Paired PS5 users ────────────────────────────────────────────────────────────────────────────

@@ -2,8 +2,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PadButton } from "../lib/remotePlayStream";
 import { rpInput } from "../state/remotePlay";
-import { GUEST_KEYMAP, JoinSession, devicePad, guestHeld, isPadKey, pageStats } from "./session";
+import { GUEST_KEYMAP, JoinSession, devicePad, guestHeld, isPadKey, pageStats, withRoute } from "./session";
+import { RttMeter } from "./routeTier";
 import { PictureStats } from "../pad/watchPlayer";
+
+describe("withRoute (apps/play/docs/ROUTES.md)", () => {
+  it("adds the way and its tier to a report, and nothing to none", () => {
+    const m = new RttMeter();
+    expect(withRoute(null, "lan", m)).toBeNull();
+    expect(withRoute({ frames: 3 }, null, m)).toEqual({ frames: 3 });
+    m.add(30);
+    m.add(30);
+    expect(withRoute({ frames: 3 }, "tailscale", m)).toEqual({
+      frames: 3,
+      route: "tailscale",
+      tier: "good",
+      route_rtt_ms: 30,
+      route_jitter_ms: 0,
+    });
+  });
+});
 
 describe("pageStats (#720)", () => {
   it("says nothing before the first picture, unless the picture failed: then the decoder, codec and why", () => {

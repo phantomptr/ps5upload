@@ -598,6 +598,26 @@ value = 201
 name = "METHOD_APP_RESTORE"
 ty = "u16"
 value = 202
+# Play Rooms: which engine hosts a room on this console and who plays (payload/src/play_host.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_PLAY_ROOM"
+ty = "u16"
+value = 203
+# PS5Upload Play's one-time pairing grant from an engine (payload/src/play_host.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_PLAY_GRANT"
+ty = "u16"
+value = 204
+# The console's controllers: guest pads and who is on each (payload/src/vpad.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_PADS_LIST"
+ty = "u16"
+value = 205
+# USB Ethernet adapter on the PS5, experimental (payload/src/usbnet.c; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_USBNET"
+ty = "u16"
+value = 206
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"
@@ -720,7 +740,10 @@ fields = [
   { name = "fan_threshold", ty = "u16" },
   { name = "fan_reapply_sec", ty = "u16" },
 ]
-ext = [{ tag = 1, name = "prior_instance", ty = "str" }]   # "clean" | "killed_externally" | "wedged" | "stale" | "replaced"
+ext = [
+  { tag = 1, name = "prior_instance", ty = "str" },   # "clean" | "killed_externally" | "wedged" | "stale" | "replaced"
+  { tag = 2, name = "usbnet", ty = "str" },           # the USB adapter while it serves: {"ip","port","mbps","chip"} as JSON text (usbnet.h)
+]
 
 [[struct]]
 name = "FsList"

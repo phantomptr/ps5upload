@@ -12,11 +12,13 @@ import TailnetPanel from "../Connection/TailnetPanel";
 import { payloadCardLink } from "../Payloads/payloadTabs";
 import { AutoBringUpToggle, BringUpPlaylistSelect } from "./ConsoleBringUp";
 import { MinionConsoleSettings } from "./MinionSettings";
+import { PlayAppInstall } from "../Play/PlayAppInstall";
 import { PlayTogetherGuestProfiles } from "./PlayTogetherGuestProfiles";
 import { RemovePs5Upload } from "./RemovePs5Upload";
 import { GroupHeading, Section } from "./SettingsLayout";
 import { settingsConsoleId } from "./settingsTabs";
 import { settingsVisibility } from "./visibility";
+import { UsbNetSettings } from "./UsbNetSettings";
 import { helperAutoUpdateGate } from "../../lib/helperAutoUpdate";
 
 /**
@@ -112,6 +114,10 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
         <MinionConsoleSettings host={host} />
       </Section>
 
+      <Section title={tr("pa_title", undefined, "PS5Upload Play")} full>
+        <PlayAppInstall host={host} bare />
+      </Section>
+
       <GroupHeading>{tr("settings_group_console", undefined, "Console")}</GroupHeading>
 
       {/* Bring-up sends payloads from this machine: the desktop and phone apps only. */}
@@ -202,7 +208,7 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
         </div>
       </Section>
 
-      <Section title={tr("pt_button", undefined, "Play Together")} full>
+      <Section title={tr("pt_button", undefined, "Play Room")} full>
         <PlayTogetherGuestProfiles host={host} />
       </Section>
 
@@ -210,6 +216,9 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
       <div className="md:col-span-2" id="ps5-tailscale">
         <TailnetPanel host={host} />
       </div>
+
+      {/* A USB Ethernet adapter on the PS5 (experimental): faster transfers than its own port. */}
+      <UsbNetSettings host={host} />
 
       <GroupHeading>{tr("settings_group_uploads", undefined, "Uploads")}</GroupHeading>
 

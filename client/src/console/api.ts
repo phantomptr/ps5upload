@@ -171,6 +171,15 @@ export function callTimeoutMs(route: string): number {
   return SLOW_ROUTES[route] ?? (route.startsWith("/api/smb/") ? SMB_TIMEOUT_MS : CALL_TIMEOUT_MS);
 }
 
+/** A 429 is sent again this many times at most (each after its Retry-After). */
+export const SLOW_DOWN_TRIES = 3;
+
+/** Retry-After (seconds) as milliseconds: 1 s when absent or odd, never more than 10 s. */
+export function retryAfterMs(v: string | null): number {
+  const s = v == null ? NaN : Number(v.trim());
+  return Number.isFinite(s) && s > 0 ? Math.min(s, 10) * 1000 : 1000;
+}
+
 interface PostOptions {
   /** JSON body. */
   body?: object;
@@ -200,18 +209,25 @@ async function post<T>(route: string, o: PostOptions, read: (res: Response) => P
   });
   const work = async () => {
     let res: Response;
-    try {
-      res = await fetch(route, {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { "Content-Type": o.raw ? "application/octet-stream" : "application/json", [TOKEN_HEADER]: tok },
-        body: o.raw ?? JSON.stringify(o.body ?? {}),
-        signal: stop?.signal ?? o.signal,
-        ...(o.keepalive ? { keepalive: true } : {}),
-      });
-    } catch {
-      throw new ApiError(0, "offline");
+    for (let tries = 0; ; tries++) {
+      try {
+        res = await fetch(route, {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { "Content-Type": o.raw ? "application/octet-stream" : "application/json", [TOKEN_HEADER]: tok },
+          body: o.raw ?? JSON.stringify(o.body ?? {}),
+          signal: stop?.signal ?? o.signal,
+          ...(o.keepalive ? { keepalive: true } : {}),
+        });
+      } catch {
+        throw new ApiError(0, "offline");
+      }
+      // Too fast for the helper (its rate gate, payload/include/rate_gate.h): nothing ran, so wait
+      // as asked and send it again, quietly, within the call's deadline.
+      const wait = res.status === 429 && tries < SLOW_DOWN_TRIES ? retryAfterMs(res.headers.get("Retry-After")) : 0;
+      if (!wait) break;
+      await new Promise((r) => setTimeout(r, wait));
     }
     if (res.status === 401) throw tokenExpired();
     if (!res.ok) throw errorOf(res.status, await res.json().catch(() => null));

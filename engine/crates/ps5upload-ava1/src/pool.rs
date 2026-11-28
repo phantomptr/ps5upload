@@ -272,6 +272,23 @@ struct Cached {
     /// ms. Wall clock on purpose: a computer that slept for an hour must not read the hour as
     /// "just heard from it" (the monotonic clock stops during sleep on macOS).
     alive_at: Arc<AtomicU64>,
+    /// The address its handshake dialled ("ip:port"): the console's own, or one the router gave
+    /// (a tailnet mapping, the console's USB adapter). The link a job or check went through is
+    /// read from this, never worked out again.
+    dialed: String,
+}
+
+/// A session that a routed dial made ended under its users (not one the pool let go): the
+/// router hears that the path failed. `own` is the console's own "host:port".
+fn routed_session_lost(own: &str, dialed: &str) {
+    if dialed != own {
+        ps5upload_core::route::dialed(
+            &ps5upload_core::events::console_host(own),
+            crate::gen::DEFAULT_PORT,
+            dialed,
+            false,
+        );
+    }
 }
 
 /// Wall-clock ms now (0 before 1970: never in practice).
@@ -838,24 +855,39 @@ impl Pool {
         self.peers.lock().map(|p| p.contains(key)).unwrap_or(false)
     }
 
-    /// One handshake with the console, pairing not yet settled; and the key it was pinned to.
-    async fn connect_raw(&self, console: &str) -> Result<(Session, Option<[u8; 32]>), Ava1Error> {
+    /// One handshake with the console, pairing not yet settled; the key it was pinned to, and
+    /// the address dialled. A routed dial (not the console's own address) tells the router how
+    /// it went, so a path that fails is let go before the next attempt.
+    async fn connect_raw(
+        &self,
+        console: &str,
+    ) -> Result<(Session, Option<[u8; 32]>, String), Ava1Error> {
         let me = self
             .me
             .clone()
             .map_err(|why| Ava1Error::Io(io::Error::other(why)))?;
         let pin = self.pinned(&host_of(console));
         self.attempts.fetch_add(1, Ordering::Relaxed);
-        let s = connect_expecting(
-            &routed(&self.addr_for(console)),
+        let own = self.addr_for(console);
+        let dial = routed(&own);
+        let r = connect_expecting(
+            &dial,
             pin,
             me,
             self.peers.clone(),
             "ps5upload",
             Timing::default(),
         )
-        .await?;
-        Ok((s, pin))
+        .await;
+        if dial != own {
+            ps5upload_core::route::dialed(
+                &ps5upload_core::events::console_host(&own),
+                crate::gen::DEFAULT_PORT,
+                &dial,
+                r.is_ok(),
+            );
+        }
+        Ok((r?, pin, dial))
     }
 
     /// For the pairing dialog: is this console paired, and if a person must compare codes,
@@ -892,12 +924,12 @@ impl Pool {
                 return Ok(Pairing::Paired);
             }
             match self.connect_raw(console).await {
-                Ok((s, _)) if s.needs_user_pairing() => {
+                Ok((s, _, _)) if s.needs_user_pairing() => {
                     let peer_name = s.peer_name().to_string();
                     self.pending.lock().await.insert(host.clone(), s);
                     return Ok(Pairing::Code { peer_name });
                 }
-                Ok((s, _)) => s.close().await, // already trusted: the cached path below
+                Ok((s, _, _)) => s.close().await, // already trusted: the cached path below
                 Err(Ava1Error::Refused { code, message })
                     if code == crate::gen::ERR_PAIRING_CLOSED =>
                 {
@@ -1082,6 +1114,7 @@ impl Pool {
                     let c = map.remove(&host).expect("just seen");
                     if !c.counted.swap(true, Ordering::SeqCst) {
                         self.churn.died(&host, "connection closed");
+                        routed_session_lost(&self.addr_for(console), &c.dialed);
                     }
                 } else {
                     return Ok(c.session.clone());
@@ -1102,7 +1135,7 @@ impl Pool {
         {
             return Err(Ava1Error::NotPaired);
         }
-        let (mut s, pin) = self.connect_raw(console).await?;
+        let (mut s, pin, dialed) = self.connect_raw(console).await?;
         if s.needs_user_pairing() {
             // A person must compare codes (SPEC.md §5), not a transfer.
             return Err(Ava1Error::NotPaired);
@@ -1137,6 +1170,7 @@ impl Pool {
                     session: s.clone(),
                     counted: counted.clone(),
                     alive_at: alive_at.clone(),
+                    dialed: dialed.clone(),
                 },
             );
             drop(map);
@@ -1149,6 +1183,7 @@ impl Pool {
             // Polls through a `Weak`: a watcher must not keep a session (and its console
             // connections) alive once every user has dropped it.
             let (watched, churn) = (Arc::downgrade(&s), self.churn.clone());
+            let own = self.addr_for(console);
             tokio::spawn(async move {
                 // Each answered Ping changes the round-trip figure: a change is the console
                 // talking (`silent_for` reads it). The link sends a Ping every 2 s.
@@ -1165,6 +1200,7 @@ impl Pool {
                         let why = s.closed().await;
                         if !counted.swap(true, Ordering::SeqCst) {
                             churn.died(&host, &why);
+                            routed_session_lost(&own, &dialed);
                         }
                         return;
                     }
@@ -1234,6 +1270,60 @@ impl Pool {
         let host = host_of(console);
         self.churn.forgot(&host);
         self.sessions.lock().await.remove(&host);
+    }
+
+    /// What the cached, open session to `console` dialled ("ip:port"), if there is one.
+    pub async fn session_dialed(&self, console: &str) -> Option<String> {
+        let map = self.sessions.lock().await;
+        map.get(&host_of(console))
+            .filter(|c| !c.session.is_closed())
+            .map(|c| c.dialed.clone())
+    }
+
+    /// Which of the console's links the session `s` (one this pool handed out for `console`)
+    /// went through: from the address its handshake dialled. None when `s` is no longer the
+    /// cached one, or the console never reported a USB adapter (`ps5upload_core::route`).
+    pub async fn link_of(
+        &self,
+        console: &str,
+        s: &Arc<Session>,
+    ) -> Option<ps5upload_core::route::Link> {
+        let dialed = {
+            let map = self.sessions.lock().await;
+            map.get(&host_of(console))
+                .filter(|c| Arc::ptr_eq(&c.session, s))
+                .map(|c| c.dialed.clone())?
+        };
+        ps5upload_core::route::link_of(&ps5upload_core::events::console_host(console), &dialed)
+    }
+
+    /// The router now dials `console` somewhere else than its cached session did (its USB
+    /// adapter came up, or went): drops that session when nothing uses it, so the next call's
+    /// handshake takes the new path. A session in use (a transfer, a call) is left alone; the
+    /// console ends the older session when a new handshake arrives (SPEC section 8), so taking
+    /// one away from a running transfer would end the transfer. True when one was dropped.
+    pub async fn forget_idle_if_moved(&self, console: &str) -> bool {
+        let host = host_of(console);
+        let want = self.dial_addr(console);
+        let idle = {
+            let mut map = self.sessions.lock().await;
+            // Only the pool holds it (sessions are handed out from the map, under this lock).
+            let moved = map.get(&host).is_some_and(|c| {
+                c.dialed != want && !c.session.is_closed() && Arc::strong_count(&c.session) == 1
+            });
+            if !moved {
+                return false;
+            }
+            let c = map.remove(&host).expect("just seen");
+            // Let go on purpose: not a death to count, nor a path that failed.
+            c.counted.store(true, Ordering::SeqCst);
+            c
+        };
+        self.churn.forgot(&host);
+        if let Some(s) = Arc::into_inner(idle.session) {
+            s.close().await;
+        }
+        true
     }
 
     /// Test seam: warn after `deaths` unexpected session ends within `window`.

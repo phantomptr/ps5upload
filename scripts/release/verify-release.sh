@@ -45,6 +45,21 @@ optional="$(grep -oE '"release/(PS5Upload|ps5upload)[^"$]*\$\{TAG_VERSION\}[^"$]
 manifests="$(grep -oE -- '--out release/[A-Za-z0-9._-]+' "$workflow" | sed 's#--out release/##' | sort -u)"
 # Files copied in under a fixed name (cp ... release/<name>: the LICENSE that ships with the binaries).
 fixed="$(grep -oE 'cp( -[a-z]+)* [A-Za-z0-9._/-]+ release/[A-Za-z0-9._-]+$' "$workflow" | sed 's#.* release/##' | sort -u)"
+# PS5Upload Play's zip is copied like the phone builds (so it reads as optional above), but
+# publish.yml requires it once the app is in the tree (apps/play/Makefile): so does this, judged by
+# the tag's tree (this checkout's when the tag is not fetched here).
+play="PS5Upload-Play-FAKE99261-$version.zip"
+if grep -qxF "$play" <<<"$optional"; then
+  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+    git cat-file -e "$tag:apps/play/Makefile" 2>/dev/null && play_required=1 || play_required=0
+  else
+    [[ -f apps/play/Makefile ]] && play_required=1 || play_required=0
+  fi
+  if (( play_required )); then
+    optional="$(grep -vxF "$play" <<<"$optional" || true)"
+    required="$(printf '%s\n%s' "$required" "$play")"
+  fi
+fi
 if ! grep -qxF LICENSE <<<"$fixed"; then
   echo "verify-release: $workflow no longer copies LICENSE into release/; did that step change shape?" >&2
   exit 2

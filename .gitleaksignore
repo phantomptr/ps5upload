@@ -67,3 +67,7 @@ f01db54acdadef02d8cd956c783356c7c2298f17:engine/crates/ps5upload-engine/src/rp_g
 a23ae290d019920a091c782f8cebdccd7ae0be3e:client/src/lib/joinProtocol.test.ts:generic-api-key:174
 # An escaped mount path compared with a variable named "key" in the helper's mount self-test
 328cf4cc0d40f9f5ebd828a70caa7f8a2b9065b4:payload/tests/image_mount_selftest.c:generic-api-key:120
+# RFC 6455 section 1.3 example Sec-WebSocket-Key ("the sample nonce" in base64), used in tests
+57de3c2129eed5e25a7721de3a55ab0c0871239f:engine/crates/ps5upload-engine/src/tailnet_guest.rs:generic-api-key:505
+c68cde608b5876ffe6bc647a2728013237d8a0ea:engine/crates/ps5upload-engine/src/tailnet_guest.rs:generic-api-key:505
+37cdf9d3e902b215fe48b2030b47fc03326b0551:apps/play/tests/test_core.cpp:generic-api-key:66

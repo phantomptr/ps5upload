@@ -81,6 +81,48 @@ export function WhatsNewCard() {
           <X size={14} />
         </button>
       </div>
+      {headline13(version) && (
+        <div className="mt-3 space-y-2 border-t border-[var(--color-border)] pt-3 text-sm" data-testid="home-whats-new-13">
+          <p className="font-medium">{tr("whats_new_13_title", undefined, "New in 13.0.0: Play Rooms")}</p>
+          <p className="text-[var(--color-muted)]">
+            {tr(
+              "whats_new_13_body",
+              undefined,
+              "Create a room for your PS5 games, make it private, for friends or public, and find rooms to join. Chat and talk while you play. A friend with a PS5 can join on their TV with PS5Upload Play.",
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/play?mode=rooms"
+              onClick={dismiss}
+              className="inline-flex items-center rounded-[var(--radius-card)] bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-on-accent,#fff)] max-md:min-h-11"
+              data-testid="home-whats-new-rooms"
+            >
+              {tr("whats_new_13_open", undefined, "Open Play Room")}
+            </Link>
+            <Link
+              to="/bug-report"
+              onClick={dismiss}
+              className="inline-flex items-center rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--color-surface-3)] max-md:min-h-11"
+              data-testid="home-whats-new-report"
+            >
+              {tr("whats_new_13_report", undefined, "Send a bug report")}
+            </Link>
+          </div>
+          <p className="text-xs text-[var(--color-muted)]" data-testid="home-whats-new-test">
+            {tr(
+              "whats_new_13_test",
+              undefined,
+              "Help us test: Play Rooms, PS5Upload Play and the new things on the PS5 (Minion's queue, save sync, freeing space while extracting, the USB adapter) have been tried on only a few consoles. If something goes wrong, open Bug Report, save the zip and post it on GitHub or Discord.",
+            )}
+          </p>
+        </div>
+      )}
     </Card>
   );
+}
+
+/** The 13.0.0 headline (Play Rooms) shows with the "Updated to" card of any 13.x, once. */
+export function headline13(version: string): boolean {
+  return /^13\./.test(version);
 }

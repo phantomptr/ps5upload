@@ -169,10 +169,13 @@ CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
         -lSceNotification -lSceRegMgr -lSceFsInternalForVsh -lkernel_sys
 
-# The home-screen tile's icon0.png (512x512, the app icon client/src-tauri/icons/icon.png),
-# embedded as a C array by xxd: webui_tile_icon0_png[] + webui_tile_icon0_png_len, which
+# The home-screen tile's icon0.png (512x512, branding/icon-minion.svg: the app icon with a browser
+# badge; scripts/release/brand-assets.py renders it), embedded as a C array by xxd:
+# webui_tile_icon0_png[] + webui_tile_icon0_png_len, which
 # webui_tile.c writes into /data/ps5upload/tile/PSUP00001/sce_sys/. Generated under build/
 # (git-ignored); `cd assets` keeps xxd's symbol names independent of the path.
+# A changed icon re-registers the tile on the next helper start (webui_tile.c), so the home
+# screen picks it up.
 WEBUI_TILE_ICON_PNG := assets/webui_tile_icon0.png
 WEBUI_TILE_ICON_C := build/webui_tile_icon.c
 
@@ -244,7 +247,17 @@ VINPUT_DEPS := $(VINPUT_DIR)/main.c $(VINPUT_DIR)/Makefile src/vinput_companion.
         src/vinput_mbus.c include/vinput.h include/vinput_wire.h include/vinput_companion.h include/vinput_dev.h \
         include/vinput_mbus.h
 
-SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover_flag.c src/start_dedupe.c src/start_trace.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
+# The USB Ethernet adapter daemon, experimental (usbnet/, include/usbnet_proto.h): its own lwIP and a
+# user-space driver for Realtek USB 2.5G/5G/10G adapters, built by its own Makefile, stripped and
+# embedded by xxd as usbnet_elf[] + usbnet_elf_len, which src/usbnet.c sends to the console's ELF
+# loader while a supported adapter is plugged in. The helper never runs the driver itself.
+USBNET_DIR := usbnet
+USBNET_ELF := $(USBNET_DIR)/ps5u-usbnet.elf
+USBNET_ELF_C := build/usbnet_elf.c
+USBNET_DEPS := $(wildcard $(USBNET_DIR)/*.c $(USBNET_DIR)/*.h $(USBNET_DIR)/arch/*.h) $(USBNET_DIR)/Makefile \
+        include/usbnet_proto.h smb/smbd_json.c smb/smbd_json.h
+
+SRCS :=src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover_flag.c src/start_dedupe.c src/start_trace.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
         src/drive_sensors.c src/plog.c \
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
         src/sony_api_lock.c src/kernel_rw_lock.c src/sys_time.c \
@@ -253,12 +266,12 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/wake_watchdog.c src/power_phase.c src/icon_keeper.c src/ffpfsc_unpack.c src/cheats.c src/cheats_plan.c src/cheats_guard.c src/cheats_session.c src/cheats_list.c src/game_patch.c src/xml_encoding.c src/activity.c src/sdk_changer.c src/fakelib_overlay.c \
         src/tmdb.c src/fw_spoof.c src/focus_probe.c \
         src/content_db.c src/mgmt_rpc.c src/mgmt_page_keep.c src/fs_jobs.c src/net_probe.c src/net_ports.c src/mgmt_fs.c src/path_policy.c \
-        src/webui_http.c src/webui_auth.c src/webui_server.c src/webui_codec.c src/webui_api.c src/console_tasks.c \
+        src/webui_http.c src/webui_auth.c src/webui_server.c src/webui_codec.c src/webui_api.c src/console_tasks.c src/console_queue.c src/webui_queue.c \
         src/webui_settings.c src/webui_inputlog.c src/webui_files.c src/webui_cheats_store.c src/webui_tile.c src/webui_strings.c src/webui_offline.c src/files_prefs.c src/files_handoff.c src/vinput.c src/vinput_ps5.c src/vinput_relay.c src/vinput_wire.c $(VINPUT_ELF_C) src/vpad.c src/mesh.c src/storage_cleanup.c src/cleanup_rules.c src/archive_extract.c src/console_convert.c src/console_convert_wire.c $(CONVERT_ELF_C) \
         src/app_dump.c src/app_dump_core.c src/app_dump_pkg.c src/app_dump_fself.c src/app_dump_self.c src/app_dump_sha256.c $(WEBUI_TILE_ICON_C) $(EXTRACTOR_ELF_C) \
         src/pkg_info.c src/webui_pkg.c $(WEBUI_INSTALLER_C) \
         src/webui_smb.c src/smb_shares.c src/smb_client.c smb/smbd_json.c smb/smbd_path.c $(SMBD_ELF_C) \
-        src/tailnet_node.c \
+        src/tailnet_node.c src/usbnet.c src/usbnet_util.c $(USBNET_ELF_C) src/app_api.c src/app_api_server.c src/play_app.c src/play_host.c src/rate_gate.c \
         src/save_sfo.c src/save_owner.c src/trophy_fix.c src/title_restore.c \
         src/helper_uninstall.c \
         src/file_compare.c \
@@ -383,6 +396,14 @@ $(VINPUT_ELF_C): $(VINPUT_ELF) Makefile
 	$(PS5_PAYLOAD_SDK)/bin/prospero-strip -o build/vinput.elf $(VINPUT_ELF)
 	(cd build && xxd -i vinput.elf) > $@.tmp && mv $@.tmp $@
 
+$(USBNET_ELF): $(USBNET_DEPS)
+	$(MAKE) -C $(USBNET_DIR)
+
+$(USBNET_ELF_C): $(USBNET_ELF) Makefile
+	@mkdir -p $(dir $@)
+	$(PS5_PAYLOAD_SDK)/bin/prospero-strip -o build/usbnet.elf $(USBNET_ELF)
+	(cd build && xxd -i usbnet.elf) > $@.tmp && mv $@.tmp $@
+
 # Written from the dist-console/strings the page rule's build just produced.
 $(WEBUI_STRINGS_C): $(WEBUI_PAGE_C) ../scripts/embed-console-strings.mjs Makefile
 	@mkdir -p $(dir $@)
@@ -414,9 +435,10 @@ clean:
 	rm -f $(CONVERT_ELF_C)
 	rm -f $(WEBUI_TILE_ICON_C) $(WEBUI_PAGE_C) $(WEBUI_STRINGS_C) $(WEBUI_OFFLINE_C) build/webui_page.gz \
 		build/webui_sw.js build/webui_cache.appcache $(WEBUI_INSTALLER_C) build/webui_installer.elf $(SMBD_ELF_C) build/smbd.elf \
-		$(VINPUT_ELF_C) build/vinput.elf
+		$(VINPUT_ELF_C) build/vinput.elf $(USBNET_ELF_C) build/usbnet.elf
 	$(MAKE) -C $(SMBD_DIR) clean
 	$(MAKE) -C $(VINPUT_DIR) clean
+	$(MAKE) -C $(USBNET_DIR) clean
 
 send: $(ELF)
 	@echo "Sending $(ELF) to $(PS5_HOST):$(PS5_PORT) ..."

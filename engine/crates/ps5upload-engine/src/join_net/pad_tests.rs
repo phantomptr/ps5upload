@@ -132,7 +132,9 @@ async fn silent_for(g: &mut TestGuest, ms: u64) -> bool {
     loop {
         match tokio::time::timeout_at(until, g.rx.recv()).await {
             Err(_) => return true,
-            Ok(Some(GIn::Text(_) | GIn::Binary(_) | GIn::Media(..) | GIn::Audio(_))) => return false,
+            Ok(Some(
+                GIn::Text(_) | GIn::Binary(_) | GIn::Media(..) | GIn::Audio(_) | GIn::Voice(_),
+            )) => return false,
             Ok(Some(GIn::Ping)) => {}
             Ok(None) => return true,
         }
@@ -451,6 +453,7 @@ async fn new_link_revokes_the_old_one_and_internet_invites_off_closes_it() {
             upnp: None,
             port: None,
             video_track: None,
+            play_discovery: None,
         }),
     )
     .await;

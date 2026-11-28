@@ -26,11 +26,44 @@ use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ps5upload_core::mesh::{self, Hello};
+use ps5upload_core::mesh::{self, Hello, PlayHost};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::json_err;
+
+/// The HTTP port this engine listens on for other devices; 0 until it is listening, or when it
+/// listens on its own computer only (the console could not reach it).
+static PLAY_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Called once the engine listens at `at`: the hello then tells each console's PS5Upload Play
+/// where to reach this engine (the next hello: one is said every few minutes).
+pub(crate) fn set_listening(at: std::net::SocketAddr) {
+    PLAY_PORT.store(play_port(at), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The HTTP port the consoles reach this engine on (0: not known yet, or this computer only).
+pub(crate) fn play_port_now() -> u16 {
+    PLAY_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The port a console reaches an engine listening at `at` on; 0 for a loopback-only listener.
+fn play_port(at: std::net::SocketAddr) -> u16 {
+    if at.ip().is_loopback() {
+        0
+    } else {
+        at.port()
+    }
+}
+
+/// What the hello says about PS5Upload Play for an engine listening on `port` (0: not reachable).
+fn play_host(port: u16) -> Option<PlayHost> {
+    (port != 0).then(|| PlayHost {
+        port,
+        join_ws: "/api/join/ws".into(),
+        app_ws: "/api/play/app".into(),
+    })
+}
 
 /// Say hello again after this long, so the console's "last seen" and our name stay current.
 const HELLO_EVERY: Duration = Duration::from_secs(300);
@@ -50,6 +83,49 @@ struct ConsoleState {
     clients: HashMap<String, (Instant, Vec<Value>)>,
     /// What the console last accepted from us.
     pushed: Option<Value>,
+    /// The helper's version its hello answer gave, and whether it said it serves PS5Upload
+    /// Play's loopback app API (`app_api`; None: it did not say).
+    helper: Option<(String, Option<bool>)>,
+}
+
+/// The first helper with PS5Upload Play's loopback app API (127.0.0.1:9181).
+const APP_API_SINCE: (u32, u32, u32) = (13, 0, 0);
+
+/// `"13.0.1"` (or `"13.0.1-beta.2"`) as numbers.
+fn version_triple(v: &str) -> Option<(u32, u32, u32)> {
+    let mut it = v
+        .trim()
+        .split(['.', '-', '+'])
+        .map(|p| p.parse::<u32>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
+}
+
+/// What a hello answer says of the helper: its version, and whether it serves the app API (what
+/// it said, else by its version).
+fn helper_from(reply: &Value) -> Option<(String, Option<bool>)> {
+    let v = reply["helper"].as_str().filter(|v| !v.is_empty())?;
+    let said = reply["app_api"].as_bool();
+    Some((v.to_string(), said))
+}
+
+/// The helper on `console` as its last hello answer gave it: `(version, app_api)`. `app_api` is
+/// what it said, else whether its version has the app API; None when unknown.
+pub(crate) fn helper_info(console: &str) -> (Option<String>, Option<bool>) {
+    let want = crate::vinput_api::host_key(console);
+    let map = lock_consoles();
+    let newest = map
+        .iter()
+        .filter(|(addr, _)| crate::vinput_api::host_key(addr) == want)
+        .filter_map(|(_, c)| Some((c.hello_at?, c.helper.clone()?)))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, h)| h);
+    match newest {
+        None => (None, None),
+        Some((v, said)) => {
+            let by_version = version_triple(&v).map(|t| t >= APP_API_SINCE);
+            (Some(v), said.or(by_version))
+        }
+    }
 }
 
 fn consoles() -> &'static Mutex<HashMap<String, ConsoleState>> {
@@ -66,6 +142,19 @@ pub(crate) fn greeted_consoles() -> Vec<String> {
     let mut consoles: Vec<String> = lock_consoles().keys().cloned().collect();
     consoles.sort();
     consoles
+}
+
+/// How long ago the helper on `console` last answered our hello (seconds), or None when it never
+/// did since this engine started.
+pub(crate) fn helper_seen_s(console: &str) -> Option<u64> {
+    let want = crate::vinput_api::host_key(console);
+    let now = Instant::now();
+    lock_consoles()
+        .iter()
+        .filter(|(addr, _)| crate::vinput_api::host_key(addr) == want)
+        .filter_map(|(_, c)| c.hello_at)
+        .map(|t| now.saturating_duration_since(t).as_secs())
+        .min()
 }
 
 /// The mesh for a bug report: what kind of device this engine is and, per console it greets,
@@ -203,6 +292,7 @@ fn hello_info() -> Hello {
         kind: kind().into(),
         os: os_label(),
         app: env!("CARGO_PKG_VERSION").into(),
+        play: play_host(PLAY_PORT.load(std::sync::atomic::Ordering::Relaxed)),
     }
 }
 
@@ -362,6 +452,8 @@ pub(crate) fn greet(addr: &str) {
     if let Err(e) = hello(addr) {
         crate::log_debug!("mesh hello to {addr} on a new session: {e:#}");
     }
+    // A new session may be a restarted helper, which forgot the grant for PS5Upload Play.
+    crate::play_app::push_grant(addr);
 }
 
 /// false: the helper predates the mesh.
@@ -370,9 +462,51 @@ fn hello(addr: &str) -> anyhow::Result<bool> {
     let mut map = lock_consoles();
     let c = map.entry(addr.to_string()).or_default();
     c.hello_at = Some(Instant::now());
+    c.helper = r.as_ref().and_then(helper_from);
     // A restarted helper forgot our presence: send it again.
     c.pushed = None;
     Ok(r.is_some())
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    #[test]
+    fn the_helpers_version_and_app_api_come_from_its_hello_answer() {
+        assert_eq!(version_triple("13.0.0"), Some((13, 0, 0)));
+        assert_eq!(version_triple("12.6.45-beta.1"), Some((12, 6, 45)));
+        assert_eq!(version_triple("x"), None);
+        assert_eq!(helper_from(&json!({"ok": true, "helper": ""})), None);
+        assert_eq!(helper_from(&json!({"ok": true})), None);
+        let t0 = Instant::now();
+        let n = std::cell::Cell::new(0u64);
+        let at = |addr: &str, reply: Value| {
+            n.set(n.get() + 1);
+            let mut map = lock_consoles();
+            let c = map.entry(addr.to_string()).or_default();
+            c.hello_at = Some(t0 + Duration::from_millis(n.get()));
+            c.helper = helper_from(&reply);
+        };
+        assert_eq!(helper_info("10.1.2.3"), (None, None));
+        // An old helper: its version, and no app API by its version.
+        at("10.1.2.3", json!({"ok": true, "helper": "12.6.40"}));
+        assert_eq!(
+            helper_info("10.1.2.3"),
+            (Some("12.6.40".into()), Some(false))
+        );
+        // A new one by its version, the port of the address left out.
+        at("10.1.2.3:9120", json!({"ok": true, "helper": "13.0.1"}));
+        assert_eq!(helper_info("10.1.2.3"), (Some("13.0.1".into()), Some(true)));
+        // What it says wins over its version.
+        at(
+            "10.1.2.4",
+            json!({"ok": true, "helper": "12.6.45", "app_api": true}),
+        );
+        assert_eq!(helper_info("10.1.2.4").1, Some(true));
+        at("10.1.2.5", json!({"ok": true, "helper": "weird"}));
+        assert_eq!(helper_info("10.1.2.5"), (Some("weird".into()), None));
+    }
 }
 
 /// A transfer this engine runs against a console: what its window would say if it had one.
@@ -780,6 +914,31 @@ pub async fn announce(Json(req): Json<AnnounceReq>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hello_offers_play_only_on_a_port_a_console_can_reach() {
+        let at = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+        assert_eq!(play_port(at("0.0.0.0:19113")), 19113);
+        assert_eq!(play_port(at("192.168.1.20:19200")), 19200);
+        assert_eq!(play_port(at("127.0.0.1:19113")), 0);
+        assert_eq!(play_port(at("[::1]:19113")), 0);
+        assert_eq!(play_host(0), None);
+        let p = play_host(19113).expect("offered");
+        assert_eq!(
+            (p.port, p.join_ws.as_str(), p.app_ws.as_str()),
+            (19113, "/api/join/ws", "/api/play/app")
+        );
+        let body = mesh::hello_body(&Hello {
+            play: play_host(19113),
+            ..Hello::default()
+        });
+        assert_eq!(body["play"]["port"], 19113);
+        let body = mesh::hello_body(&Hello {
+            play: play_host(0),
+            ..Hello::default()
+        });
+        assert!(body.get("play").is_none(), "{body}");
+    }
 
     #[test]
     fn presence_is_the_union_of_live_windows_and_only_sent_when_it_changed() {

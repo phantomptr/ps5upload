@@ -12,13 +12,15 @@
 //!   unpacked from the last to the first, and the archive is cut short behind each one. How
 //!   many blocks there are is the packer's choice: one per file when it was made "non-solid",
 //!   a few large ones otherwise.
-//! - **A multi-part `.rar`** ([`FreeMode::Parts`]): the parts are read in order, first to
-//!   last, and a part is deleted once every file that starts in it (or before it) is unpacked
-//!   and the reader has moved on to a later part.
-//! - **Everything else** ([`FreeMode::End`]: a `.7z` in one block, a one-file `.rar`, a tar or
-//!   `.zst`): the data is one stream read from the front, and a file can't be cut at the
-//!   front. Nothing is freed while it unpacks; the archive is deleted the moment the unpack
-//!   has finished and been checked, before whatever is made from it starts.
+//! - **A multi-part `.rar` that is not solid** ([`FreeMode::Parts`]): the parts are read in
+//!   order, first to last, and a part is deleted once every file that starts in it (or before
+//!   it) is unpacked and the reader has moved on to a later part.
+//! - **Everything else** ([`FreeMode::End`]: a `.7z` in one block, a one-file `.rar`, a solid
+//!   multi-part `.rar`, a tar or `.zst`): the data is one stream read from the front, and a file
+//!   can't be cut at the front. A solid RAR is one such stream across all its parts: every file
+//!   in it is decoded from the ones before, so no part can go while a file is still to come.
+//!   Nothing is freed while it unpacks; every file of the archive is deleted the moment the
+//!   unpack has finished and been checked, before whatever is made from it starts.
 //!
 //! The rules it keeps:
 //!
@@ -66,7 +68,7 @@ pub enum FreeMode {
     Entries,
     /// Block by block, as each is unpacked (a `.7z` of more than one block).
     Blocks,
-    /// Part by part, as each is finished (a multi-part `.rar`).
+    /// Part by part, as each is finished (a multi-part `.rar` that is not solid).
     Parts,
     /// All at once, when the unpack has finished and been checked.
     End,
@@ -929,14 +931,22 @@ fn plan_rar(
     if parts.len() == 1 {
         return Ok(());
     }
-    // Where each part's own files begin in the set's list: a part listed on its own gives the
-    // files that start in it and in the parts after it.
-    let mut starts = vec![0usize];
     let mut stamps = Vec::new();
     for part in &parts {
         check_place(part)?;
         stamps.push(Stamp::of(part)?);
     }
+    plan.archive_bytes = stamps.iter().map(|s| s.len).sum();
+    if crate::transfer::rar_layout(archive, password, &[])?.solid {
+        // One stream across every part: each file decodes from the ones before it, so the
+        // whole set is one block, and every part stays until the unpack is done.
+        plan.parts = parts;
+        plan.stamps = stamps;
+        return Ok(());
+    }
+    // Where each part's own files begin in the set's list: a part listed on its own gives the
+    // files that start in it and in the parts after it.
+    let mut starts = vec![0usize];
     for part in &parts[1..] {
         let (_, own) = crate::transfer::rar_plan_entries(part, password, &[])?;
         let belongs = own.len() <= files.len() && files[files.len() - own.len()..] == own[..];
@@ -950,7 +960,6 @@ fn plan_rar(
         }
         starts.push(start);
     }
-    plan.archive_bytes = stamps.iter().map(|s| s.len).sum();
     // The room it takes beyond the set's own: what is written, less the parts gone by then.
     let (mut left, mut written, mut peak, mut gone) = (plan.archive_bytes, 0u64, 0u64, 0usize);
     for (j, (_, size)) in files.iter().enumerate() {
@@ -1095,9 +1104,12 @@ pub fn consume(
                 .with_context(|| format!("flush {}", dest.display()))
                 .map_err(whole)?;
             found().map_err(whole)?;
+            // Every file of it: one, or each part of a solid set.
             let mut out = Outcome::default();
-            if remove_path_retrying(first).is_err() {
-                out.not_removed.push(first.clone());
+            for part in &plan.parts {
+                if remove_path_retrying(part).is_err() {
+                    out.not_removed.push(part.clone());
+                }
             }
             Ok(out)
         }

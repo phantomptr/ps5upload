@@ -169,7 +169,7 @@ describe("Home", () => {
     expect(props.onAsk).toHaveBeenCalledWith(ask);
     expect(mockCall).not.toHaveBeenCalled();
     await runAsk(ask, { cancel: cancelJob });
-    expect(mockCall).toHaveBeenCalledWith("/api/app/close", { app_id: 77 });
+    expect(mockCall).toHaveBeenCalledWith("/api/app/close", { app_id: 77, room_ok: true });
   });
 
   it("the running game's Saves opens Saves at that game", () => {

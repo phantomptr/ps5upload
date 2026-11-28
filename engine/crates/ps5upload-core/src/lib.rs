@@ -72,6 +72,7 @@ pub mod tar_archive;
 pub mod title_restore;
 pub mod transfer;
 pub mod units;
+pub mod usbnet;
 pub mod users;
 pub mod vinput;
 pub mod volumes;

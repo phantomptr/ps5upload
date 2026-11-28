@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include "statvfs_avail.h"
+#include "xfree.h"
 
 int xj_fail(xjob_t *j, const char *fmt, ...) {
     if (!j->cause[0]) {
@@ -69,7 +70,7 @@ int xs_safe_name(const char *name, char *out, size_t cap) {
  * was skipped, and on the console an archive too large for the drive was always started (the
  * helper refuses an existing folder unless merging, so that was every new extraction). So the
  * nearest folder above that exists is asked, as fs.freespace does. */
-static uint64_t free_bytes(xjob_t *j, int *known) {
+uint64_t xs_free_bytes(xjob_t *j, int *known) {
     struct statvfs sv;
     char dir[XJ_PATH];
     *known = 1;
@@ -83,14 +84,23 @@ static uint64_t free_bytes(xjob_t *j, int *known) {
         if (slash == dir) dir[1] = 0;
         else *slash = 0;
     }
-    if (j->test_free) return j->test_free > j->written_total ? j->test_free - j->written_total : 0;
+    if (j->test_free) {
+        /* A drive of this size: what is written takes from it, a deleted part gives back. */
+        uint64_t room = j->test_free + j->bytes_freed;
+        return room > j->written_total ? room - j->written_total : 0;
+    }
     return statvfs_avail_bytes(&sv); /* 0 once the drive is into its reserve, never a wrapped 16 EiB */
 }
 
 int xs_check_space(xjob_t *j, uint64_t need) {
     int known;
     if (j->list) return 0; /* nothing is written */
-    uint64_t have = free_bytes(j, &known);
+    /* Once a part of the archive is deleted, the drive may report its space back a moment later
+     * than it is really free (on the PS5's internal drive it comes back within seconds); a check here then
+     * would stop an unpack that fits, with part of the archive already gone. The schedule's own
+     * check ran before anything was deleted; from here a full drive is what the writes say. */
+    if (j->freed_any) return 0;
+    uint64_t have = xs_free_bytes(j, &known);
     if (!known) return 0; /* nothing to go on: the writes find out */
     if (have < need + XJ_SPACE_MARGIN) {
         return xj_fail(j, "fs_extract_no_space: needs %llu bytes, %llu free", (unsigned long long)(need + XJ_SPACE_MARGIN),
@@ -98,6 +108,8 @@ int xs_check_space(xjob_t *j, uint64_t need) {
     }
     return 0;
 }
+
+static int note_parent(xjob_t *j, const char *path);
 
 int xs_open_dest(xjob_t *j) {
     struct stat st;
@@ -111,6 +123,51 @@ int xs_open_dest(xjob_t *j) {
     if (mkdir(j->dest, 0777) != 0) return xj_fail(j, "fs_extract_bad_dest: %s", strerror(errno));
     (void)chmod(j->dest, 0777);
     j->created_dest = 1;
+    return note_parent(j, j->dest);
+}
+
+/* Folders whose entries changed since the last xs_barrier (durable mode): a file renamed into
+ * place, a folder made. Flushed all at once when the list is full. */
+#define XS_NOTES 64
+static char *notes[XS_NOTES];
+static unsigned nnotes;
+
+static int sync_dir(xjob_t *j, const char *dir) {
+    int fd = open(dir, O_RDONLY), rc = 0;
+    if (fd < 0) return xj_fail(j, "fs_extract_write_failed: %s: %s", dir, strerror(errno));
+    /* A file system that can't flush a folder by itself says so; the files themselves were. */
+    if (fsync(fd) != 0 && errno != EINVAL && errno != ENOTSUP && errno != EOPNOTSUPP && errno != EBADF)
+        rc = xj_fail(j, "fs_extract_write_failed: %s: %s", dir, strerror(errno));
+    close(fd);
+    return rc;
+}
+
+int xs_barrier(xjob_t *j) {
+    int rc = 0;
+    for (unsigned i = 0; i < nnotes; i++) {
+        if (rc == 0 && sync_dir(j, notes[i]) != 0) rc = -1;
+        free(notes[i]);
+        notes[i] = NULL;
+    }
+    nnotes = 0;
+    return rc;
+}
+
+/* The folder holding `path` (a file or folder just made or renamed into place) is noted. */
+static int note_parent(xjob_t *j, const char *path) {
+    const char *slash = strrchr(path, '/');
+    size_t n;
+    if (!j->durable || !slash) return 0;
+    n = slash == path ? 1 : (size_t)(slash - path);
+    if (nnotes && strlen(notes[nnotes - 1]) == n && memcmp(notes[nnotes - 1], path, n) == 0) return 0;
+    for (unsigned i = 0; i < nnotes; i++)
+        if (strlen(notes[i]) == n && memcmp(notes[i], path, n) == 0) return 0;
+    if (nnotes == XS_NOTES && xs_barrier(j) != 0) return -1;
+    notes[nnotes] = malloc(n + 1);
+    if (!notes[nnotes]) return xj_fail(j, "fs_extract_no_memory");
+    memcpy(notes[nnotes], path, n);
+    notes[nnotes][n] = 0;
+    nnotes++;
     return 0;
 }
 
@@ -139,6 +196,7 @@ static int make_parents(xjob_t *j, const char *rel, int all) {
             (void)chmod(path, 0777);
             if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 1;
             j->dirs++;
+            if (note_parent(j, path) != 0) return -1;
         } else {
             return xj_fail(j, "fs_extract_write_failed: %s: %s", rel, strerror(errno));
         }
@@ -326,7 +384,7 @@ static int write_out(xjob_t *j, xentry_t *e, const uint8_t *p, size_t n) {
             int err = w < 0 ? errno : EIO;
             if (err == ENOSPC || err == EDQUOT) {
                 int known;
-                uint64_t have = free_bytes(j, &known);
+                uint64_t have = xs_free_bytes(j, &known);
                 return xj_fail(j, "fs_extract_no_space: %s, %llu free", j->current, (unsigned long long)have);
             }
             return xj_fail(j, "fs_extract_write_failed: %s: %s", j->current, strerror(err));
@@ -343,7 +401,7 @@ static int write_out(xjob_t *j, xentry_t *e, const uint8_t *p, size_t n) {
         if (j->written_total - last_space_check >= XS_RECHECK) {
             int known;
             last_space_check = j->written_total;
-            if (free_bytes(j, &known) == 0 && known) return xj_fail(j, "fs_extract_no_space: %s, 0 free", j->current);
+            if (xs_free_bytes(j, &known) == 0 && known) return xj_fail(j, "fs_extract_no_space: %s, 0 free", j->current);
         }
     }
     return 0;
@@ -359,6 +417,7 @@ int xs_write(xjob_t *j, xentry_t *e, const void *buf, size_t n) {
     const uint8_t *p = buf;
     if (e->fd < 0) return xj_failed(j) ? -1 : 0;
     if (xj_cancelled(j)) return -1;
+    if (j->count_written) j->bytes_done += n;
     if (j->test_write_delay_us) usleep(j->test_write_delay_us);
     if (!wbuf && !wbuf_tried) {
         wbuf_tried = 1;
@@ -390,6 +449,11 @@ int xs_end(xjob_t *j, xentry_t *e, int ok) {
             rc = -1;
         }
         wfill = 0;
+        /* Durable: on the drive before anything of the archive it came from may be deleted. */
+        if (ok && j->durable && fsync(e->fd) != 0) {
+            ok = 0;
+            rc = xj_fail(j, "fs_extract_write_failed: %s: %s", j->current, strerror(errno));
+        }
         if (close(e->fd) != 0 && ok) {
             ok = 0;
             rc = xj_fail(j, "fs_extract_write_failed: %s: %s", j->current, strerror(errno));
@@ -412,6 +476,8 @@ int xs_end(xjob_t *j, xentry_t *e, int ok) {
             j->files++;
             j->files_done++;
             j->bytes += e->written;
+            if (note_parent(j, e->final_path) != 0) rc = -1;
+            xf_trace("file", e->final_path + strlen(j->dest) + 1);
         }
         e->tmp_path[0] = 0;
     }

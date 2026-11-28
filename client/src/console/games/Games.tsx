@@ -346,6 +346,7 @@ export function GamesView(p: GamesViewProps) {
         onAlt={p.onConfirmDelete}
         onConfirm={p.onConfirm}
         onCancel={p.onDismiss}
+        roomNotice={p.ask.kind === "close"}
       />
     ) : null;
 
@@ -476,7 +477,7 @@ export async function closeGame(
   let lastErr: unknown = null;
   if (run.appId) {
     try {
-      await deps.call("/api/app/close", { app_id: run.appId });
+      await deps.call("/api/app/close", { app_id: run.appId, room_ok: true });
       for (let waited = 0; waited < CLOSE_WAIT_MS; waited += 1000) {
         await deps.wait(1000);
         const now = await deps.running();
@@ -491,7 +492,7 @@ export async function closeGame(
   const cur = now ? now.get(titleId) : run;
   if (now && !cur) return;
   try {
-    await deps.call("/api/proc/kill", { pid: (cur ?? run).pid });
+    await deps.call("/api/proc/kill", { pid: (cur ?? run).pid, room_ok: true });
   } catch (e) {
     // Gone between the read and the kill: closed after all.
     if (e instanceof ApiError && e.code === "not_running") return;

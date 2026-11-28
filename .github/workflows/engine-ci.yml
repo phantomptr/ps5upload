@@ -75,6 +75,7 @@ jobs:
       desktop: ${{ steps.lanes.outputs.desktop }}
       android: ${{ steps.lanes.outputs.android }}
       scripts: ${{ steps.lanes.outputs.scripts }}
+      play: ${{ steps.lanes.outputs.play }}
       all: ${{ steps.lanes.outputs.all }}
     steps:
       # A PR run checks out the PR's merge commit: its first parent is the base it merges into,
@@ -140,6 +141,10 @@ jobs:
           check-latest: true
       - name: Verify downstream files match VERSION
         run: node scripts/update-version.js --check
+      # PS5Upload Play's contentVersion is this version in the PS5's form (13.0.0 -> 13.000.000).
+      # The built zip is checked in the play-app job.
+      - name: PS5Upload Play carries this version
+        run: node scripts/check-play-version.mjs
       - name: Website translations (every language has every string and its screenshots)
         run: node scripts/site-i18n.mjs
 
@@ -1768,6 +1773,83 @@ jobs:
           key: ${{ steps.gradle-cache.outputs.cache-primary-key }}
 
   # ─────────────────────────────────────────────────────────────────────
+  # PS5Upload Play (apps/play): the native PS5 app, built in Docker by its own Makefile
+  # (`make -C apps/play release`), and its zip checked against VERSION
+  # (scripts/check-play-version.mjs). Passes with a note while the app is not in the tree (no
+  # apps/play/Makefile). The toolchain image and the app's downloaded deps are cached by the hash
+  # of its build files, saved from main only (the repo's cache rule).
+  # ─────────────────────────────────────────────────────────────────────
+  play-app:
+    name: PS5Upload Play (native app)
+    needs: changes
+    if: needs.changes.outputs.play == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          check-latest: true
+
+      - name: Is the app in this tree?
+        id: app
+        run: |
+          scripts/play-app-ci.sh present | tee -a "$GITHUB_OUTPUT"
+          node scripts/check-play-version.mjs
+
+      - name: Restore the app's toolchain
+        id: play-cache
+        if: steps.app.outputs.present == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/play-toolchain.tar
+            apps/play/.deps
+          key: ${{ runner.os }}-${{ runner.arch }}-play-toolchain-${{ hashFiles('apps/play/docker/**', 'apps/play/tooling/**', 'apps/play/tools/**', 'apps/play/Makefile') }}
+
+      - name: Load the app's toolchain image
+        if: steps.app.outputs.present == 'true' && steps.play-cache.outputs.cache-hit == 'true'
+        run: if [ -s "$RUNNER_TEMP/play-toolchain.tar" ]; then docker load -i "$RUNNER_TEMP/play-toolchain.tar"; fi
+
+      - name: Build PS5Upload Play (make -C apps/play release) and check its zip
+        if: steps.app.outputs.present == 'true'
+        timeout-minutes: 30
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          set -euo pipefail
+          scripts/play-app-ci.sh images "$RUNNER_TEMP/images-before"
+          scripts/play-app-ci.sh build "$RUNNER_TEMP/play-zip"
+          ls -la "$RUNNER_TEMP/play-zip"
+
+      - name: Hand the zip on
+        if: steps.app.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ps5upload-play-ci
+          path: ${{ runner.temp }}/play-zip/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Write the app's toolchain image for the cache
+        if: steps.app.outputs.present == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.play-cache.outputs.cache-hit != 'true'
+        run: scripts/play-app-ci.sh save "$RUNNER_TEMP/images-before" "$RUNNER_TEMP/play-toolchain.tar"
+
+      - name: Save the app's toolchain
+        if: steps.app.outputs.present == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.play-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/play-toolchain.tar
+            apps/play/.deps
+          key: ${{ steps.play-cache.outputs.cache-primary-key }}
+
+  # ─────────────────────────────────────────────────────────────────────
   # Aggregate gate. One stable check that turns green only when every
   # required job above succeeded. Branch protection on `main` requires
   # THIS single context ("PR gate") instead of each matrix job by name,
@@ -1811,6 +1893,7 @@ jobs:
       - payload
       - payload-selftests
       - android
+      - play-app
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

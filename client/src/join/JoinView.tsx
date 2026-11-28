@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
-import { delayTone, playerColor, type JoinStatus } from "../lib/joinProtocol";
+import { playerColor, type JoinStatus } from "../lib/joinProtocol";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import {
   HomeScreenTip,
@@ -26,6 +26,7 @@ import { useAutoHide, usePickHint } from "./autoHide";
 import { PadCheck } from "./PadCheck";
 import { OpenOnWifi } from "./OpenOnWifi";
 import type { NetPath } from "./netPath";
+import { tierLabel, tierOfMs, toneOfTier } from "./routeTier";
 import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
@@ -109,9 +110,9 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
       case "no_answer":
         return tr("join_refused_no_answer", { host }, `${host} didn't answer in time. Tell ${host}, then try again.`);
       case "closed":
-        return tr("join_refused_closed", { host }, `${host} isn't hosting Play Together right now.`);
+        return tr("join_refused_closed", { host }, `${host} isn't hosting a Play Room right now.`);
       case "old_helper":
-        return tr("join_refused_old_helper", { host }, `${host}'s PS5 needs an updated helper for Play Together.`);
+        return tr("join_refused_old_helper", { host }, `${host}'s PS5 needs an updated helper for Play Rooms.`);
       case "not_playing":
         return tr("join_refused_not_playing", { host }, `${host} isn't playing right now. Ask ${host} to start Play first.`);
       case "unreachable":
@@ -126,6 +127,25 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
         );
       case "seat_taken":
         return seatTakenText(tr, host);
+      // Play Rooms (design 8): the same words on every surface.
+      case "locked":
+        return tr("room_no_locked", undefined, "The room isn't taking players right now.");
+      case "host_away":
+        return tr("room_no_host_away", undefined, "Your host isn't there to answer right now.");
+      case "password":
+        return stage.triesLeft != null
+          ? tr("room_no_password_left", { n: stage.triesLeft }, `Wrong password. ${stage.triesLeft} tries left.`)
+          : tr("room_no_password", undefined, "Wrong password.");
+      case "locked_out":
+        return tr("room_no_locked_out", undefined, "Too many tries. Try again in 10 minutes.");
+      case "not_listed":
+        return tr("room_no_closed", undefined, "This room is closed.");
+      case "old":
+        return tr("room_no_old", undefined, "Update to join (needs PS5Upload 13.0.0 or newer).");
+      case "name_taken":
+        return stage.suggest
+          ? tr("room_name_taken_suggest", { name: stage.suggest }, `Someone in this room already has your name. Join as ${stage.suggest}?`)
+          : tr("room_no_name_taken", undefined, "Someone in this room already has that name.");
       default:
         return tr("join_refused_other", { host }, `${host} didn't let you in.`);
     }
@@ -135,7 +155,9 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
       case "kicked":
         return tr("join_ended_kicked", { host }, `${host} took you out of the game.`);
       case "closed":
-        return tr("join_ended_closed", { host }, `${host} closed Play Together.`);
+        return tr("room_ended_closed", { host }, `${host} closed the room.`);
+      case "removed":
+        return tr("room_ended_removed", { host }, `${host} removed you from the room.`);
       case "host_stopped":
         return tr("join_ended_host_stopped", undefined, "The host stopped playing.");
       case "replaced":
@@ -174,6 +196,63 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
     }
   }
   return "";
+}
+
+/** A room's refusal that one more try can fix (design 3.5, 4.3): the suggested name, or the
+ *  password typed again. */
+function AgainWith({
+  stage,
+  onAgainWith,
+}: {
+  stage: Extract<JoinStage, { kind: "refused" }>;
+  onAgainWith: (o: { name?: string; password?: string }) => void;
+}) {
+  const tr = useTr();
+  const [pw, setPw] = useState("");
+  if (stage.why === "name_taken" && stage.suggest) {
+    return (
+      <button
+        type="button"
+        onClick={() => onAgainWith({ name: stage.suggest ?? undefined })}
+        className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black"
+        data-testid="join-as-suggested"
+      >
+        {tr("room_join_as", { name: stage.suggest }, `Join as ${stage.suggest}`)}
+      </button>
+    );
+  }
+  if (stage.why === "password") {
+    return (
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (pw.length >= 4) onAgainWith({ password: pw });
+        }}
+      >
+        <input
+          type="password"
+          value={pw}
+          maxLength={64}
+          autoComplete="current-password"
+          onChange={(e) => setPw(e.target.value)}
+          aria-label={tr("room_password", undefined, "Password")}
+          placeholder={tr("room_password", undefined, "Password")}
+          className="rounded-lg border border-white/15 bg-black px-3 py-2 text-sm text-white outline-none focus:border-white/50"
+          data-testid="join-password-again"
+        />
+        <button
+          type="submit"
+          disabled={pw.length < 4}
+          className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+          data-testid="join-password-again-go"
+        >
+          {tr("room_ask_again", undefined, "Ask again")}
+        </button>
+      </form>
+    );
+  }
+  return null;
 }
 
 /** A ticking clock while `on` (for countdowns). */
@@ -318,9 +397,11 @@ export function JoinView({
   inApp = false,
   onLeave,
   onAgain,
+  onAgainWith,
   onFullscreen,
   lanUrl = null,
   hubDown = false,
+  roomExtras = null,
 }: {
   session: JoinSession;
   inApp?: boolean;
@@ -333,6 +414,10 @@ export function JoinView({
   onLeave: () => void;
   /** Ask to join again (a new ask, no saved place). */
   onAgain: () => void;
+  /** Play Rooms: ask again with another name (the room's suggestion) or a password typed again. */
+  onAgainWith?: (o: { name?: string; password?: string }) => void;
+  /** Play Rooms: the room strip, chat and voice drawn over the game (RoomOverlay), or null. */
+  roomExtras?: React.ReactNode;
   /** Full screen on or off; the page asks the browser, the app its window. */
   onFullscreen?: (on: boolean) => Promise<void> | void;
 }) {
@@ -431,11 +516,37 @@ export function JoinView({
     return () => window.removeEventListener("resize", update);
   }, []);
 
+  // The window's full screen, one ask at a time. Leaving it is not instant: Back and then OK on a
+  // TV's remote asked for it again while leaving was still under way, the ask was skipped (the
+  // page was still full screen), and the late fullscreenchange of leaving turned the game's full
+  // screen off again (below). An ask waits for the one before it; one with nothing before it goes
+  // at once, inside the key press or tap that a browser wants for full screen.
+  const fsAsks = useRef<{ busy: number; last: Promise<void> }>({ busy: 0, last: Promise.resolve() });
+  const askFullscreen = useCallback(
+    (next: boolean): Promise<void> => {
+      const q = fsAsks.current;
+      const ask = async () => {
+        try {
+          await onFullscreen?.(next);
+        } catch {
+          // Not allowed here: the picture still fills the window.
+        }
+      };
+      const run = (q.busy === 0 ? ask() : q.last.then(ask)).finally(() => {
+        q.busy--;
+      });
+      q.busy++;
+      q.last = run;
+      return run;
+    },
+    [onFullscreen],
+  );
+
   // Leaving the view leaves full screen.
   useEffect(() => {
     if (!full) return;
-    return () => void onFullscreen?.(false);
-  }, [full, onFullscreen]);
+    return () => void askFullscreen(false);
+  }, [full, askFullscreen]);
 
   // A phone in the app turned sideways (or already sideways when the game starts): full screen,
   // as the host's player. Only on a turn: leaving full screen sideways stays left.
@@ -449,12 +560,12 @@ export function JoinView({
     const turn = () => {
       if (!mq.matches || fullNow.current) return;
       setFull(true);
-      void onFullscreen?.(true);
+      void askFullscreen(true);
     };
     turn();
     mq.addEventListener?.("change", turn);
     return () => mq.removeEventListener?.("change", turn);
-  }, [inApp, live, onFullscreen]);
+  }, [inApp, live, askFullscreen]);
 
   // A phone in a browser turned sideways: the page's full layout, and the real full screen where
   // the browser has one (Android Chrome lets the page ask inside the turn itself); upright again
@@ -466,7 +577,7 @@ export function JoinView({
     const next = step === "enter";
     fullNow.current = next;
     setFull(next);
-    void onFullscreen?.(next);
+    void askFullscreen(next);
   });
   useCollapseBars(!inApp && live && full && touch && !hasFullscreenApi());
 
@@ -475,8 +586,8 @@ export function JoinView({
   useEffect(() => {
     if (!inApp || !live || !tvNavActive() || fullNow.current) return;
     setFull(true);
-    void onFullscreen?.(true);
-  }, [inApp, live, onFullscreen]);
+    void askFullscreen(true);
+  }, [inApp, live, askFullscreen]);
 
   // Esc shows the buttons and leaves full screen (the desktop app's window has no Esc of its
   // own; a browser that kept Esc for the page gets it here). A guest's Esc is never the pad's.
@@ -518,10 +629,12 @@ export function JoinView({
 
   // The browser left full screen itself (Esc): back to the picture's place. Not on a touch
   // screen, where Android drops it on a system gesture mid-game and the picture keeps filling.
+  // Not while the page's own ask is under way: that change is the page's (leaving, then asking
+  // again), not the browser's.
   useEffect(() => {
     if (!full || typeof document === "undefined") return;
     const onChange = () => {
-      if (document.fullscreenElement || coarsePointer()) return;
+      if (document.fullscreenElement || coarsePointer() || fsAsks.current.busy > 0) return;
       setFull(false);
     };
     document.addEventListener("fullscreenchange", onChange);
@@ -536,7 +649,7 @@ export function JoinView({
   const guideOpen = live && showsGuide({ player: livePlayer, guided, movedOff, reconnecting }) && !status?.playsAs;
   const setFullscreen = async (next: boolean) => {
     setFull(next);
-    await onFullscreen?.(next);
+    await askFullscreen(next);
   };
   const focusGame = () => game.current?.focus({ preventScroll: true });
   const dismissGuide = () => {
@@ -660,7 +773,7 @@ export function JoinView({
               ? tr("join_connecting", { host }, `Connecting to ${host}…`)
               : tr("join_waiting", { host }, `Waiting for ${host} to let you in`)
           }
-          body={stage.kind === "asking" ? tr("join_waiting_body", { host }, `${host} sees your name on their screen and taps Allow.`) : undefined}
+          body={stage.kind === "asking" ? tr("room_waiting_body", { host }, `${host} sees your name on their screen and taps Let in.`) : undefined}
           onCancel={leave}
         />
       </div>
@@ -687,6 +800,7 @@ export function JoinView({
         </p>
         {/* The invite service can't be reached: on the host's Wi-Fi, their own page still works. */}
         {lanUrl && stage.why === "no_hub" && <OpenOnWifi href={lanUrl} />}
+        {stage.kind === "refused" && onAgainWith && <AgainWith stage={stage} onAgainWith={onAgainWith} />}
         <div className="flex flex-wrap justify-center gap-2">
           {again && (
             <button
@@ -718,7 +832,7 @@ export function JoinView({
   const player = stage.player;
   const light = snap.light ?? playerColor(player);
   const delay = snap.rttMs ?? status?.rttMs ?? null;
-  const tone = delayTone(delay);
+  const tone = toneOfTier(snap.tier ?? tierOfMs(delay));
   const coarse = coarsePointer();
   const showTouch = live && !reconnecting && !pad.ready && coarse && (!inApp || full);
   const showGuide = showsGuide({ player, guided, movedOff, reconnecting });
@@ -758,6 +872,11 @@ export function JoinView({
           data-path={snap.path ?? undefined}
         >
           {snap.path && <span className="text-white/80">{pathLabel(tr, snap.path)} · </span>}
+          {snap.tier && (
+            <span className="text-white/80" data-testid="join-tier" data-tier={snap.tier}>
+              {tierLabel(tr, snap.tier)} ·{" "}
+            </span>
+          )}
           {Math.round(delay)} ms
         </span>
       )}
@@ -932,6 +1051,8 @@ export function JoinView({
         data-testid="join-stage-view"
       >
         <div ref={screen} className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center" aria-hidden />
+        {/* Play Rooms: pings, chat and voice over the game (never over the touch controls). */}
+        {live && roomExtras}
 
         {/* The buttons are hidden, and the delay with them: a small reading stays in the corner. */}
         {autoHide && !chrome.shown && !reconnecting && delay != null && (

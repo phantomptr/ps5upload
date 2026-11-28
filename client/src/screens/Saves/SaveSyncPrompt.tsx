@@ -12,7 +12,7 @@ import { pushNotification } from "../../state/notifications";
 import { useRosterStore } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import { ConsoleNamesContext, saveGameNameNow, useSaveGameName } from "./gameNames";
-import { promptFor, suggestionId, type Prompt } from "./saveSync";
+import { consoleName, newCopies, promptFor, suggestionId, type Prompt } from "./saveSync";
 
 /** How often the engine is asked for suggestions; it looks at the consoles once a minute. */
 const POLL_MS = 30_000;
@@ -111,6 +111,7 @@ export function SaveSyncPrompt() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const told = useRef<Set<string>>(new Set());
+  const copiesSeen = useRef<Map<string, number> | null>(null);
   const names = useContext(ConsoleNamesContext);
 
   useEffect(() => {
@@ -154,6 +155,36 @@ export function SaveSyncPrompt() {
       ),
     );
   }, [prompt, id, tr, names]);
+
+  // A save kept in step went across by itself: a line in the inbox says so (copies made before
+  // the app opened are not news).
+  const keeping = !!view?.pairs.some((p) => (p.auto ?? []).length > 0);
+  useEffect(() => {
+    if (!keeping) return;
+    let live = true;
+    void saveSyncApi
+      .games()
+      .then(async (games) => {
+        if (!live) return;
+        const { fresh, seen } = newCopies(games, copiesSeen.current);
+        copiesSeen.current = seen;
+        for (const g of fresh) {
+          const to = consoleName(g.copied_direction === "b_to_a" ? g.a.host : g.b.host, profiles);
+          const game = await saveGameNameNow(g.title_id, names);
+          pushNotification(
+            "info",
+            tr("saves_sync_auto_sent_note", { game, console: to }, "{game}'s save was sent to {console}"),
+            { link: "/saves" },
+          );
+        }
+      })
+      .catch(() => {
+        // Looked at again with the next poll.
+      });
+    return () => {
+      live = false;
+    };
+  }, [view, keeping, profiles, names, tr]);
 
   if (!prompt || !id) return null;
   const { suggestion: s } = prompt;

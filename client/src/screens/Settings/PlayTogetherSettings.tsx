@@ -103,7 +103,7 @@ export function PlayTogetherSettings() {
         {tr(
           "pt_unavailable",
           undefined,
-          "Play Together could not start. Check that the engine is up to date.",
+          "Your Play Room could not start. Check that the engine is up to date.",
         )}
       </p>
     );
@@ -273,6 +273,21 @@ export function PlayTogetherSettings() {
             "pt_set_video_track_hint",
             undefined,
             "Sends the picture the way video calls do, so a lost packet costs a resend instead of a frozen picture. Off: the picture goes with the controls and the sound, as before.",
+          )}
+        />
+      </div>
+      <div data-testid="pt-set-play-discovery">
+        <Toggle
+          checked={net.playDiscovery}
+          onChange={(on) => {
+            setNet({ ...net, playDiscovery: on });
+            void save({ play_discovery: on });
+          }}
+          label={tr("pt_set_play_discovery", undefined, "PS5Upload Play can find this computer")}
+          hint={tr(
+            "pt_set_play_discovery_hint",
+            undefined,
+            "PS5Upload Play on your PS5 looks for this computer on your home network. Off: type this computer's address in the app instead.",
           )}
         />
       </div>

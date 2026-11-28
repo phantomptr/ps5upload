@@ -121,7 +121,7 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   await page.getByTestId("rp-toolbar").hover();
   await page.getByTestId("rp-together").click();
   // The stream bar's button switches to Play › Play together.
-  await expect(page.getByRole("radio", { name: "Play Together" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Play Room" })).toHaveAttribute("aria-checked", "true");
 
   // ① Invite: the QR code, the link and the other address.
   const panel = page.getByTestId("pt-panel");
@@ -152,7 +152,7 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   await page.getByTestId("rp-toolbar").hover();
   await page.getByTestId("rp-toolbar").getByTestId("rp-stop").click();
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("Stopping Play ends Play Together for 1 friend(s). Continue?");
+  await expect(dialog).toContainText("Stopping Play ends the Play Room for 1 friend(s). Continue?");
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByTestId("rp-toolbar")).toBeAttached();
 
@@ -163,7 +163,10 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
     block_system_buttons: false,
   });
 
-  await card.getByTestId("pt-kick").click();
+  // Remove is in the player's menu (Play Rooms), with a choice whether to let them back.
+  await card.getByRole("button", { name: "Ben: more" }).click();
+  await page.getByTestId("room-player-remove").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click();
   await expect.poll(() => posts.find((p) => p.path === "/api/join/kick")?.body).toEqual({ addr: "192.168.1.100", player: 2 });
   await expect(card.getByTestId("pt-player-status")).toHaveText("Left", { timeout: 10_000 });
 
@@ -214,8 +217,8 @@ test("Play together and Play my PS5 are one stream: switching pages never restar
 
   await page.goto("/play", { waitUntil: "domcontentloaded" });
   // Before a stream: Play together explains itself and has one button.
-  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
-  await expect(page.getByTestId("pt-start")).toContainText("No app needed");
+  await page.getByRole("radio", { name: "Play Room" }).click({ timeout: 30_000 });
+  await expect(page.getByTestId("pt-start")).toContainText("Play your PS5 games with friends");
   await expect(page.getByTestId("rp-start")).toHaveCount(0);
   await page.getByTestId("pt-start-invite").click();
 
@@ -230,10 +233,11 @@ test("Play together and Play my PS5 are one stream: switching pages never restar
   await page.getByRole("radio", { name: "Play my PS5" }).click();
   await expect(panel).toHaveCount(0);
   await expect(page.getByTestId("rp-stop").first()).toBeAttached();
-  await page.getByRole("radio", { name: "Play Together" }).click();
+  await page.getByRole("radio", { name: "Play Room" }).click();
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
-  await page.getByRole("radio", { name: "Join a friend" }).click();
-  await page.getByRole("radio", { name: "Play Together" }).click();
+  await page.getByRole("radio", { name: "Play Room" }).click();
+  await page.getByRole("radio", { name: "Join with a code/link" }).click();
+  await page.getByRole("radio", { name: "Play Room" }).click();
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
   await expect(page.getByTestId("rp-stop").first()).toBeAttached();
   expect(streams).toBe(1);
@@ -241,6 +245,8 @@ test("Play together and Play my PS5 are one stream: switching pages never restar
 
   // Close Play Together: back to Play my PS5, still streaming.
   await panel.getByTestId("pt-close").click();
+  // Close room asks first (it names who leaves; nobody here).
+  await page.getByRole("alertdialog").getByRole("button", { name: "Close room" }).click();
   await expect.poll(() => posts).toContain("/api/join/close");
   await expect(page.getByRole("radio", { name: "Play my PS5" })).toHaveAttribute("aria-checked", "true");
   await expect(page.getByTestId("rp-stop").first()).toBeAttached();
@@ -257,7 +263,7 @@ test("Play together with no console set up says so, and Start and invite waits",
   });
   await routeEngine(page, (path) => (path === "/api/version" ? { version: "10.8.0", caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {}));
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Room" }).click({ timeout: 30_000 });
   await expect(page.getByTestId("pt-start-invite")).toBeDisabled();
   await expect(page.getByTestId("play-open-setup")).toBeVisible();
 });
@@ -402,7 +408,8 @@ test("a friend's browser joins, plays as Player 2, and survives a dropped connec
   await page.getByTestId("join-name").fill("Ben");
   await page.getByTestId("join-go").click();
   await expect(page.getByTestId("join-stage")).toHaveText("Waiting for Ann to let you in", { timeout: 30_000 });
-  expect(hellos[0]).toEqual({ name: "Ben", invite: INVITE });
+  // 13.0 adds the device id, the room protocol and what this build can do.
+  expect(hellos[0]).toMatchObject({ name: "Ben", invite: INVITE, proto: 2 });
 
   allow();
   await expect(page.getByTestId("join-player")).toHaveText("You are Player 2");
@@ -429,7 +436,7 @@ test("a friend's browser joins, plays as Player 2, and survives a dropped connec
   await expect(page.getByTestId("join-reconnecting")).toBeVisible();
   await expect(page.getByTestId("join-reconnecting-left")).toContainText("Your place is kept for 0:");
   await expect(page.getByTestId("join-reconnecting")).toHaveCount(0, { timeout: 10_000 });
-  expect(hellos[hellos.length - 1]).toEqual({ name: "Ben", invite: INVITE, resume: "TOKEN-1" });
+  expect(hellos[hellos.length - 1]).toMatchObject({ name: "Ben", invite: INVITE, resume: "TOKEN-1" });
   await expect(page.getByTestId("join-player")).toHaveText("You are Player 2");
 
   // Leave says so.
@@ -620,7 +627,7 @@ test("the host ending Play Together tells the friend at once", async ({ page }) 
   await page.getByTestId("join-go").click();
   await expect(page.getByTestId("join-player")).toBeVisible({ timeout: 30_000 });
   bye();
-  await expect(page.getByText("Ann closed Play Together.")).toBeVisible();
+  await expect(page.getByText("Ann closed the room.")).toBeVisible();
   await expect(page.getByTestId("join-reconnecting")).toHaveCount(0);
 });
 
@@ -652,7 +659,7 @@ test("an invite opened in the app asks only for the name, filled in from last ti
   await page.getByTestId("join-invite-name").fill("Benny");
   await page.getByTestId("join-invite-go").click();
   await expect(page.getByTestId("join-player")).toHaveText("Playing at Ann's · You are Player 2", { timeout: 30_000 });
-  expect(hellos[0]).toEqual({ name: "Benny", invite: INVITE });
+  expect(hellos[0]).toMatchObject({ name: "Benny", invite: INVITE });
   expect(await page.evaluate(() => window.localStorage.getItem("ps5upload.join.name"))).toBe("Benny");
 });
 
@@ -677,16 +684,18 @@ test("the app joins a friend from Play, and asks before starting its own Play", 
   });
 
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Join a friend" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Room" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Join with a code/link" }).click();
   await page.getByTestId("join-link").fill("http://192.168.1.9:19113/join#i=bad");
   await page.getByTestId("join-app-name").fill("Ben");
   await page.getByTestId("join-app-go").click();
-  await expect(page.getByText("That isn't a Play Together invite link.")).toBeVisible();
+  await expect(page.getByText("That isn't a Play Room invite link.")).toBeVisible();
   await page.getByTestId("join-link").fill(LINK);
   await page.getByTestId("join-app-go").click();
   await expect(page.getByTestId("join-player")).toHaveText("Playing at Ann's · You are Player 2", { timeout: 30_000 });
   expect(decodeURIComponent(relayUrl)).toContain("url=ws://192.168.1.9:19113/api/join/ws");
-  expect(hellos[0]).toEqual({ name: "Ben", invite: INVITE });
+  // 13.0 adds the device id, the room protocol and what this build can do.
+  expect(hellos[0]).toMatchObject({ name: "Ben", invite: INVITE, proto: 2 });
 
   // One thing at a time: starting Play asks to leave Ann's game first.
   await page.getByRole("radio", { name: "Play my PS5" }).click();
@@ -694,7 +703,8 @@ test("the app joins a friend from Play, and asks before starting its own Play", 
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("Starting Play leaves Ann's game. Continue?");
   await dialog.getByRole("button", { name: "Cancel" }).click();
-  await page.getByRole("radio", { name: "Join a friend" }).click();
+  await page.getByRole("radio", { name: "Play Room" }).click();
+  await page.getByRole("radio", { name: "Join with a code/link" }).click();
   await expect(page.getByTestId("join-player")).toBeVisible();
 });
 

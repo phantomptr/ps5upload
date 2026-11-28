@@ -232,7 +232,7 @@ export function PlayMenu({
         />
         {onTogether && !inFull && (
           <Tile
-            label={tr("pt_button", undefined, "Play Together")}
+            label={tr("pt_button", undefined, "Play Room")}
             icon={<Users size={18} />}
             onClick={onTogether}
             testId="rp-menu-together"

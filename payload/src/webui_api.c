@@ -16,6 +16,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include "statvfs_avail.h"
@@ -52,11 +53,17 @@
 #include "webui_offline.h"
 #include "webui_pkg.h"
 #include "webui_page.h"
+#include "webui_queue.h"
 #include "webui_server.h"
 #include "webui_settings.h"
 #include "webui_smb.h"
 #include "webui_strings.h"
 #include "webui_tile.h"
+#include "ava1_thread.h"
+#include "play_app.h"
+#include "play_host.h"
+#include "mesh.h"
+#include "register.h"
 
 #define API_OUT_MAX (256u * 1024u)   /* an AVA1 reply's ceiling (the server's RPC_OUT_MAX) */
 #define API_LIST_JSON (64u * 1024u)  /* one fs.list page as JSON: entries past it page on */
@@ -1023,15 +1030,18 @@ static void r_fs_unpack_info(const char *b, size_t n, uint8_t *out, int fd) {
 #define XTOP_MAX (8192u)
 
 /* Extract an archive on the console (ARCHIVE_EXTRACT, run by the extractor payload): {"path", "dest",
- * optional "password", "merge", "replace", "list", "top"}. The job's result: {"path","files","dirs",
- * "bytes","skipped","unsafe","links"}; with "list" (nothing written, `dest` a folder that is there) it
- * is {"top","top_dirs","top_more","listed":true}. "top" leaves out or renames top-level entries. */
+ * optional "password", "merge", "replace", "list", "top", "free"}. The job's result: {"path","files",
+ * "dirs","bytes","skipped","unsafe","links"} (with "free": also "parts_freed","bytes_freed",
+ * "free_not_removed"); with "list" (nothing written, `dest` a folder that is there) it is {"top",
+ * "top_dirs","top_more","listed":true} (with "free": also "free", the plan: see archive_extract.c).
+ * "top" leaves out or renames top-level entries. "free" deletes the archive as it is unpacked
+ * (payload/extractor/src/xfree.h). */
 
 static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     char path[API_PATH], dest[API_PATH], password[XPASS_MAX], *tail, *top;
     /* Every character of the three strings escaped as \u00XX at worst, and the members' names. */
     size_t cap = 6 * (API_PATH + XPASS_MAX + XTOP_MAX) + 128;
-    int merge = 0, replace = 0, list = 0, rc, rt, len;
+    int merge = 0, replace = 0, list = 0, free_archive = 0, rc, rt, len;
     if (need_path(fd, b, n, "path", path, sizeof path) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
     rc = webui_json_str(b, n, "password", password, sizeof password);
@@ -1040,7 +1050,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
         return;
     }
     if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0 ||
-        webui_json_bool(b, n, "list", &list) < 0) {
+        webui_json_bool(b, n, "list", &list) < 0 || webui_json_bool(b, n, "free", &free_archive) < 0) {
         crypto_wipe(password, sizeof password);
         send_bad(fd, "bad_merge");
         return;
@@ -1065,7 +1075,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     }
     /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
     len = webui_extract_tail(tail, cap, dest, rc == 1 ? password : NULL, merge, replace, list,
-                             rt == 1 ? top : NULL);
+                             rt == 1 ? top : NULL, free_archive);
     crypto_wipe(password, sizeof password);
     free(top);
     if (len < 0) {
@@ -1149,6 +1159,12 @@ static int is_mine(const uint8_t id[16], void *ctx) {
     return ava1_jobs_owner_is(id, k_console_id);
 }
 
+/* How long a job the page started has run (#981); -1 for any other (a PC's: its app shows that). */
+static int64_t job_elapsed(const uint8_t id[16], void *ctx) {
+    (void)ctx;
+    return ctasks_elapsed_ms(id, (uint64_t)mono_ms());
+}
+
 /* "uploading": the destinations of running uploads (a PC's), for the Files badge. Left out when
  * the list cannot be read (the jobs answer stands on its own). */
 static void add_uploads(char *json, size_t cap) {
@@ -1181,7 +1197,7 @@ static void r_jobs(const char *b, size_t n, uint8_t *out, int fd) {
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
-    if (webui_jobs_to_json(out, ol, is_mine, NULL, json, API_JOBS_JSON) < 0) {
+    if (webui_jobs_to_json(out, ol, is_mine, job_elapsed, NULL, json, API_JOBS_JSON) < 0) {
         send_error(fd, 500, "bad_jobs_reply", 14);
     } else {
         /* The page has now seen how its finished jobs ended: release them (after a short grace, so
@@ -1241,12 +1257,24 @@ int webui_console_tasks(char *out, size_t cap) {
         if (arr && end && end > arr) smb_len = (size_t)(end - arr) + 1;
     }
     if (smb_len && pos + smb_len + 32 < cap)
-        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":%.*s}", (int)smb_len, arr);
+        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":%.*s", (int)smb_len, arr);
     else
-        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":[]}");
+        k = snprintf(out + pos, cap - pos, "],\"smb_jobs\":[]");
     free(smb);
     if (k < 0 || (size_t)k >= cap - pos) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
-    return (int)(pos + (size_t)k);
+    pos += (size_t)k;
+    /* The page's queue (#982), for the apps to show what waits; left out when it does not fit. */
+    if (cap - pos > 16) {
+        size_t at = pos;
+        memcpy(out + pos, ",\"queue\":", 9);
+        pos += 9;
+        k = webui_queue_json(out + pos, cap - pos - 2);
+        if (k < 0) pos = at;
+        else pos += (size_t)k;
+    }
+    if (cap - pos < 2) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
+    memcpy(out + pos, "}", 2);
+    return (int)(pos + 1);
 }
 
 int webui_console_task_cancel(const char *b, size_t n, char *out, size_t cap) {
@@ -1307,6 +1335,37 @@ static void r_jobs_status(const char *b, size_t n, uint8_t *out, int fd) {
 }
 
 /* APP_LIFECYCLE kill, as the engine sends it: {"action":"kill","app_id":N}. */
+/* While a Play Room runs on this console (play_host.h), ending the game ends it for every player
+ * too: a close or a kill must say it knows ("room_ok":true, the page asked naming the players).
+ * Without it (an older stored page, a script): 409 room_active with who plays, so the page can ask.
+ * 1 when refused (answered). */
+static int room_refuses(const char *b, size_t n, int fd) {
+    static const char head[] = "{\"error\":\"room_active\",";
+    const size_t hl = sizeof head - 1; /* 23 */
+    int ok = 0, playing = 0;
+    char *json;
+    int jn;
+    if (webui_json_bool(b, n, "room_ok", &ok) == 1 && ok) return 0;
+    if (!play_room_active((uint64_t)mono_ms(), &playing)) return 0;
+    json = malloc(PLAY_HOST_OUT_MAX + 64);
+    if (!json) {
+        send_error(fd, 409, "room_active", 11);
+        return 1;
+    }
+    play_host_set_lookup(mesh_engine_info);
+    /* The room answer written one byte before the head ends, then its own "{" covered by the head:
+     * {"error":"room_active","room":...,"rooms":[...]} */
+    jn = play_room_json((uint64_t)mono_ms(), json + hl - 1, PLAY_HOST_OUT_MAX + 64 - hl);
+    if (jn > 1) {
+        memcpy(json, head, hl);
+        send_json(fd, 409, json, hl - 1 + (size_t)jn);
+    } else {
+        send_error(fd, 409, "room_active", 11);
+    }
+    free(json);
+    return 1;
+}
+
 static void r_app_close(const char *b, size_t n, uint8_t *out, int fd) {
     char req[64];
     const uint8_t *t;
@@ -1317,6 +1376,7 @@ static void r_app_close(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_app_id");
         return;
     }
+    if (room_refuses(b, n, fd)) return;
     k = snprintf(req, sizeof req, "{\"action\":\"kill\",\"app_id\":%lu}", (unsigned long)app_id);
     st = call_text(AVA1_METHOD_APP_LIFECYCLE, req, (size_t)k, out, &ol, &t, &tl);
     if (st != AVA1_STATUS_OK) send_status_error(fd, st, out, ol);
@@ -1598,6 +1658,31 @@ static void r_tailnet(const char *b, size_t n, uint8_t *out, int fd) {
     send_text_reply(fd, st, out, ol, t, tl);
 }
 
+/* {op?}: the USB Ethernet adapter, experimental (AVA1 usbnet, usbnet.h): its status, and on / off
+ * from the console. A static address stays the app's to set. Answers the helper's status JSON. */
+static void r_usbnet(const char *b, size_t n, uint8_t *out, int fd) {
+    char op[16], req[48];
+    const uint8_t *t;
+    size_t ol, tl;
+    int st, k;
+    if (n > 512) {
+        send_error(fd, 413, "too_large", 9);
+        return;
+    }
+    if (webui_json_str(b, n, "op", op, sizeof op) < 0) {
+        send_bad(fd, "bad_request");
+        return;
+    }
+    if (!op[0]) snprintf(op, sizeof op, "status");
+    if (strcmp(op, "status") && strcmp(op, "enable") && strcmp(op, "disable")) {
+        send_bad(fd, "bad_op");
+        return;
+    }
+    k = snprintf(req, sizeof req, "{\"op\":\"%s\"}", op);
+    st = call_text(AVA1_METHOD_USBNET, req, (size_t)k, out, &ol, &t, &tl);
+    send_text_reply(fd, st, out, ol, t, tl);
+}
+
 /* {op?, id?}: the devices that use this PS5 (the mesh, the same list the app's Consoles page shows).
  * No op: the picture ({devices, asks, settings, ...}), so someone at the console sees who is asking
  * to connect and who may. allow / decline answer a device that asks (approval is on); remove takes a
@@ -1650,6 +1735,21 @@ static void r_mesh_from(const char *b, size_t n, uint8_t *out, int fd, uint32_t 
 /* The route table's entry; webui_api_route calls r_mesh_from with the request's peer instead. */
 static void r_mesh(const char *b, size_t n, uint8_t *out, int fd) {
     r_mesh_from(b, n, out, fd, 0);
+}
+
+/* {}: save sync as this PS5 takes part in it, for the page's Saves section. Save sync runs in the app
+ * (or a Docker engine), which writes where each game kept in step stands into this console's mesh
+ * document "save-sync" (engine save_sync_console.rs); this reads it back, read only: {ok, rev, doc}
+ * with doc null when no engine wrote one. Nothing in the request is used. */
+static void r_save_sync(const char *b, size_t n, uint8_t *out, int fd) {
+    static const char req[] = "{\"name\":\"save-sync\"}";
+    const uint8_t *t;
+    size_t ol, tl;
+    int st;
+    (void)b;
+    (void)n;
+    st = call_text(AVA1_METHOD_MESH_DOC_GET, req, sizeof req - 1, out, &ol, &t, &tl);
+    send_text_reply(fd, st, out, ol, t, tl);
 }
 
 /* Whether a game with title id `tid` (other != 0: any other game) runs, from PROCESS_LIST. A list that
@@ -1732,6 +1832,350 @@ static void r_apps_register(const char *b, size_t n, uint8_t *out, int fd) {
     send_text_reply(fd, st, out, ol, t, tl);
 }
 
+/* ---- PS5Upload Play (play_app.h): its state, and Install / Update as a helper-side job ----
+ *
+ * The install itself is play_app_install: the homebrew store app's way, exactly (the rules are at the
+ * top of include/play_app.h; the engine's twin is engine/crates/ps5upload-engine/src/play_app_install.rs).
+ * Around it, this job: the app is closed first when it runs (APP_LIFECYCLE kill, as Home's Close),
+ * and afterwards the title is registered the way the console expects it: when ShadowMount+ runs (a
+ * process whose name has "shadowmountplus" in it), it scans /data/homebrew and registers the folder
+ * itself, so we do not (a fresh install is then watched in app.db for up to PLAY_REG_WAIT_S and
+ * reported pending if it has not appeared); otherwise APP_REGISTER (register.c, as the Register
+ * button) when app.db does not have the title yet. The outcome goes to PLAY_APP_INSTALL_JSON. One job
+ * at a time; /api/play-app reports its progress. Opening the app is /api/apps/launch. */
+
+#define PLAY_REG_WAIT_S 90
+#define PLAY_CLOSE_WAIT_MS 15000
+
+enum { PJ_IDLE = 0, PJ_CLOSING, PJ_COPYING, PJ_REGISTERING, PJ_DONE, PJ_FAILED };
+
+static pthread_mutex_t g_play_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    int state;
+    uint64_t done, total;
+    char error[64];
+    char registered_by[16]; /* "shadowmount" | "ps5upload" | "" */
+    int pending;            /* left to ShadowMount+, not in app.db yet */
+    char register_error[64];
+} g_play;
+
+static const char *play_state_name(int s) {
+    switch (s) {
+    case PJ_CLOSING: return "closing";
+    case PJ_COPYING: return "copying";
+    case PJ_REGISTERING: return "registering";
+    case PJ_DONE: return "done";
+    case PJ_FAILED: return "failed";
+    default: return "idle";
+    }
+}
+
+static void play_set(int state, const char *error) {
+    pthread_mutex_lock(&g_play_mu);
+    g_play.state = state;
+    if (error) snprintf(g_play.error, sizeof g_play.error, "%s", error);
+    pthread_mutex_unlock(&g_play_mu);
+}
+
+static void play_progress(void *ctx, uint64_t done, uint64_t total) {
+    (void)ctx;
+    pthread_mutex_lock(&g_play_mu);
+    g_play.done = done;
+    g_play.total = total;
+    pthread_mutex_unlock(&g_play_mu);
+}
+
+/* One AVA1 text call from the job's own thread, inside the local-RPC gate (the exit waits for it,
+ * and refuses it once the exit has begun: AVA1_ERR_BUSY). On an error the cause, if any, is the
+ * text (*t, *tl) instead of the reply. */
+static int play_call(uint16_t method, const char *body, size_t len, uint8_t *out, const uint8_t **t, size_t *tl) {
+    size_t ol = 0;
+    int st;
+    *t = NULL;
+    *tl = 0;
+    if (ava1_server_local_rpc_enter() != 0) return AVA1_ERR_BUSY;
+    st = call_text(method, body, len, out, &ol, t, tl);
+    ava1_server_local_rpc_leave();
+    if (st != AVA1_STATUS_OK) {
+        *t = out;
+        *tl = ol;
+    }
+    return st;
+}
+
+/* The process list's verdict on the app: 1 runs (with *app_id), 0 not, -1 unreadable. Also whether
+ * ShadowMount+ runs, when asked. */
+static int play_running(uint8_t *out, uint64_t *app_id, int *shadowmount) {
+    const uint8_t *t;
+    size_t tl;
+    int r;
+    if (play_call(AVA1_METHOD_PROC_PROCESS_LIST, NULL, 0, out, &t, &tl) != AVA1_STATUS_OK) return -1;
+    if (shadowmount) *shadowmount = play_app_has_nocase((const char *)t, tl, "shadowmountplus");
+    r = webui_proc_game_running((const char *)t, tl, PLAY_APP_TITLE_ID, 0);
+    if (r == 1 && app_id) {
+        *app_id = 0;
+        (void)webui_proc_title_app_id((const char *)t, tl, PLAY_APP_TITLE_ID, app_id);
+    }
+    return r;
+}
+
+static void nap(unsigned ms) {
+    struct timespec ts = { (time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+
+static void *play_job(void *arg) {
+    uint8_t *out = malloc(API_OUT_MAX);
+    play_app_env_t env;
+    play_app_result_t res;
+    const char *err = NULL;
+    uint64_t app_id = 0;
+    int sm = 0, run, reg;
+    (void)arg;
+    proc_name_set_self("ps5upload-play");
+    ava1_server_set_rpc_peer(k_console_id);
+    if (!out) {
+        play_set(PJ_FAILED, "out_of_memory");
+        return NULL;
+    }
+    /* 1. Closed first when it runs. */
+    run = play_running(out, &app_id, NULL);
+    if (run == 1) {
+        char req[64];
+        const uint8_t *t;
+        size_t tl;
+        unsigned waited = 0;
+        int k;
+        play_set(PJ_CLOSING, NULL);
+        if (app_id) {
+            k = snprintf(req, sizeof req, "{\"action\":\"kill\",\"app_id\":%lu}", (unsigned long)app_id);
+            (void)play_call(AVA1_METHOD_APP_LIFECYCLE, req, (size_t)k, out, &t, &tl);
+        }
+        while ((run = play_running(out, NULL, NULL)) == 1 && waited < PLAY_CLOSE_WAIT_MS) {
+            nap(500);
+            waited += 500;
+        }
+        if (run != 0) {
+            play_set(PJ_FAILED, run == 1 ? "close_failed" : "process_list_unreadable");
+            free(out);
+            return NULL;
+        }
+    } else if (run < 0) {
+        play_set(PJ_FAILED, "process_list_unreadable");
+        free(out);
+        return NULL;
+    }
+    /* 2. The files, the store's way, and its receipt. */
+    play_set(PJ_COPYING, NULL);
+    memset(&env, 0, sizeof env);
+    env.root = "";
+    env.now = time(NULL);
+    env.progress = play_progress;
+    if (play_app_install(&env, &res, &err) != 0) {
+        fprintf(stderr, "[play-app] install failed: %s\n", err ? err : "?");
+        play_set(PJ_FAILED, err ? err : "install_failed");
+        free(out);
+        return NULL;
+    }
+    fprintf(stderr, "[play-app] %s %s in %s\n", res.update ? "updated to" : "installed", res.version, res.location);
+    /* 3. Registered the way the console expects. */
+    play_set(PJ_REGISTERING, NULL);
+    (void)play_running(out, NULL, &sm);
+    reg = register_appdb_has_title(PLAY_APP_TITLE_ID);
+    if (sm) {
+        int waited = 0;
+        while (reg != 1 && !res.update && waited < PLAY_REG_WAIT_S) {
+            nap(3000);
+            waited += 3;
+            reg = register_appdb_has_title(PLAY_APP_TITLE_ID);
+        }
+        pthread_mutex_lock(&g_play_mu);
+        snprintf(g_play.registered_by, sizeof g_play.registered_by, "shadowmount");
+        g_play.pending = reg != 1;
+        pthread_mutex_unlock(&g_play_mu);
+    } else {
+        if (reg != 1) {
+            char req[2 * API_PATH + 48], path[API_PATH];
+            const uint8_t *t;
+            size_t tl, k;
+            int st;
+            snprintf(path, sizeof path, "%s/%s", res.location, PLAY_APP_TITLE_ID);
+            k = (size_t)snprintf(req, sizeof req, "{\"src_path\":\"");
+            k += webui_json_escape(req + k, sizeof req - k, path, strlen(path));
+            memcpy(req + k, "\"}", 3);
+            st = play_call(AVA1_METHOD_APP_REGISTER, req, k + 2, out, &t, &tl);
+            if (st != AVA1_STATUS_OK) {
+                char cause[64];
+                size_t cl = tl < sizeof cause - 1 ? tl : sizeof cause - 1, i;
+                if (t && cl) memcpy(cause, t, cl);
+                cause[cl] = 0;
+                for (i = 0; i < cl; i++) /* a token: printable ASCII only */
+                    if ((unsigned char)cause[i] < 0x20 || (unsigned char)cause[i] > 0x7e) cause[i] = '?';
+                fprintf(stderr, "[play-app] register failed: %s\n", cause[0] ? cause : status_token(st));
+                pthread_mutex_lock(&g_play_mu);
+                snprintf(g_play.register_error, sizeof g_play.register_error, "%s", cause[0] ? cause : status_token(st));
+                pthread_mutex_unlock(&g_play_mu);
+            }
+        }
+        pthread_mutex_lock(&g_play_mu);
+        snprintf(g_play.registered_by, sizeof g_play.registered_by, "ps5upload");
+        pthread_mutex_unlock(&g_play_mu);
+    }
+    (void)play_app_write_install_json("", res.version, res.location, sm ? "shadowmount" : "ps5upload", time(NULL));
+    play_set(PJ_DONE, NULL);
+    free(out);
+    return NULL;
+}
+
+/* {} -> play_room_json: the Play Room an engine hosts on this console, read only (Minion's "Your
+ * room" card; the room's rules come from the engine, play_host.h). */
+static void r_room(const char *b, size_t n, uint8_t *out, int fd) {
+    char *json = malloc(PLAY_HOST_OUT_MAX);
+    int jn;
+    (void)b;
+    (void)n;
+    (void)out;
+    if (!json) {
+        send_error(fd, 500, "out_of_memory", 13);
+        return;
+    }
+    play_host_set_lookup(mesh_engine_info);
+    jn = play_room_json((uint64_t)mono_ms(), json, PLAY_HOST_OUT_MAX);
+    if (jn < 0) send_error(fd, 500, "internal", 8);
+    else send_json(fd, 200, json, (size_t)jn);
+    free(json);
+}
+
+/* {intent?: "join"|"host"|"rooms"} -> {}: opens PS5Upload Play, at that screen when the app reads the
+ * intent (GET 127.0.0.1:9181/v1/intent). Refused like /api/apps/launch while another game runs
+ * (409 other_game_running): opening it would close that game. */
+static void r_play_app_open(const char *b, size_t n, uint8_t *out, int fd) {
+    char intent[16] = "", req[64];
+    const uint8_t *t;
+    size_t ol, tl;
+    int k, st;
+    if (webui_json_str(b, n, "intent", intent, sizeof intent) < 0 ||
+        (intent[0] && strcmp(intent, "join") != 0 && strcmp(intent, "host") != 0 && strcmp(intent, "rooms") != 0)) {
+        send_bad(fd, "bad_intent");
+        return;
+    }
+    if (game_running(out, PLAY_APP_TITLE_ID, 1)) {
+        send_error(fd, 409, "other_game_running", 18);
+        return;
+    }
+    if (intent[0]) (void)play_intent_set(intent, (uint64_t)mono_ms());
+    k = snprintf(req, sizeof req, "{\"title_id\":\"%s\"}", PLAY_APP_TITLE_ID);
+    st = call_text(AVA1_METHOD_APP_LAUNCH, req, (size_t)k, out, &ol, &t, &tl);
+    if (st != AVA1_STATUS_OK) send_status_error(fd, st, out, ol);
+    else send_json(fd, 200, "{}", 2);
+}
+
+/* {} -> {"installed":{"version","path","registered"}|null,"staged":{"version"}|null,"store_managed",
+ * "store_busy","running","install":{"state","done","total","error"?,"registered_by"?,"pending"?,
+ * "register_error"?}} */
+static void r_play_app(const char *b, size_t n, uint8_t *out, int fd) {
+    char loc[PLAY_APP_LOCATION_MAX], dir[PLAY_APP_LOCATION_MAX + 16], iv[PLAY_APP_VERSION_MAX], sv[PLAY_APP_VERSION_MAX];
+    char json[2048];
+    size_t at = 0;
+    int have_i, have_s, running;
+    (void)b;
+    (void)n;
+    (void)play_app_target("", loc, sizeof loc);
+    snprintf(dir, sizeof dir, "%s/%s", loc, PLAY_APP_TITLE_ID);
+    have_i = play_app_version("", dir, iv, sizeof iv) == 1;
+    have_s = play_app_version("", PLAY_APP_KEPT_DIR, sv, sizeof sv) == 1;
+    running = play_running(out, NULL, NULL) == 1;
+    put_fmt(json, sizeof json, &at, "{\"installed\":");
+    if (have_i) {
+        put_fmt(json, sizeof json, &at, "{");
+        put_str(json, sizeof json, &at, "version", iv);
+        put_fmt(json, sizeof json, &at, ",");
+        put_str(json, sizeof json, &at, "path", dir);
+        put_fmt(json, sizeof json, &at, ",\"registered\":%s}",
+                register_appdb_has_title(PLAY_APP_TITLE_ID) == 1 ? "true" : "false");
+    } else {
+        put_fmt(json, sizeof json, &at, "null");
+    }
+    put_fmt(json, sizeof json, &at, ",\"staged\":");
+    if (have_s) {
+        put_fmt(json, sizeof json, &at, "{");
+        put_str(json, sizeof json, &at, "version", sv);
+        put_fmt(json, sizeof json, &at, "}");
+    } else {
+        put_fmt(json, sizeof json, &at, "null");
+    }
+    put_fmt(json, sizeof json, &at, ",\"store_managed\":%s,\"store_busy\":%s,\"running\":%s,\"install\":{",
+            have_i && play_app_store_managed("", loc, iv) ? "true" : "false", play_app_store_busy("") ? "true" : "false",
+            running ? "true" : "false");
+    pthread_mutex_lock(&g_play_mu);
+    put_fmt(json, sizeof json, &at, "\"state\":\"%s\",\"done\":%llu,\"total\":%llu", play_state_name(g_play.state),
+            (unsigned long long)g_play.done, (unsigned long long)g_play.total);
+    if (g_play.state == PJ_FAILED) {
+        put_fmt(json, sizeof json, &at, ",");
+        put_str(json, sizeof json, &at, "error", g_play.error);
+    }
+    if (g_play.state == PJ_DONE) {
+        put_fmt(json, sizeof json, &at, ",");
+        put_str(json, sizeof json, &at, "registered_by", g_play.registered_by);
+        put_fmt(json, sizeof json, &at, ",\"pending\":%s", g_play.pending ? "true" : "false");
+        if (g_play.register_error[0]) {
+            put_fmt(json, sizeof json, &at, ",");
+            put_str(json, sizeof json, &at, "register_error", g_play.register_error);
+        }
+    }
+    pthread_mutex_unlock(&g_play_mu);
+    put_fmt(json, sizeof json, &at, "}}");
+    send_json(fd, 200, json, at);
+}
+
+/* {"confirm_store"?:bool}: starts the job. 409 install_running, store_busy, store_managed (a copy the
+ * other app installed, without confirm_store); 404 not_staged. */
+static void r_play_app_install(const char *b, size_t n, uint8_t *out, int fd) {
+    char loc[PLAY_APP_LOCATION_MAX], dir[PLAY_APP_LOCATION_MAX + 16], iv[PLAY_APP_VERSION_MAX], sv[PLAY_APP_VERSION_MAX];
+    int confirm = 0, busy;
+    pthread_t th;
+    pthread_attr_t attr;
+    (void)out;
+    if (webui_json_bool(b, n, "confirm_store", &confirm) < 0) {
+        send_bad(fd, "bad_confirm_store");
+        return;
+    }
+    if (play_app_store_busy("")) {
+        send_error(fd, 409, "store_busy", 10);
+        return;
+    }
+    if (play_app_version("", PLAY_APP_KEPT_DIR, sv, sizeof sv) != 1) {
+        send_error(fd, 404, "not_staged", 10);
+        return;
+    }
+    (void)play_app_target("", loc, sizeof loc);
+    snprintf(dir, sizeof dir, "%s/%s", loc, PLAY_APP_TITLE_ID);
+    if (!confirm && play_app_version("", dir, iv, sizeof iv) == 1 && play_app_store_managed("", loc, iv)) {
+        send_error(fd, 409, "store_managed", 13);
+        return;
+    }
+    pthread_mutex_lock(&g_play_mu);
+    busy = g_play.state == PJ_CLOSING || g_play.state == PJ_COPYING || g_play.state == PJ_REGISTERING;
+    if (!busy) {
+        memset(&g_play, 0, sizeof g_play);
+        g_play.state = PJ_CLOSING; /* taken: a second request is refused from here */
+    }
+    pthread_mutex_unlock(&g_play_mu);
+    if (busy) {
+        send_error(fd, 409, "install_running", 15);
+        return;
+    }
+    if (pthread_attr_init(&attr) != 0 || pthread_attr_setstacksize(&attr, AVA1_MGMT_STACK) != 0 ||
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0 || pthread_create(&th, &attr, play_job, NULL) != 0) {
+        pthread_attr_destroy(&attr);
+        play_set(PJ_FAILED, "start_failed");
+        send_error(fd, 500, "start_failed", 12);
+        return;
+    }
+    pthread_attr_destroy(&attr);
+    send_json(fd, 200, "{\"started\":true}", 16);
+}
+
 /* {title_id, hidden}: APP_ICON_SET (#407): only app.db's visible flag changes; the title stays
  * installed. A refusal ({"ok":false,"err":..}) is 409 with the helper's reason. */
 static void r_apps_icon(const char *b, size_t n, uint8_t *out, int fd) {
@@ -1772,6 +2216,7 @@ static void r_proc_kill(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_pid");
         return;
     }
+    if (room_refuses(b, n, fd)) return;
     st = call_text(AVA1_METHOD_PROC_PROCESS_LIST, NULL, 0, out, &ol, &t, &tl);
     if (st != AVA1_STATUS_OK) {
         send_status_error(fd, st, out, ol);
@@ -3443,7 +3888,9 @@ static const struct {
     { "/api/apps/icon", r_apps_icon },
     { "/api/proc/list", r_proc_list },
     { "/api/tailnet", r_tailnet },
+    { "/api/usbnet", r_usbnet },
     { "/api/mesh", r_mesh },
+    { "/api/save-sync", r_save_sync },
     { "/api/proc/kill", r_proc_kill },
     { "/api/pkg/info", r_pkg_info },
     { "/api/pkg/icon", r_pkg_icon },
@@ -3473,10 +3920,20 @@ static const struct {
     { "/api/smb/delete", webui_smb_delete },
     { "/api/smb/rename", webui_smb_rename },
     { "/api/smb/job", webui_smb_job },
+    { "/api/queue", webui_queue_get },
+    { "/api/queue/add", webui_queue_add },
+    { "/api/queue/cancel", webui_queue_cancel },
+    { "/api/queue/top", webui_queue_top },
+    { "/api/queue/clear", webui_queue_clear },
+    { "/api/queue/pause", webui_queue_pause },
     { "/api/smb/cancel", webui_smb_cancel },
     { "/api/smb/jobs", webui_smb_jobs },
     { "/api/library/scan", webui_library_scan },
     { "/api/apps/register", r_apps_register },
+    { "/api/play-app", r_play_app },
+    { "/api/play-app/install", r_play_app_install },
+    { "/api/play-app/open", r_play_app_open },
+    { "/api/room", r_room },
     { "/api/cleanup/scan", r_cleanup_scan },
     { "/api/cleanup/status", r_cleanup_status },
     { "/api/cleanup/apply", r_cleanup_apply },
@@ -3609,6 +4066,55 @@ int webui_api_stream(const webui_req_t *r, const uint8_t *pre, size_t pre_len, i
     }
     webui_send_json(fd, 404, "{\"error\":\"not_found\"}");
     return 0;
+}
+
+int webui_api_call(const char *path, const char *body, char *reply, size_t cap) {
+    enum { BUF = 512 * 1024 };
+    int sv[2], http = -1, sz = BUF;
+    size_t i, got = 0;
+    uint8_t *out;
+    char *buf, *sep;
+    if (cap) reply[0] = '\0';
+    for (i = 0; i < sizeof k_routes / sizeof k_routes[0]; i++)
+        if (strcmp(path, k_routes[i].path) == 0) break;
+    if (i == sizeof k_routes / sizeof k_routes[0] || k_routes[i].fn == r_mesh || !cap) return -1;
+    buf = malloc(BUF);
+    out = malloc(API_OUT_MAX);
+    if (!buf || !out || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        free(buf);
+        free(out);
+        return -1;
+    }
+    /* the whole reply fits in the pair's buffer: the route writes it all before it is read */
+    (void)setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &sz, sizeof sz);
+    (void)setsockopt(sv[1], SOL_SOCKET, SO_RCVBUF, &sz, sizeof sz);
+    if (ava1_server_local_rpc_enter() == 0) {
+        ava1_server_set_rpc_peer(k_console_id);
+        k_routes[i].fn(body, strlen(body), out, sv[0]);
+        ava1_server_local_rpc_leave();
+    }
+    free(out);
+    (void)shutdown(sv[0], SHUT_WR);
+    close(sv[0]);
+    for (;;) {
+        ssize_t r = read(sv[1], buf + got, BUF - 1 - got);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        got += (size_t)r;
+        if (got >= BUF - 1) break;
+    }
+    close(sv[1]);
+    buf[got] = '\0';
+    if (sscanf(buf, "HTTP/1.%*d %d", &http) != 1) http = -1;
+    sep = strstr(buf, "\r\n\r\n");
+    if (sep) {
+        size_t len = got - (size_t)(sep + 4 - buf);
+        if (len >= cap) len = cap - 1;
+        memcpy(reply, sep + 4, len);
+        reply[len] = '\0';
+    }
+    free(buf);
+    return http;
 }
 
 int webui_api_route(const webui_req_t *r, const uint8_t *body, size_t body_len, int fd) {

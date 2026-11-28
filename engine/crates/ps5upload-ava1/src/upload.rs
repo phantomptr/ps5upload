@@ -986,6 +986,11 @@ pub fn upload_with_seq_in(
             }
             bridge.set_readback(readback == Readback::On);
             bridge.set_session(&session);
+            // Which of the console's links this attempt's session went through (its USB
+            // adapter or its own address), from what the handshake dialled.
+            if let Some(live) = cfg.progress_live.as_deref() {
+                live.note_link(pool.link_of(console, &session).await);
+            }
             let mut link = session.job(job_id);
             let o = SendOptions {
                 kind: opts.kind,

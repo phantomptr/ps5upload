@@ -11,7 +11,8 @@ export interface ConsoleTaskInfo {
   /** copy, move, delete, chmod, verify, unpack, extract, pkg_install, other. */
   kind: string;
   /** "gone": it ended and nobody saw how. */
-  state: "running" | "done" | "failed" | "cancelled" | "gone";
+  /** "queued": waiting in the console page's queue (#982), shown read-only. */
+  state: "running" | "done" | "failed" | "cancelled" | "gone" | "queued";
   name: string;
   files_done: number;
   files_total: number;
@@ -19,6 +20,9 @@ export interface ConsoleTaskInfo {
   bytes_total: number;
   /** Seconds since it ended; 0 while it runs. */
   age_s: number;
+  /** Seconds since it started on the console (how long it ran, once ended); absent from an
+   *  older helper (#981). */
+  elapsed_s?: number;
   cancellable: boolean;
 }
 

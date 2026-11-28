@@ -48,6 +48,12 @@ static int stub_route(const webui_req_t *r, const uint8_t *body, size_t body_len
         struct pollfd p = { fd, POLLIN, 0 };
         while (poll(&p, 1, 10000) > 0 && recv(fd, b, sizeof b, 0) > 0) {}
     }
+    if (strcmp(r->path, "/api/peer") == 0) { /* who the server thinks asked */
+        char j[48];
+        snprintf(j, sizeof j, "{\"peer\":\"%08x\"}", (unsigned)r->peer);
+        webui_send_json(fd, 200, j);
+        return 0;
+    }
     webui_send_json(fd, 200, "{\"ok\":true}");
     return 0;
 }
@@ -193,6 +199,37 @@ static void bad_host_403(void) {
     close(s);
     CHECK(status == 403);
     CHECK(strstr(resp, "{\"error\":\"forbidden\"}") != NULL);
+}
+
+/* The USB adapter daemon joins a LAN client over loopback with a PROXY line first (usbnet_proto.h):
+ * the request is then the client's, not the console's own browser's; a bad line drops the
+ * connection; the line may arrive in pieces. */
+static int proxied(const char *head1, const char *head2, char *resp, size_t cap) {
+    char req[512];
+    int s = dial(), n, status = -1;
+    if (s < 0) return -1;
+    if (send(s, head1, strlen(head1), 0) < 0) {
+        close(s);
+        return -1;
+    }
+    sleep_ms(50);
+    n = snprintf(req, sizeof req, "%sGET /api/peer HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nX-PS5U-Token: %s\r\n\r\n", head2,
+                 (unsigned)g_port, webui_token());
+    resp[0] = 0;
+    if (send(s, req, (size_t)n, 0) == n && read_all(s, resp, cap, 7000) > 0) (void)sscanf(resp, "HTTP/1.1 %d", &status);
+    close(s);
+    return status;
+}
+
+static void proxy_line_names_the_client(void) {
+    char resp[2048];
+    CHECK(proxied("PROXY TCP4 192.168.1.77 192.168.1.50 51234 9180\r\n", "", resp, sizeof resp) == 200);
+    CHECK(strstr(resp, "\"peer\":\"c0a8014d\"") != NULL);
+    CHECK(proxied("PROXY TCP4 192.16", "8.1.77 192.168.1.50 51234 9180\r\n", resp, sizeof resp) == 200);
+    CHECK(strstr(resp, "\"peer\":\"c0a8014d\"") != NULL);
+    CHECK(proxied("PROXY TCP4 999.1.1.1 1.1.1.1 1 2\r\n", "", resp, sizeof resp) == -1);
+    CHECK(request("/api/peer", webui_token(), resp, sizeof resp) == 200);
+    CHECK(strstr(resp, "\"peer\":\"7f000001\"") != NULL);
 }
 
 static void garbage_400(void) {
@@ -593,6 +630,7 @@ int main(void) {
     serves_api_with_token();
     api_without_token_401();
     bad_host_403();
+    proxy_line_names_the_client();
     garbage_400();
     too_big_413();
     streamed_body();

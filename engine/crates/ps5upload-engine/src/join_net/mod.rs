@@ -37,10 +37,22 @@
 //! (`&w=1` to watch), a data channel labelled `"pad"`, and on it the messages of `/api/pad/ws`
 //! after a first `{"hello": {"t": key, "name", "d", "w"}}` (the LAN socket's query). A room's
 //! peers get only its own kind's session: a channel with the other label is ignored.
+//!
+//! **The bridge** ([`bridge`], `GET /api/join/bridge`): PS5Upload Play, a native PS5 app with no
+//! WebRTC, joins an internet invite through the PS5Upload engine on its own home network. The app
+//! sends that engine the link's room and fingerprint on a plain WebSocket; the engine joins the
+//! room on the hub as a guest and makes the offer exactly as the guest page does (one `"join"`
+//! data channel, its host and STUN candidates), refuses an answer whose certificate is not the
+//! link's, leaves the hub as soon as the channel is open, and from then on passes the messages of
+//! `/api/join/ws` through unchanged both ways (binary ones in pieces as [`chunk`] says; the host's
+//! pings are answered on the bridge itself). To the host's engine it is one more internet guest; the
+//! app's hello carries the invite key, which the bridge never reads.
 
+pub(crate) mod bridge;
 pub(crate) mod chunk;
 pub(crate) mod crypto;
 pub(crate) mod hub;
+pub(crate) mod lobby;
 pub(crate) mod local_signal;
 pub(crate) mod nat;
 pub(crate) mod rtc;
@@ -112,6 +124,9 @@ pub(crate) const DEFAULT_STUN: [&str; 2] = ["stun.cloudflare.com:3478", "stun.l.
 /// Bytes waiting on a guest's channel past which the session stops sending (its pictures then
 /// skip to the next keyframe).
 pub(crate) const HIGH_WATER: usize = 256 * 1024;
+/// Play Rooms voice on the reliable channel (a page without a `voice` channel) is dropped, never
+/// waited for, once this much waits there: it would only arrive late.
+pub(crate) const VOICE_DROP_AT: usize = 16 * 1024;
 /// A peer that left (or failed) stays on the host's panel this long.
 const ENDED_SHOWN: Duration = Duration::from_secs(30);
 
@@ -124,6 +139,9 @@ pub(crate) struct PeerInfo {
     st: Mutex<PeerSt>,
     /// Its channel's back-pressure (set once the driver made it): the link numbers read it.
     flow: std::sync::OnceLock<Arc<Flow>>,
+    /// The guest's page opened a `voice` channel (unordered, no resends): Play Rooms voice goes
+    /// there (join_voice.rs), never behind the pictures on the reliable one.
+    voice: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -271,6 +289,7 @@ impl PeerInfo {
                 ..PeerSt::default()
             }),
             flow: std::sync::OnceLock::new(),
+            voice: std::sync::atomic::AtomicBool::new(false),
         });
         let mut g = PEERS.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -610,6 +629,24 @@ impl crate::join::GuestSocket for RtcSocket {
             Message::Binary(b) => self.up.send(rtc::Cmd::Audio(self.id, b)).map_err(|_| ()),
             _ => Ok(()),
         }
+    }
+
+    async fn send_voice(&mut self, m: Message) -> Result<(), ()> {
+        if self.flow.closed.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        let Message::Binary(b) = m else {
+            return self.send(m).await;
+        };
+        if self.info.voice.load(Ordering::Relaxed) {
+            return self.up.send(rtc::Cmd::Voice(self.id, b)).map_err(|_| ());
+        }
+        // No voice channel: with the rest, unless that is backed up (then the bundle is late
+        // anyway and goes).
+        if self.flow.pending() > VOICE_DROP_AT {
+            return Ok(());
+        }
+        self.send(Message::Binary(b)).await
     }
 
     async fn send_video(&mut self, m: Message) -> Result<(), ()> {

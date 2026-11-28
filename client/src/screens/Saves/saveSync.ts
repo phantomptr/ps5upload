@@ -1,11 +1,21 @@
 // Save sync's choices on screen (engine save_sync.rs): which way each save goes, which ones can
 // be picked, and which suggestion to show. Pure, so they're tested without a console.
 import type { BadgeTone } from "../../components/Badge";
-import type { SyncDirection, SyncPair, SyncRow, SyncStatus, SyncSuggestion } from "../../api/saveSync";
+import type {
+  AutoState,
+  AutoView,
+  SyncDirection,
+  SyncGame,
+  SyncPair,
+  SyncRow,
+  SyncStatus,
+  SyncSuggestion,
+} from "../../api/saveSync";
 import { hostOf } from "../../lib/addr";
 
-/** A PS5 save on one side only can't be sent: the game must make a save there first. An
- *  emulator's goes into the same place on the other console. */
+/** A PS5 save on one side only isn't sent by Sync: the game makes a save there first, or the user
+ *  asks for the one-time first copy (`firstCopy`). An emulator's goes into the same place on the
+ *  other console. The side with no save. */
 export function needsFirstStart(row: SyncRow): "a" | "b" | null {
   if (row.kind !== "ps5") return null;
   if (row.status === "only_on_a") return "b";
@@ -147,4 +157,105 @@ export function pickOther(picked: string, offered: readonly string[]): string {
 /** Whether "Keep in step" can go: a user on each side and another console (never this one). */
 export function canKeepInStep(s: { host: string; here: string; other: string; there: string }): boolean {
   return !!s.here && !!s.there && !!s.other && hostOf(s.other) !== hostOf(s.host);
+}
+
+// ── kept in step automatically (engine save_sync_auto.rs) ────────────────
+
+/** Whether the pair keeps this save in step by itself. */
+export function keptInStep(pair: SyncPair, key: string): boolean {
+  return (pair.auto ?? []).includes(key);
+}
+
+/** Where a save kept in step stands, for its row: the engine's view, or "waiting for the next
+ *  look" for one just turned on. Null for a save not kept in step. */
+export function autoOf(row: SyncRow, pair: SyncPair): AutoView | null {
+  if (!keptInStep(pair, row.key)) return null;
+  return (
+    row.auto ?? {
+      state: "waiting",
+      title_id: row.title_id,
+      kind: row.kind,
+      side: null,
+      reason: "queued",
+      detail: null,
+      direction: null,
+      first: false,
+      kept: [],
+      since_ms: 0,
+      fails: 0,
+      woke_ms: null,
+      copied_ms: null,
+      copied_direction: null,
+    }
+  );
+}
+
+export function autoTone(s: AutoState): BadgeTone {
+  switch (s) {
+    case "in_step":
+      return "good";
+    case "conflict":
+      return "warn";
+    case "cant_sync":
+      return "bad";
+    default:
+      return "neutral";
+  }
+}
+
+/** The console a state is about, by name (the one waited for, or the one a reason names). */
+export function autoConsole(
+  v: AutoView,
+  pair: SyncPair,
+  profiles: readonly { host: string; name: string }[],
+): string | null {
+  if (!v.side) return null;
+  return consoleName(v.side === "a" ? pair.a.host : pair.b.host, profiles);
+}
+
+/** Turning on is offered for every save but a PS4 one. A PS5 save the other user has none of
+ *  waits for the first copy or the game's own first save there. (The engine checks again, and
+ *  says why when it refuses.) */
+export function canTurnOn(row: SyncRow): boolean {
+  return row.kind !== "ps4" && row.reason !== "ps4";
+}
+
+export type FirstCopyCode = "old_helper" | "no_saved_data" | "no_backup_place";
+
+/** A PS5 save on one side only: the side the one-time first copy goes to, and whether it can be
+ *  made (`code`, else `why`: the engine's words, when not). Null when there is nothing to copy that
+ *  way. */
+export function firstCopyOf(
+  row: SyncRow,
+): { to: "a" | "b"; ok: boolean; why: string | null; code: FirstCopyCode | null } | null {
+  const to = needsFirstStart(row);
+  if (!to || row.reason) return null;
+  return {
+    to,
+    ok: row.first_copy?.ok === true,
+    why: row.first_copy?.why ?? null,
+    code: row.first_copy?.code ?? null,
+  };
+}
+
+/** The side of the pair that is not the console shown: "Keep in step on <console> (<user>)". */
+export function otherSide(pair: SyncPair, host: string): "a" | "b" {
+  return hostOf(pair.a.host) === hostOf(host) ? "b" : "a";
+}
+
+/** Copies made by keeping in step that were not seen before (for a notification), and what is
+ *  seen now. The first look only remembers: what happened before the app opened is not news. */
+export function newCopies(
+  games: readonly SyncGame[],
+  seen: ReadonlyMap<string, number> | null,
+): { fresh: SyncGame[]; seen: Map<string, number> } {
+  const next = new Map<string, number>();
+  const fresh: SyncGame[] = [];
+  for (const g of games) {
+    const id = `${g.pair}|${g.key}`;
+    const at = g.copied_ms ?? 0;
+    next.set(id, at);
+    if (seen && at > (seen.get(id) ?? 0)) fresh.push(g);
+  }
+  return { fresh, seen: next };
 }

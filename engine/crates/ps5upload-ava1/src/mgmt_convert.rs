@@ -273,6 +273,14 @@ pub fn node_status_json(s: &NodeStatus) -> Value {
     if let Some(p) = &s.prior_instance {
         v["prior_instance"] = json!(p);
     }
+    // The USB Ethernet adapter while it serves ({ip, port, mbps, chip}), sent as its JSON text;
+    // null when the helper has none to report (or is older, or the text does not parse).
+    v["usbnet"] = s
+        .usbnet
+        .as_deref()
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        .filter(Value::is_object)
+        .unwrap_or(Value::Null);
     v
 }
 
@@ -407,6 +415,21 @@ mod tests {
         let v = node_status_json(&s);
         assert_eq!(v["ucred_elevated"], serde_json::Value::Bool(false));
         assert_eq!(v["prior_instance"], "replaced");
+    }
+
+    /// The USB adapter's brief rides as JSON text and comes back as an object; none, or text that
+    /// is not an object, is null.
+    #[test]
+    fn node_status_json_carries_the_usb_adapter_brief() {
+        let mut s = NodeStatus::default();
+        assert!(node_status_json(&s)["usbnet"].is_null());
+        s.usbnet =
+            Some(r#"{"ip":"192.168.1.50","port":9120,"mbps":2500,"chip":"RTL8156B"}"#.into());
+        let v = node_status_json(&s);
+        assert_eq!(v["usbnet"]["ip"], "192.168.1.50");
+        assert_eq!(v["usbnet"]["mbps"], 2500);
+        s.usbnet = Some("not json".into());
+        assert!(node_status_json(&s)["usbnet"].is_null());
     }
 
     /// `/api/ps5/status` is the legacy JSON rebuilt from `NodeStatus`: the keys that scripts and

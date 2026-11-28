@@ -61,7 +61,7 @@ LIBARCHIVE_C := archive_acl.c archive_entry_sparse.c archive_entry_xattr.c archi
   archive_read_support_format_rar.c archive_read_support_format_rar5.c archive_string.c archive_string_sprintf.c \
   archive_time.c archive_util.c archive_virtual.c
 
-OWN_C := src/xmain.c src/xsink.c src/xrun.c src/xreq.c src/xrar.c src/xrarc.c src/xrcrypt.c
+OWN_C := src/xmain.c src/xsink.c src/xrun.c src/xreq.c src/xrar.c src/xrarc.c src/xrcrypt.c src/xfree.c
 OWN_CPP := src/x7z.cpp src/xguids.cpp
 
 # Z7_ST: single-threaded (bounded memory, no MT decoders). Z7_EXTRACT_ONLY: no update side.
@@ -155,7 +155,14 @@ $(HOST_OBJ)/src/%.o: src/%.cpp $(wildcard src/*.h) Makefile
 	@mkdir -p $(dir $@)
 	$(HOST_CXX) $(HOST_OWN_FLAGS) $(SEVENZ_DEFS) $(OWN_INC) -c -o $@ $<
 
-host-test: $(HOST_BIN)
+# The freeing schedule on its own (src/xfree.h), linked with the sink it flushes through.
+XFREE_TEST := build/host/xfree_test
+$(XFREE_TEST): tests/xfree_test.c src/xfree.c src/xsink.c $(wildcard src/*.h) Makefile
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_OWN_FLAGS) $(OWN_INC) -o $@ tests/xfree_test.c src/xfree.c src/xsink.c
+
+host-test: $(HOST_BIN) $(XFREE_TEST)
+	$(XFREE_TEST)
 	# Under a time limit: a hang fails by name with a stack sample (../../scripts/run-limited.pl).
 	perl ../../scripts/run-limited.pl 300 python3 tests/run.py $(HOST_BIN)
 

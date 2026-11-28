@@ -69,7 +69,7 @@ int mesh_admit(const uint8_t key[32], const char *name, uint32_t ip);
 int mesh_refused(const uint8_t key[32]);
 
 enum {
-    MESH_HELLO = 1,    /* {name,kind,os,app,proto} -> {you,helper,rev,settings,new} */
+    MESH_HELLO = 1,    /* {name,kind,os,app,proto[,play]} -> {you,helper,rev,settings,new} */
     MESH_STATE = 2,    /* {since,ev} -> {rev,same} | the whole picture (devices, asks, locks, events) */
     MESH_ACTIVITY = 3, /* {items:[...]} -> {ok,rev} */
     MESH_LOCK = 4,     /* {op:take|release,name,ttl,force,label} -> {ok,got,...} */
@@ -83,5 +83,36 @@ enum {
 /* Runs one call as `caller`. Writes the JSON reply into out (NUL-terminated) and returns its length,
  * or -1 when even a refusal does not fit. */
 int mesh_call(int which, const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap);
+
+/* The engines connected now, for PS5Upload Play (the helper's loopback app API, app_api.h):
+ *   {"engine": E | null, "online": [E, ...]}
+ *   E = {"id":"<64 hex>","name","kind","version","addr":"a.b.c.d","tailnet":bool,"port":N|null,
+ *        "join_ws":"/..."|null,"app_ws":"/..."|null}
+ * "id" is the engine's id (its AVA1 public key in hex, the engine's mesh_api::id_hex): the app keeps
+ * computers and friend passes by it, never by address.
+ * An engine says where PS5Upload Play reaches it in its hello (MESH_HELLO, engines from 13):
+ *   "play":{"port":<its HTTP port>,"join_ws":"/api/join/ws","app_ws":"/api/play/app"}
+ * kept in memory only (never saved, never in MESH_STATE, so older apps see nothing new) and
+ * cleared by a hello without it; or with the same fields in one item of its presence
+ * (MESH_ACTIVITY), which wins when both are there:
+ *   {"kind":"play_host","port":...,"join_ws":...,"app_ws":...}
+ * (no engine sends that item: older apps list every presence item as something the device is
+ * doing). "engine" is the online device offering either (the one heard from last when there are
+ * several: its presence's time for the item, its last contact for the hello); a port or path that
+ * is missing or not valid is null. "addr" is the address its AVA1 session comes from, never one
+ * the engine names. Blocked devices are left out. Returns the length, or -1. */
+int mesh_engines_json(char *out, size_t cap);
+
+/* One device as Play Rooms and PS5Upload Play's grants name it (play_host.c). */
+typedef struct {
+    char name[64];     /* its nickname, else its own name */
+    char kind[16];     /* desktop, phone, docker, ... */
+    uint32_t ip;       /* network order, where its AVA1 session came from (0: never) */
+    int online;        /* a live session now */
+    unsigned play_port;          /* where PS5Upload Play reaches it (0: not said) */
+    char app_ws[128];            /* its app socket path ("": not said) */
+} mesh_engine_t;
+/* The device with this key: 1 and *out filled, 0 when unknown or blocked. */
+int mesh_engine_info(const uint8_t key[32], mesh_engine_t *out);
 
 #endif

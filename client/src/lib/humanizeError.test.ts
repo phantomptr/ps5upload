@@ -471,6 +471,17 @@ describe("archive extract causes", () => {
   it("leaves an unknown extract cause as it is", () => {
     expect(humanizePs5Error("fs_extract_something_new")).toBe("fs_extract_something_new");
   });
+  it("a stop after part of the archive was deleted says why, what is gone and where the files are", () => {
+    const tr = en as Record<string, string>;
+    const out = humanizePs5Error("fs_extract_partly_freed: 3 5 g.part4.rar.partial-deleted | /data/g | fs_extract_no_space: g/a, 0 free");
+    expect(out).toBe(
+      tr.err_extract_partly_freed.replace("{reason}", tr.err_extract_no_space).replace("{folder}", "/data/g").replace("{n}", "5"),
+    );
+    const stopped = humanizePs5Error("fs_extract_partly_freed: 1 2 x.7z.002.partial-deleted | /data/x | fs_extract_cancelled");
+    expect(stopped.startsWith(tr.err_extract_free_stopped)).toBe(true);
+    expect(stopped).toContain("/data/x");
+    expect(humanizePs5Error("fs_extract_free_refused: /data/a.zip has a second name (a hard link)")).toBe(tr.err_extract_free_refused);
+  });
 });
 
 describe("a React render loop in the queue", () => {

@@ -107,9 +107,9 @@ For a self-hosted engine (Docker, a NAS, or a standalone program). None is neede
 | `PS5UPLOAD_BROWSE_ROOTS` | Folders the web UI's file picker opens on, comma-separated | the engine's home folder |
 | `PS5UPLOAD_PKG_HOST_IP` | The address the PS5 is told to download packages from, when the engine can't work it out (Docker bridge networking, several networks) | detected |
 | `PS5UPLOAD_BASE_URL` | URL path prefix, such as `/ps5/`. The web page is built with it ([REVERSE_PROXY.md](../REVERSE_PROXY.md)) | none |
-| `PS5UPLOAD_HUB_URL` | Play Together's hub (`wss://…`) when none is saved in Settings › Play Together ([SELF_HOSTING.md](../SELF_HOSTING.md)) | `wss://hub.phantomptr.com/ws` |
-| `PS5UPLOAD_PAGE_BASE` | Where Play Together's guest pages are (`https://play.example.com/`: links open `join/`, `pad/` and `share/` below it) when none is saved | `https://ps5upload.phantomptr.com/` |
-| `PS5UPLOAD_HUB_LISTEN` | Runs Play Together's hub and guest pages in the engine, on this address of their own (`127.0.0.1:19115`, a port, or `on`) | off |
+| `PS5UPLOAD_HUB_URL` | The Play Rooms hub (`wss://…`) when none is saved in Settings › Play Room ([SELF_HOSTING.md](../SELF_HOSTING.md)) | `wss://hub.phantomptr.com/ws` |
+| `PS5UPLOAD_PAGE_BASE` | Where the Play Room guest pages are (`https://play.example.com/`: links open `join/`, `pad/` and `share/` below it) when none is saved | `https://ps5upload.phantomptr.com/` |
+| `PS5UPLOAD_HUB_LISTEN` | Runs the Play Rooms hub and guest pages in the engine, on this address of their own (`127.0.0.1:19115`, a port, or `on`) | off |
 | `PS5UPLOAD_HUB_PUBLIC_URL` | The built-in hub's public `https://` address; the hub and pages above follow from it | none |
 | `PS5UPLOAD_HUB_STUN` | The built-in hub also answers STUN on this UDP port | off |
 | `PS5UPLOAD_DEVICE_NAME` | The name the console and other devices see | the computer's name |
@@ -148,6 +148,14 @@ Anything touching real transfer behaviour still needs hardware — see
   payload commands answer that way. `client/src/api/ps5.ts` has an
   `assertOk()` for action endpoints; status endpoints keep `ok:false` as
   data because there it means "unsupported on this console".
+- **PS5Upload Play finds the engine on UDP 19261.** The app on a PS5 sends a probe
+  (`PS5UPLOAD_PLAY_DISCOVER v1`, padded to 512 bytes) and the engine answers with its name, HTTP
+  port, version and a short id (`play_discovery.rs`). Only home-network sources are answered,
+  never with more bytes than the probe; an engine listening on loopback only runs no responder;
+  Settings › Play Room turns it off (`play_discovery`). With the helper running the app pairs by
+  itself (a one-time grant through the helper); without it, the TV's code is typed once into
+  PS5Upload (`/api/play/app`, `play_app.rs`; the engine also has a one-click `pair_confirm` the
+  app's UI doesn't use yet).
 - **One port, one session.** Everything goes to 9120 as AVA1: management
   calls on the session's control connection, bulk data on its lanes.
 - **A stream install has the PS5 fetch the package from the engine.** The

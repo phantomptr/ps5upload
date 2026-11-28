@@ -11,6 +11,9 @@ import { writeClipboard } from "../lib/clipboard";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { pushNotification } from "../state/notifications";
 import { trStatic } from "../lib/trStatic";
+import { readFriendsNow } from "../lib/friendsGuard";
+import { friendsList } from "./FriendsGuard";
+import { useLangStore } from "../state/lang";
 
 /** What the engine says about a newer release (engine_update.rs). */
 export interface EngineUpdate {
@@ -19,6 +22,8 @@ export interface EngineUpdate {
   available: boolean;
   notes?: string;
   docker: boolean;
+  /** Who plays through a Play Room now (`[{console, friends}]`): updating ends their game. */
+  friends_playing?: unknown;
 }
 
 /** What a Docker user runs to update: in the folder of their compose file. Pulling leaves the
@@ -94,10 +99,22 @@ export function WebUpdateHowTo({
   onClose: () => void;
 }) {
   const tr = useTr();
+  const lang = useLangStore((s) => s.lang);
   const [copied, setCopied] = useState(false);
+  const playing = readFriendsNow(update);
+  const who = friendsList(playing.friends, lang, tr("room_friends_generic", undefined, "Friends"));
   return (
     <Modal open onClose={onClose} title={tr("whats_new_in", { version }, `What's new in v${version}`)} size="xl">
       <div className="max-h-[60vh] overflow-auto p-4 text-sm">
+        {playing.friends.length > 0 && (
+          <p className="mb-3 text-[var(--color-warn)]" data-testid="web-update-friends">
+            {tr(
+              "web_update_friends",
+              { who },
+              `${who} are playing on your PS5 now. Updating restarts PS5Upload and ends their game; they can join again after.`,
+            )}
+          </p>
+        )}
         <div className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
           {update?.docker ? (
             <>

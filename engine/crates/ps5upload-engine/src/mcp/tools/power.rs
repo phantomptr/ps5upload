@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 
 use super::route::route;
 use super::{
-    console_optional, console_required, consoles, object, without_nulls, Args, Kind, ToolCtx,
-    ToolDef, ToolOutput, ToolResult,
+    confirm_friends, console_optional, console_required, consoles, object, with_confirm_friends,
+    without_nulls, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult,
 };
 
 pub(super) fn tools() -> Vec<ToolDef> {
@@ -26,6 +26,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                         "enum": ["reboot", "shutdown", "standby"],
                         "description": "What to do: reboot, shutdown, or standby (rest mode).",
                     },
+                    "confirm_friends": confirm_friends(),
                 }),
                 &["console", "action"],
             ),
@@ -84,7 +85,7 @@ async fn control(ctx: ToolCtx, args: Args) -> ToolResult {
     let answer = ctx
         .post(
             "/api/ps5/power/control",
-            &json!({ "addr": console, "action": action }),
+            &with_confirm_friends(json!({ "addr": console, "action": action }), &args),
         )
         .await?;
     Ok(ToolOutput::ok(

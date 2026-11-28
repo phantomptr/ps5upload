@@ -1,0 +1,64 @@
+{
+  "repository": "https://github.com/google/fonts",
+  "commit": "5bb28733cec313b63fbd415b574b5ae35c8aa8b8",
+  "license": "OFL-1.1",
+  "note": "Used only by tools/i18n.py at build time to pre-render translated interface text into assets/i18n/*.bin; the fonts themselves are not distributed.",
+  "files": [
+    {
+      "family": "notosanssc",
+      "file": "NotoSansSC[wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosanssc/NotoSansSC[wght].ttf",
+      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+      "license": "third_party/noto/notosanssc-OFL.txt"
+    },
+    {
+      "family": "notosanstc",
+      "file": "NotoSansTC[wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosanstc/NotoSansTC[wght].ttf",
+      "sha256": "864727d210d54f2537bbe23b3a839436c3992af72de9322af5270897246bd44f",
+      "license": "third_party/noto/notosanstc-OFL.txt"
+    },
+    {
+      "family": "notosansjp",
+      "file": "NotoSansJP[wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosansjp/NotoSansJP[wght].ttf",
+      "sha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+      "license": "third_party/noto/notosansjp-OFL.txt"
+    },
+    {
+      "family": "notosanskr",
+      "file": "NotoSansKR[wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosanskr/NotoSansKR[wght].ttf",
+      "sha256": "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252",
+      "license": "third_party/noto/notosanskr-OFL.txt"
+    },
+    {
+      "family": "notosansarabic",
+      "file": "NotoSansArabic[wdth,wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosansarabic/NotoSansArabic[wdth,wght].ttf",
+      "sha256": "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e",
+      "license": "third_party/noto/notosansarabic-OFL.txt"
+    },
+    {
+      "family": "notosansdevanagari",
+      "file": "NotoSansDevanagari[wdth,wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosansdevanagari/NotoSansDevanagari[wdth,wght].ttf",
+      "sha256": "14ec4af41f27482216d1c2229f417ff9b1425e1babb014e57d1d40d03229853e",
+      "license": "third_party/noto/notosansdevanagari-OFL.txt"
+    },
+    {
+      "family": "notosansbengali",
+      "file": "NotoSansBengali[wdth,wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosansbengali/NotoSansBengali[wdth,wght].ttf",
+      "sha256": "dcd42978094e584a849c84a51450eeac40c8826057d566ea6d4b9627a403a05a",
+      "license": "third_party/noto/notosansbengali-OFL.txt"
+    },
+    {
+      "family": "notosansthai",
+      "file": "NotoSansThai[wdth,wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/5bb28733cec313b63fbd415b574b5ae35c8aa8b8/ofl/notosansthai/NotoSansThai[wdth,wght].ttf",
+      "sha256": "5a1c559bb539583c8a1fd99d1c5b9491e5e14478c9cd2bd0970d5c3096cc9ef8",
+      "license": "third_party/noto/notosansthai-OFL.txt"
+    }
+  ]
+}

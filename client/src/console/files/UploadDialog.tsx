@@ -5,6 +5,7 @@ import { ApiError } from "../api";
 import { t } from "../strings";
 import { Modal } from "../ui/Modal";
 import { PhoneHandoff } from "../ui/PhoneHandoff";
+import { RateLine } from "../ui/rate";
 import { statOrNull, type ConflictChoice } from "./paste";
 import { makeFolders, uploadFile, uploadItems, type UploadItem } from "./transfer";
 import { filesErrorText } from "./Files";
@@ -63,6 +64,8 @@ export function UploadDialog({
   const folder = useRef<HTMLInputElement>(null);
   const current = useRef<AbortController | null>(null);
   const stop = useRef(false);
+  /** This run's name for its speed line (#981). */
+  const [runId, setRunId] = useState("upload");
   const live = useRef(true);
   useEffect(
     () => () => {
@@ -76,6 +79,7 @@ export function UploadDialog({
   const start = (picked: UploadItem[]) => {
     if (!picked.length) return;
     stop.current = false;
+    setRunId(`upload:${Date.now()}`);
     setState({ kind: "running", p: null });
     void runUploads(picked, dir, {
       mkdirs: makeFolders,
@@ -204,6 +208,7 @@ export function UploadDialog({
               </div>
               <p className="cw-dim">
                 {formatBytes(p.doneBytes + p.sent)} / {formatBytes(p.totalBytes)}
+                <RateLine id={runId} done={p.doneBytes + p.sent} total={p.totalBytes} ownElapsed prefix=" · " className="cw-rate" />
               </p>
             </>
           ) : (

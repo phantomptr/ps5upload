@@ -61,6 +61,7 @@ fn management_structs_round_trip() {
         fan_threshold: 70,
         fan_reapply_sec: 30,
         prior_instance: Some("clean".into()),
+        usbnet: Some(r#"{"ip":"192.168.1.50","port":9120,"mbps":2500,"chip":"RTL8156B"}"#.into()),
     };
     assert_eq!(NodeStatus::decode(&st.to_bytes().unwrap()).unwrap(), st);
     let l = fs_list();

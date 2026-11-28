@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { RateFigures } from "../../components/RateFigures";
 import { ArchiveRestore, FolderOpen, RefreshCw } from "lucide-react";
 import {
   Button,
@@ -116,7 +117,13 @@ function Progress({ status, onCancel }: { status: BackupStatus; onCancel: () => 
           <div className="text-sm font-medium">
             {tr("cb_progress", { step: status.step, steps: status.steps }, `Step ${status.step} of ${status.steps}`)}
           </div>
-          <div className="truncate text-xs text-[var(--color-muted)]">{status.current}</div>
+          <div className="truncate text-xs text-[var(--color-muted)]">
+            {status.current}
+            {/* The step's bytes: its speed and time left (#981). */}
+            {status.total_bytes > 0 && (
+              <RateFigures id={`cb:${status.step}`} done={status.bytes} total={status.total_bytes} prefix=" · " />
+            )}
+          </div>
         </div>
         <Button variant="secondary" size="sm" onClick={onCancel} data-testid="cb-cancel">
           {tr("cb_cancel", undefined, "Stop")}

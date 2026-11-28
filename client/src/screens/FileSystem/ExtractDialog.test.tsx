@@ -23,8 +23,12 @@ import {
   nothingChosen,
   withSkipped,
   ExtractItemsChoice,
+  FreeWhileExtracting,
+  extractRoomShort,
+  freeRoomShort,
   type ExtractChoice,
 } from "./ExtractDialog";
+import type { FreePlan } from "../../lib/archiveName";
 
 describe("extractChoice", () => {
   const taken = (names: string[]) => (n: string) => names.includes(n);
@@ -279,5 +283,53 @@ describe("Choose items (#969)", () => {
       />,
     );
     expect(empty).toContain("Choose at least one item to extract.");
+  });
+});
+
+describe("Delete the archive as it's unpacked", () => {
+  const plan: FreePlan = { mode: "parts", parts: 8, archiveBytes: 8_000, unpacked: 9_000, peak: 2_000, sameDrive: true, known: true, why: "" };
+  const render = (over: Partial<Parameters<typeof FreeWhileExtracting>[0]> = {}) =>
+    renderToStaticMarkup(
+      <FreeWhileExtracting checked state={{ plan }} itemsLeftOut={false} onChange={() => {}} {...over} />,
+    );
+
+  it("is worded as what it costs, and off unless asked", () => {
+    const off = render({ checked: false, state: null });
+    expect(off).toContain("Delete the archive as it&#x27;s unpacked");
+    expect(off).toContain("the archive can&#x27;t be used again");
+    expect(off).not.toContain("fs-extract-free-note");
+  });
+
+  it("says how much less room a set freed part by part needs", () => {
+    const html = render();
+    expect(html).toContain('data-kind="parts"');
+    expect(html).toMatch(/Frees each of its 8 parts as soon as everything in it is unpacked: about .+ less free space needed\./);
+  });
+
+  it("says plainly when nothing is saved while it runs, or it can't be done", () => {
+    expect(render({ state: { plan: { ...plan, mode: "end" } } })).toContain("deleted once everything is unpacked");
+    expect(render({ state: { plan: { ...plan, sameDrive: false } } })).toContain("makes no room on this one");
+    expect(render({ state: { plan: { ...plan, mode: "", why: "fs_extract_free_refused: x" } } })).toContain('data-kind="refused"');
+    expect(render({ state: { plan: null } })).toContain("too old for this");
+    expect(render({ state: { loading: true } })).toContain("Checking how this archive can be freed");
+  });
+
+  it("is not offered with items left out", () => {
+    const html = render({ itemsLeftOut: true });
+    expect(html).toContain("fs-extract-free-items");
+    expect(html).toContain("disabled");
+    expect(html).not.toContain("fs-extract-free-note");
+  });
+
+  it("the room warnings count the parts given back on the archive's drive", () => {
+    // 5 000 free, less than the archive (8 000): kept, it can't fit; freed on its drive it can.
+    expect(extractRoomShort(8_000, 5_000)).toBe(true);
+    expect(extractRoomShort(8_000, 5_000, plan)).toBe(false);
+    expect(freeRoomShort(plan, 5_000)).toBeNull();
+    expect(freeRoomShort(plan, 1_000)).toBe(2_000);
+    // On another drive its space comes back there, not here: the plain check stands.
+    expect(extractRoomShort(8_000, 5_000, { ...plan, sameDrive: false })).toBe(true);
+    expect(freeRoomShort({ ...plan, sameDrive: false }, 5_000)).toBe(9_000);
+    expect(freeRoomShort({ ...plan, known: false }, 0)).toBeNull();
   });
 });

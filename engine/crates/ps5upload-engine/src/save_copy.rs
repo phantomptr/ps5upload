@@ -1883,6 +1883,58 @@ pub fn copy_to_console(
     })
 }
 
+/// What a copy to a user with no save of the game yet (save sync's one-time "first copy") would
+/// refuse, read only. The copy itself is [`copy_to_console`]'s, which sends such a save whole and
+/// makes each image theirs (`restore_owned`, the helper's `save.owner`: their account and user
+/// in its param.sfo, its row in their save database; a game shows Continue after it, measured on
+/// FW 13.60, #809). Refused: no place to keep a copy of the save sent, a helper there that can't
+/// change a save's owner, or a user who has never saved any PS5 game there (they have no save
+/// database yet, and making one has never been tried).
+pub fn first_copy_check(to: &dyn Console, to_user: u32) -> Result<(), String> {
+    to.can_back_up()?;
+    if !to.can_make_owner() {
+        return Err(NO_OWNER_HELPER.into());
+    }
+    if !to.user_has_saves(to_user)? {
+        return Err(NO_SAVE_DATABASE.into());
+    }
+    Ok(())
+}
+
+/// [`first_copy_check`]'s words when the helper there is too old.
+pub const NO_OWNER_HELPER: &str =
+    "The PS5Upload helper on that PS5 is too old to make a save another user's. Update it there, then try again.";
+/// [`first_copy_check`]'s words for a user with no saved data at all on that PS5.
+pub const NO_SAVE_DATABASE: &str =
+    "That user has never saved a PS5 game on that PS5, so a save can't be added for them yet. Start any PS5 game once as that user and save, then try again.";
+
+/// What [`copy_to_console`] would refuse before changing anything, for save sync to say up front
+/// (`save_sync_auto`): no place to keep the target's save first, no PS5 save of the game for
+/// `from_user`, none of it for `to_user` yet (that is the one-time first copy, checked by
+/// [`first_copy_check`]), or images the target lacks that this helper can't make theirs (#809).
+/// Reads only.
+pub fn copy_check(
+    from: &dyn Console,
+    to: &dyn Console,
+    title_id: &str,
+    from_user: u32,
+    to_user: u32,
+) -> Result<(), Failed> {
+    let title_id = title_id.trim().to_ascii_uppercase();
+    if !plain(&title_id) {
+        return Err("unexpected title ID".into());
+    }
+    to.can_back_up()?;
+    let source = from.saves()?;
+    let there = to.saves()?;
+    let src = ps5_save_of(&source, &title_id, from_user, "This user")?;
+    let Some(dst) = target_or_none(&there, &title_id, to_user)? else {
+        return Err(no_target_save(&title_id).into());
+    };
+    adds_slots(from, to, &title_id, src, Some(dst))?;
+    Ok(())
+}
+
 /// An emulator's save onto another console: plain files, so they go as they are, through the
 /// backup and restore every other emulator save uses (the one there is backed up first).
 pub(crate) fn copy_emulator_save(
@@ -3298,6 +3350,42 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.msg.contains("Start the game once"), "{}", e.msg);
+    }
+
+    /// Save sync asks first what a copy to another console would refuse, changing nothing: a
+    /// target with no save of the game, images the user there lacks with a helper that can't
+    /// make them theirs (#809), no backup place. With the images there, or a helper that can, it
+    /// may go.
+    #[test]
+    fn the_copy_check_says_what_a_copy_would_refuse_and_writes_nothing() {
+        let from = Fake::two_users(&["sdimg_a"], &["sdimg_a"]);
+        let to = Fake::two_users(&["sdimg_a"], &["sdimg_a"]);
+        copy_check(&from, &to, "PPSA01650", A, B).unwrap();
+        assert!(!to.wrote() && to.calls().is_empty());
+        let to = Fake::two_users(&["sdimg_a"], &[]);
+        assert_eq!(
+            copy_check(&from, &to, "PPSA01650", A, B)
+                .unwrap_err()
+                .missing,
+            vec!["sdimg_a".to_string()]
+        );
+        let to = Fake {
+            owner: true,
+            ..Fake::two_users(&["sdimg_a"], &[])
+        };
+        copy_check(&from, &to, "PPSA01650", A, B).unwrap();
+        let mut to = Fake::two_users(&["sdimg_a"], &["sdimg_a"]);
+        to.saves.clear();
+        assert!(copy_check(&from, &to, "PPSA01650", A, B)
+            .unwrap_err()
+            .msg
+            .contains("Start the game once"));
+        let to = Fake {
+            no_backup_dir: true,
+            ..Fake::two_users(&["sdimg_a"], &["sdimg_a"])
+        };
+        assert!(copy_check(&from, &to, "PPSA01650", A, B).is_err());
+        assert!(!to.wrote());
     }
 
     // The Witcher 3 names every save of its own: another user never has a slot of the same name.

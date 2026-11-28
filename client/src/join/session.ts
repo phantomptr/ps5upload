@@ -28,6 +28,10 @@ import { setPadForwardReason } from "../lib/androidPadBridge";
 import type { NetPath } from "./netPath";
 import type { JoinTransport } from "./rtcTransport";
 import { TrackPlayer } from "./trackPlayer";
+import { classify, RttMeter, type Tier } from "./routeTier";
+import { RoomLink } from "./roomLink";
+import { deviceId, rememberPlayed } from "../lib/room/played";
+import { ROOM_CAPS, ROOM_PROTO } from "../lib/room/rooms";
 
 export interface JoinSnapshot {
   stage: JoinStage;
@@ -45,6 +49,9 @@ export interface JoinSnapshot {
   muted: boolean;
   /** Which way the connection goes while joined (join/netPath), when it is known. */
   path: NetPath | null;
+  /** How good it is (join/routeTier, apps/play/docs/ROUTES.md), from this page's round trips;
+   *  null before the first. */
+  tier: Tier | null;
 }
 
 const MUTED_KEY = "ps5upload.join.muted";
@@ -67,6 +74,28 @@ export interface JoinSessionOptions {
   /** An internet invite (its words for a dropped connection are the internet's); absent: it is
    *  one when it has a transport. A Wi-Fi link's WebRTC join is not. */
   internet?: boolean;
+  /** Play Rooms: how this guest found the room, for a knock in the hello on the home network or
+   *  Tailscale (the internet's knock goes through the hub first, join/rtcTransport). */
+  knock?: { via: string; sealed?: string } | null;
+  /** The host's device tag when the room card gave it. */
+  hostTag?: string;
+}
+
+/** What a 13.0 guest adds to its hello (design 10.2, 10.5): its device id (the tag hosts see),
+ *  the room protocol and what it can do. Older engines ignore all of it. */
+export function roomHello(knock: JoinSessionOptions["knock"] = null): Record<string, unknown> {
+  let device: string | null = null;
+  try {
+    device = deviceId();
+  } catch {
+    // No storage or no crypto here: no tag, the host sees the name only.
+  }
+  return {
+    ...(device ? { device } : {}),
+    proto: ROOM_PROTO,
+    caps: [...ROOM_CAPS],
+    ...(knock ? { knock } : {}),
+  };
 }
 
 /** How often the way is read again while joined (ICE may move to another pair). */
@@ -125,6 +154,25 @@ export function pageStats(
   return { ...s, ...(problem ? { problem } : {}), ...(sound ?? {}) };
 }
 
+/** The page's report with the way it plays over and how good that is (engine join.rs PageReport
+ *  `route`, `tier`, `route_rtt_ms`, `route_jitter_ms`; apps/play/docs/ROUTES.md), when known. */
+export function withRoute(
+  stats: Record<string, number | string> | null,
+  path: NetPath | null,
+  meter: RttMeter,
+): Record<string, number | string> | null {
+  if (!stats) return stats;
+  const r = meter.reading();
+  const tier = classify(r);
+  return {
+    ...stats,
+    ...(path ? { route: path } : {}),
+    ...(tier ? { tier } : {}),
+    ...(r.rttMs != null ? { route_rtt_ms: r.rttMs } : {}),
+    ...(r.jitterMs != null ? { route_jitter_ms: r.jitterMs } : {}),
+  };
+}
+
 /** The pad this device is: connected controllers (each through its profile), the keyboard and the
  *  on-screen one, merged. */
 export function devicePad(): PadState {
@@ -142,6 +190,10 @@ export class JoinSession {
   private snap: JoinSnapshot;
   private listeners = new Set<() => void>();
   private cleanups: Array<() => void> = [];
+  private meter = new RttMeter();
+  /** The room as this guest sees it (Play Rooms: seats, pings, chat, voice). */
+  readonly room = new RoomLink();
+  private notedPlayed = false;
 
   constructor(readonly opts: JoinSessionOptions) {
     this.snap = {
@@ -155,12 +207,35 @@ export class JoinSession {
       host: opts.host,
       muted: readMuted(),
       path: null,
+      tier: null,
     };
     this.client = new JoinClient({
       url: opts.url,
       invite: opts.invite,
       code: opts.code ?? null,
       name: opts.name,
+      helloExtra: roomHello(opts.knock ?? null),
+      onRoom: (r) => {
+        this.room.onRoom(r);
+        // Played with this host: their lobby id for "Alex's room is open", the round trip for
+        // "last time" (this device only, lib/room/played).
+        if (!this.notedPlayed && r.lobby && this.snap.stage.kind === "joined") {
+          this.notedPlayed = true;
+          try {
+            rememberPlayed({ lobby: r.lobby, host: this.snap.host ?? r.name, tag: this.opts.hostTag ?? "", rttMs: r.you?.rttMs ?? this.snap.rttMs });
+          } catch {
+            // No storage here: nothing remembered.
+          }
+        }
+      },
+      onChat: (m) => this.room.onChat(m),
+      onChatHistory: (l) => this.room.onChatHistory(l),
+      onComms: (c) => this.room.onComms(c),
+      onCommsRefused: (r) => this.room.onRefused(r),
+      onVoiceState: (m) => this.room.onVoiceState(m),
+      onMuted: (m) => this.room.onMuted(m),
+      onReady: (left) => this.room.onReady(left),
+      onVoice: (d) => this.room.onVoice?.(d),
       WebSocketImpl: opts.transport,
       readPad: devicePad,
       onStage: (stage) => {
@@ -169,11 +244,14 @@ export class JoinSession {
         if (stage.kind === "refused" || stage.kind === "ended") this.teardown();
       },
       onStatus: (status) => this.set({ status, host: status.host ?? this.snap.host }),
-      onRtt: (rttMs) => this.set({ rttMs }),
+      onRtt: (rttMs) => {
+        this.meter.add(rttMs);
+        this.set({ rttMs, tier: classify(this.meter.reading()) });
+      },
       onFrame: (d) => this.picture().onMessage(d),
       // How the picture looks here, for the host's panel and log: none before the first picture,
       // unless the picture fails, which the host then hears about (#720).
-      readStats: () => pageStats(this.player?.stats ?? null, this.snap.problem, this.player?.soundReport() ?? null),
+      readStats: () => withRoute(pageStats(this.player?.stats ?? null, this.snap.problem, this.player?.soundReport() ?? null), this.snap.path, this.meter),
       onCodec: (h, track, audio) => {
         const p = this.picture();
         p.setHevc(h);
@@ -191,6 +269,8 @@ export class JoinSession {
       },
       onLight: (light) => this.set({ light }),
     });
+    this.room.sendJson = (m) => this.client.sendJson(m);
+    this.room.sendBinary = (b) => this.client.sendBinary(b);
   }
 
   /** The picture's player, made on first use (needs a document). An internet invite's may take

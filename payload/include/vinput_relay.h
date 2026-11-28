@@ -84,5 +84,10 @@ typedef struct {
 int vinput_relay_bind(uint32_t device, uint32_t user, uint32_t age_ms, vrelay_bind_t *out);
 /* The pad is gone: the companion stops watching it. */
 void vinput_relay_forget(uint32_t device);
+/* Who each of `n` pads (1..VWIRE_OWNERS_MAX handles) is seated in now (the companion's OWNERS,
+ * read only): VWIRE_RC_OK with sce[i] (0: read) and owner[i] (0: nobody yet), else
+ * VRELAY_BIND_NOT_RUNNING, VRELAY_BIND_LOST or the companion's rc (VWIRE_RC_UNSUPPORTED: its
+ * sceMbusInit failed). Never starts the companion (vinput_relay_hold does). */
+int vinput_relay_owners(const uint32_t *devices, int n, int32_t *sce, uint32_t *owner);
 
 #endif

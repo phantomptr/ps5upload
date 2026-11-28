@@ -49,8 +49,9 @@ the app over **AVA1**, one encrypted connection on port 9120.
   them. Browse and manage files.
 - **Remote Play**: stream the PS5 into the app and play it with a controller, the keyboard or
   touch, or give the PS5 your keyboard and mouse as its own. It asks for a user's PS5 passcode
-  when the console wants one. **Play Together** lets friends join your game as Player 2, 3 and 4
-  from a link, a QR code or a short code, in any browser or the app; **Go live** streams it to
+  when the console wants one. A **Play Room** lets friends join your game as Player 2, 3 and 4
+  from a link, a QR code, a short code or the Rooms list, in any browser, the app, or on their own
+  PS5 with **PS5Upload Play**, with chat and voice; **Go live** streams it to
   YouTube, Twitch, Kick or Facebook. Local scripts can watch and play too ([AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md)).
 - **Save Data**: automatic and on-demand backups, restore, copy a save to another user on the
   same PS5, or as a file for a friend or another PS5; PS1, PS2 and Switch emulator saves too.
@@ -220,8 +221,8 @@ own server instead of Tailscale's, see
   waiting. Uploads, files, games and Remote Play work.
 - A large upload (over 1 GB) on a relayed path or on phone data asks first. Play runs only as well
   as your home connection's upload speed allows; on a relayed path the app offers 720p.
-- **Friends without a Tailscale account** don't need one: send them an internet invite (see "Can a
-  friend who isn't at my place play together").
+- **Friends without a Tailscale account** don't need one: a Play Room's invite link works over the
+  internet too (see "Can a friend who isn't at my place play together").
 - **The web UI:** see the next question.
 
 **Q: How do I select several files on a phone?**
@@ -259,35 +260,43 @@ still reaches the PS5 on the home network, so uploads, installs and the console'
 from there. Play in the browser still needs an `https://` page.
 
 **Q: How do I play with a friend as Player 2?**
-With **Play Together** (11.0.0). Your friend uses their own phone, tablet or computer, on your
-network or anywhere else with an internet invite (11.6.0), and plays your PS5 as Player 2, 3 or 4
-while you play as Player 1.
+With a **Play Room** (13.0.0; before that it was called Play Together). Your friend uses their own
+phone, tablet, computer or TV, or their own PS5 with **PS5Upload Play**, on your network or
+anywhere else, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
 
-1. **Invite.** Start Play, then press the people button on the picture's bar (on a phone:
-   **⋯ › Play Together**). Your friend scans the QR code with their phone's camera, or you send
-   the link (Copy, or Share on a phone). With the PS5Upload app they can instead type the short
-   code (like `K7M-2QX`) in **Play › Join a friend**, or pick you from **Playing nearby**. No app?
-   The link opens a page in any browser. A browser first asks **Open in the PS5Upload app?**
-   (11.0.1): with the app on that device, it opens there with the invite filled in; otherwise
-   **Continue in browser**. Tick **Remember my choice** to skip the question next time.
-2. **Allow.** Their name pops up over your picture: press **Allow**.
-3. **On the TV**, your friend presses **PS** on their controller and picks **Quick Play** (or
-   their own user) under "Who's using this controller?".
+1. **Make your room.** Open **Play › Play Room › Your room**: pick a name, the size (2, 3 or 4
+   players), who can see it and an optional password, then press **Create a Play Room**. It starts
+   Remote Play and opens your room. While you play, **Play Room** on the picture's bar (on a phone:
+   **⋯ › Play Room**) opens it again.
+2. **Invite.** Your friend scans the QR code with their phone's camera, or you send the link
+   (**Copy link**, or **Share** on a phone). The same link works on your Wi-Fi and over the
+   internet. With the PS5Upload app they can instead type the short code (like `K7M-2QX`) in
+   **Play › Play Room › Join with a code/link**, pick you under **Playing nearby**, or find your
+   room under **Rooms** when it is Friends or Public. No app? The link opens a page in any browser.
+   A browser first asks **Open in the PS5Upload app?**: with the app on that device, it opens
+   there with the invite filled in; otherwise **Continue in browser**.
+3. **Let in.** Their name pops up over your picture: press **Let in** (or **Say no**). People you've
+   played with get in without asking, unless you turn that off (see "Who can find my Play Room, and
+   who gets in?").
+4. **On the TV**, your friend presses **PS** on their controller and picks **Quick Play** (or
+   their own user) under "Who's using this controller?", unless you chose a profile for them (see
+   "Which PS5 profile does a friend play as?").
 
 They play with a controller connected to their device, the keyboard, or the on-screen controls on
 a phone, and hear the game. **Block PS & Create for friends** is on by default, so a stray press
-can't pull everyone out of the game; you can turn it off in the panel (they can
-still press PS once in their first minute to pick a user on the TV). Up to three
-friends at once. Each friend has a card in the panel with what they're doing and their delay, and
-**Remove** takes them out. **New link** makes a fresh invite and the old one stops working. If a
-friend's delay shows red, a lower Play quality (720p or 30 fps) makes it smoother for everyone.
-**Playing from somewhere else?** See "Can a friend who isn't at my place play together".
+can't pull everyone out of the game; you can turn it off in the room (they can still press PS once
+when they join to pick a user on the TV). Each friend has a card in the room with what they're
+doing, how they connect and their delay; its menu moves, mutes or removes them (see "What can I do
+as the host of a Play Room?"). **New link** makes a fresh invite and the old one stops working. If
+a friend's connection can't keep up, the room offers to lower the stream for everyone (**Lower to …
+Mbps**), or take 720p or 30 fps in Play › Settings › Picture.
 
-**Q: What does my friend see and press in Play Together?**
-Your friend types a name and waits while you press **Allow**. A **You are Player 2** chip (in the
-controller's light-bar colour) shows which player they are, and a note reminds them to press
-**PS** and pick **Quick Play** on the TV. On the PS5's home screen only you, the host, control
-the menus; in games their controller plays.
+**Q: What does my friend see and press in a Play Room?**
+Your friend types a name (and the password, if the room has one and they didn't come from your
+invite) and waits while you press **Let in**. A **You are Player 2** chip (in the controller's
+light-bar colour) shows which player they are, and a note reminds them to press **PS** and pick
+**Quick Play** on the TV. On the PS5's home screen only you, the host, control the menus; in games
+their controller plays.
 
 - **Controls.** A controller connected to their device (USB or Bluetooth: press any button), or
   the keyboard (11.0.2): **WASD** moves, the **arrows** are the D-pad, **Enter** ✕,
@@ -300,76 +309,90 @@ the menus; in games their controller plays.
 - **Sound.** The first tap starts the sound (browsers need one; **Tap for sound** says so).
   **Mute** turns the game's sound off for them and is remembered on that device. If a browser
   can't play the sound at all, the page says **No sound in this browser**.
+- **Chat and voice** (13.0.0), when the room has them: see "Can we chat and talk in a Play Room?".
 - **Leave** is always one tap away, also while it waits or reconnects.
 
-In the PS5Upload app the same happens in **Play › Join a friend**: paste the link, type the short
-code, press **Scan QR** (Android and desktop; the app asks for the camera the first time), or pick a
-host under **Playing nearby**. On an iPhone, point the Camera app at the code: it opens the invite. An invite opened on a phone with the app closed lands straight on the join
-screen with your last name filled in: one tap on **Join** (11.0.3).
+In the PS5Upload app the same happens in **Play › Play Room › Join with a code/link**: paste the
+link, type the short code, press **Scan QR** (Android and desktop; the app asks for the camera the
+first time), or pick a host under **Playing nearby**. On an iPhone, point the Camera app at the
+code: it opens the invite. An invite opened on a phone with the app closed lands straight on the
+join screen with your last name filled in: one tap on **Join** (11.0.3).
 
-**Q: What happens in Play Together when the host stops, or a connection drops?**
-- **The host stops Play** (Stop, the banner or the mini player): Play Together ends with it, and
-  friends see "The host stopped playing" at once (11.0.4). If friends are playing, the host's app
-  asks before it stops. Joining a friend's game while your own Play runs, or starting Play while
-  you're in a friend's game, also asks first: one stream at a time.
+**Q: What happens in a Play Room when the host stops, or a connection drops?**
+- **The host stops Play** (Stop, the banner or the mini player): the app asks first while friends
+  are in ("… are playing on this PS5. Stop anyway?", with **Keep playing** and **Stop anyway**).
+  Stopped, friends see "The host stopped playing" at once and wait a while for the host to start
+  again. Joining a friend's game while your own Play runs, or starting Play while you're in a
+  friend's game, also asks first: one stream at a time.
+- **The host's phone sleeps or the host closes the app:** friends keep playing, for up to 4 hours
+  without the host's device (13.0.0; see "Do friends keep playing if I close the app, or my phone sleeps?").
 - **The host's stream drops by itself** (Wi-Fi, the console): friends wait for it to come back,
-  with a countdown and **Leave**.
+  with a countdown and **Leave**. When the stream restarts, friends keep their controllers and
+  nobody picks a user again (13.0.0).
 - **A friend's connection drops:** within half a second their controller lets go of every button
   and stick, and their place is kept for a minute. Coming back in time, they are the same player,
   still signed in on the TV, without asking again. After that, **Ask to join again**.
-- **The host closes Play Together or removes a friend:** the friend is told, and can ask again.
+- **The host closes the room or removes a friend:** the friend is told ("… closed the room", "…
+  removed you from the room"), and can ask again unless the host also blocked them.
 
 **Q: Can I play on my TV with the console's DualSense, and use the app only to invite friends?**
-Yes, with two PS5 users. In Play Together, switch off **Picture on this device** (11.1.0): the app
-keeps the invite, and shows no picture and plays no sound on this device. Then press PS on the
-console's DualSense and pick a **different user** from the one you paired with PS5Upload. That user
-is you on the TV. If there's only one user on the console, add one first.
+Yes, with two PS5 users. In your Play Room, switch off **Picture on this device** (11.1.0): the app
+keeps the room, and shows no picture, plays no sound and takes no controller on this device. Then
+press PS on the console's DualSense and pick a **different user** from the one you paired with
+PS5Upload. That user is you on the TV. If there's only one user on the console, add one first.
 - **Picking the stream's own user ends the stream for everyone**, friends included. The PS5 does
   this, and the app can't change it.
-- **Keep the app open.** Friends' picture comes through the stream. It keeps running when the window
-  is hidden, and with the picture off it stays up while friends are in or an invite is out, even if
-  the app is closed for a while.
-- **That leaves room for 2 friends.** A PS5 takes 4 controllers, and the stream's user holds one
-  even with nobody on it. A third friend sees "No more controllers can be connected" on the TV.
+- **Keep the app open, or running in the background.** Friends' picture comes through the stream.
+  It keeps running when the window is hidden, and with the picture off it stays up while friends
+  are in or an invite is out, even if the app is closed for a while.
+- **Room for 3 friends.** A PS5 takes 4 controllers, and the stream's user holds one. With
+  **Friends may get Player 1 (when this device shows no picture)** on, the first friend uses the
+  stream's own controller and plays as its user, with no user to pick, and 2 more get a controller
+  of their own. With it off, every friend gets their own controller, which leaves room for 2; a
+  third sees "No more controllers can be connected" on the TV. People from the public Rooms list
+  never get your PS5 user.
 - **Some games count the stream's user as a player too**, even though it presses nothing, so a
-  two-player game may have no place left for a friend. Friends' controllers are checked the same way
-  as always (they pick **Quick Play** on the TV), but this setup hasn't been tried with every game.
+  two-player game may have no place left for a friend. This setup hasn't been tried with every
+  game.
 
-**Q: Can a friend join Play Together from a TV?**
+**Q: Can a friend join a Play Room from a TV?**
 Yes (12.6.30). The invite's join page works in a TV's browser with nothing but the remote: the
 arrows move between buttons, OK presses one, and Back closes what is open, then shows the
 buttons, then leaves full screen. On Android TV or Google TV, the Android app's first screen has
-**Join Play Together**, and the game opens in full screen. During the game the remote's arrows
-and OK play the game.
+**Join a Play Room** ("Got a link or a code from a friend? Play their PS5 on this TV."), and the
+game opens in full screen. During the game the remote's arrows and OK play the game. A friend with
+their own PS5 can join on its TV with PS5Upload Play (see "PS5Upload Play (on a friend's PS5)").
 
 **Q: Can a friend who isn't at my place play together, or use a phone controller?**
-Play Together, yes: with an **internet invite** (11.6.0). Your friend needs nothing installed;
-the link opens in any browser, a phone on mobile data included.
-
-1. In Play Together, choose **Internet** above the QR code (instead of **This network**).
-2. Send your friend that link, or let them scan the QR code.
-3. As at home: they type a name, you press **Allow**, and they pick **Quick Play** on the TV.
+A Play Room, yes: the invite link works anywhere (12.1.0). Your friend needs nothing installed; the
+link opens in any browser, a phone on mobile data included. Send it, or let them scan the QR code;
+then, as at home, they type a name, you press **Let in**, and they pick **Quick Play** on the TV.
+The link takes the shortest way by itself: your Wi-Fi when they're on it, Tailscale when you both
+use the Tailscale app, or the internet.
 
 A small server (hub.phantomptr.com) only introduces the two of you. The game's picture, sound and
-controls go straight between your computer and your friend's browser, never through it, and the
+controls go straight between your computer and your friend's device, never through it, and the
 link carries your app's fingerprint, so it can only ever reach you. Most home routers work as they
-are; where yours allows it, the app opens a port on it for the session (UPnP / NAT-PMP / PCP).
-Some strict networks (some offices, schools and mobile carriers) can't connect directly: the panel
-then says **Couldn't connect from their network**. How smooth it is depends on both connections'
-upload speed (take 720p if it stutters). **Settings › Play Together** has the server address and
-these options, and **Allow internet invites** turns them off.
+are; where yours allows it, the app opens a port on it while an invite is open (UPnP / NAT-PMP /
+PCP). Some strict
+networks (some offices, schools and mobile carriers) can't connect directly, and nothing relays the
+game: the room then says **Couldn't connect from their network**, and Tailscale is the way that
+always gets through. How smooth it is depends on both connections' upload speed (take 720p if it
+stutters). **Settings › App › Play Room** has the hub address, the router port and the other
+options; **Invites work: Only on my Wi-Fi** keeps links to your Wi-Fi (and your Tailscale network).
 
 A phone controller and a watch link work from somewhere else too (12.0.0): choose **Internet**
-for them the same way. Over the internet a watcher only watches and can't be handed the controller.
+for them. Over the internet a watcher only watches and can't be handed the controller.
 We don't support forwarding the engine's port on your router: its pages use plain `http`.
 
 **Q: Which PS5 profile does a friend play as?**
-The one you choose (12.0.0). In **Settings › Play Together › Guests play as**, pick a profile for
-Player 2, 3 and 4, or **Let the TV ask** (the TV then asks the friend who they are, as before).
-Make profiles such as Guest 1 on the PS5 and sign them in there first: only profiles signed in on
-the PS5 are listed. Your own profile asks you to confirm, since a friend playing as it uses your
-saves and trophies. When you allow a friend, the request says which profile they'll play as. If
-the profile can't be used when they join (signed out, or an older helper), the TV asks them instead.
+The one you choose (12.0.0). In **Settings › This PS5 › Play Room › Guests play as**, pick a
+profile for Player 2, 3 and 4, or **Let the TV ask** (the TV then asks the friend who they are, as
+before). Make profiles such as Guest 1 on the PS5 and sign them in there first: only profiles
+signed in on the PS5 are listed. Your own profile asks you to confirm, since a friend playing as it
+uses your saves and trophies. When a friend asks to join, the request says which profile they'll
+play as. If the profile can't be used when they join (signed out, or an older helper), the TV asks
+them instead.
 
 **Q: A friend's controller has its buttons mixed up.**
 On the invite page, **Check your controller** lights up what they press (12.0.0), and a
@@ -380,20 +403,22 @@ says how to switch.
 **Q: Can a friend join over WireGuard (or another VPN) instead?**
 Yes (11.0.1). Your friend only needs to reach the computer that plays, on TCP 19113. If their VPN
 puts them on your home network, the usual link works. If they reach the computer on its own VPN
-address (a WireGuard server on the computer, like `10.8.0.1`), Play Together and the phone
-controller panel list that address too: pick it under "This computer is on more than one
-network". Let incoming TCP 19113 through the computer's firewall on the VPN's network (Windows
-often counts a WireGuard tunnel as a Public network and blocks it).
+address (a WireGuard server on the computer, like `10.8.0.1`), the link for **Invites work:
+Anywhere** finds that way by itself; with **Only on my Wi-Fi** (Settings › App › Play Room), the
+room lists that address too, and so does the phone controller panel: pick it under "This computer
+is on more than one network". Let incoming TCP 19113 through the
+computer's firewall on the VPN's network (Windows often counts a WireGuard tunnel as a Public
+network and blocks it).
 
 **Q: A link asks "Open in the PS5Upload app?". What should I pick?**
-A Play Together invite, a phone controller link or a watch link opened in a browser asks first
-(11.0.1), the way Slack and Zoom links do. **Open in the app** opens the PS5Upload app on that
-device (Windows, macOS, Linux, Android or iPhone) through a `ps5upload://` link: an invite opens
-in **Play › Join a friend** ready to join, a controller link makes the device that computer's
-controller. **Continue in browser** plays in the page, no app needed. Tick **Remember my choice
-on this device** to skip the question next time. If **Open in the app** does nothing, the app
-isn't on that device: press **Continue in browser** (that also forgets a remembered "app").
-A remembered "browser" lasts until you clear that page's site data in the browser.
+A Play Room invite, a phone controller link or a watch link opened in a browser asks first
+(11.0.1). **Open in the app** opens the PS5Upload app on that device (Windows, macOS, Linux,
+Android or iPhone) through a `ps5upload://` link: an invite opens in **Play › Play Room › Join with
+a code/link** ready to join, a controller link makes the device that computer's controller.
+**Continue in browser** plays in the page, no app needed. Tick **Remember my choice on this
+device** to skip the question next time. If **Open in the app** does nothing, the app isn't on that
+device: press **Continue in browser** (that also forgets a remembered "app"). A remembered
+"browser" lasts until you clear that page's site data in the browser.
 
 **Q: What can I share with a friend, and what can't I?**
 Open a game's page (or **Share…** on a Collection item) and press **Share**. You can send:
@@ -483,7 +508,7 @@ Things to know:
 - **Each site's limits.** Twitch takes H.264 at up to about 6 Mbps, Kick H.264 up to 8 Mbps,
   Facebook H.264 up to about 9 Mbps; YouTube also takes HEVC. When a site needs something
   else, the panel says so and offers to restart Play in H.264 at the right bitrate (the game
-  keeps running; the picture comes back in about 15 s, friends in Play Together stay in, and Play
+  keeps running; the picture comes back in about 15 s, friends in your Play Room stay in, and Play
   keeps those settings until you change them in Settings › Picture). HDR can't be streamed.
 - **YouTube** turns live streaming on for a channel the first time you ask, which can take up to
   24 hours. To try it privately, set the stream to Unlisted or Private in YouTube Studio.
@@ -793,6 +818,29 @@ saved states (`data/states`) as user 1, under its own title ID. They are in the 
 are kept in: its own folder, wherever it is installed, or `/data/psswanstation` or
 `PSSwanStation` at the top of a USB drive when "Where my files are kept" says so. **Saves** lists
 them under **PS1 emulator (PSSwanStation)**, with the same **Back up now** and **Restore**.
+
+**Q: How does save sync between two PS5s work?**
+It keeps a user's saves the same on two PS5s (13.0.0). In **Saves › Save sync**, press **Keep in
+step with another PS5**, pick the user on this PS5, the other PS5 and the user there, then turn on
+**Keep this game's save in step** for a game. After you close the game on one PS5, its save is
+copied to the other, as long as the game isn't running there and that save hasn't changed since
+the last sync.
+
+- **Both changed?** Both are backed up and you pick which to keep (**Conflict: choose**); nothing is
+  overwritten without asking. The save that gets replaced is always backed up first.
+- **Off or resting:** that PS5 gets the save when it's back. It's woken only if you turn on **Wake a
+  resting PS5 to take a waiting save** (needs the PS5 paired for Remote Play).
+- Each game shows **In step**, **Waiting**, **Conflict** or **Can't sync** (with the reason), and has
+  **Sync now**.
+- **The other user has no save of the game yet:** **Copy to … (… has no save yet)** copies it there
+  once and makes it theirs; nothing there is replaced. After that it's kept in step like the others.
+  It keeps a copy in your save backups, so choose a backup folder or server in Automatic backups
+  first. When it can't (the helper there is too old, or that user has never saved a PS5 game on
+  that console), it says what to do.
+- **PS4 saves** can't be kept in step: they only go back to the same user on the same PS5.
+
+The PS5's own page (Minion › Saves) lists the games kept in step for that user and where each one
+stands; changes are made in the app.
 
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough
@@ -1659,6 +1707,32 @@ and every transfer afterwards goes over the direct cable.
 - **Resuming still works.** If you start an upload over the cable and switch to Wi-Fi (a new
   PS5 IP), start the same upload again to the new IP and it continues from what is on the console.
 
+### Faster than gigabit: a USB network adapter on the PS5 (experimental)
+
+**Q: Can I use a USB 2.5G, 5G or 10G network adapter on the PS5 for faster transfers?**
+
+Yes, as an experiment (13.0.0). The adapter needs a Realtek RTL8156B (2.5G), RTL8157 (5G) or RTL8159 (10G)
+chip with Realtek's own USB ID (`0bda:8156`, `0bda:8157`, `0bda:815a`); the first RTL8156 (without
+the B) and gigabit RTL8153 adapters are not supported. Plug it into the PS5, connect it to the same
+network as your computer, and leave the PS5's own network as it is.
+
+- The helper starts the adapter by itself and gets it an address from your router (or a fixed one
+  you set in **Settings › This PS5 › USB Ethernet adapter**, for a switch with no router).
+- Transfers from your computer use the adapter while your computer can reach it, and the PS5's own
+  network otherwise. A transfer shows which: "Via USB 2.5G adapter" or "Via console network".
+- The same Settings card shows the chip, the link speed, the address, the data it carried and
+  errors; Minion's Settings shows it too, with an on/off switch.
+- The PS5 can't use the adapter for anything else (internet, PSN, installs it downloads itself):
+  only PS5Upload's transfers and Minion go through it.
+- Expect less than the link speed: the adapter is driven by a program on the PS5, not by the
+  system, so 10G gives about 3 Gbit/s at best.
+- If it says the adapter didn't start, unplug it and plug it back in. It pauses while the PS5 rests
+  and starts again after.
+- **To turn it off**, switch off **Use a USB Ethernet adapter** in Settings › This PS5 › USB
+  Ethernet adapter (or in Minion's Settings), and unplug the adapter. Transfers then use the
+  console network as before. It is experimental: it hasn't been tried with every adapter or PS5,
+  so use it at your own risk.
+
 ---
 
 # Files and games
@@ -1889,6 +1963,22 @@ No. The archive is decompressed and sent at the same time, so you only need room
 you already have. The `PS5UPLOAD_ARCHIVE_STAGE_MB` and `PS5UPLOAD_ZIP_RAM_THRESHOLD_MB` variables
 are accepted for old setups but do nothing.
 
+**Q: Can extracting an archive on the PS5 free its space as it goes?**
+Yes (13.0.0). When you extract an archive that is on the PS5 (**Extract** in Files, in the app or
+in Minion), tick **Delete the archive as it's unpacked**: the game then needs about its own size of
+free space instead of the archive's and its own.
+
+- A split archive (`.part1.rar`, `.7z.001`, `.zip.001`…) loses each part as soon as everything in
+  it is unpacked; the dialog says how much less space that needs.
+- A single-file or solid archive can't be freed part by part: it is deleted once everything is out,
+  so until then it needs room for both.
+- The whole archive is read once first, so a damaged one is found before anything is deleted.
+- It is off unless you turn it on, since the archive can't be used again. If it stops part way,
+  everything unpacked so far is kept.
+
+Workshop's **Free the archive's space while it unpacks** does the same for a conversion, shows how
+much less space it needs, and keeps a solid multi-part RAR whole until it's all unpacked.
+
 **Q: Why does a game's page list it more than once under On the PS5's drives?**
 The Games grid shows each game once, by title ID. Its page lists every folder and image on the
 PS5's drives it is in, one row each: a game inside a mounted image shows both the image and the
@@ -1934,6 +2024,17 @@ payload playlists, cheat downloads and the app's own update. Click it for a pane
 screen** to go to the screen it belongs to, or **See all activity** for **Activity & Logs →
 Tasks**, whose **History** and **Stats** views cover the last 100 operations. **Cancel copy**
 stops a console copy and leaves your original alone.
+
+**Q: How fast is a copy going, and what does "Stalled" mean?**
+Since 13.0.0, transfers show the current speed (MiB/s), the time elapsed and about how long is
+left, next to the percentage. In the app that covers uploads and installs as before, and also a
+download through Files or Games, a library move, a link download, a decompress or extract, an
+archive unpack, the console backup, a restore to the home screen, the app update and the speed
+test. Minion on the PS5 shows the same for a copy from a network share, a copy or move on the
+console, an extract, an install, an upload from your phone, a check and a conversion. A task
+started on the console counts its time from when it started there. **Stalled** (in the Activity
+panel and in Minion) means nothing has moved for 15 seconds: the task is still there, just not
+moving. If it stays that way, check the network or the drive it reads from.
 
 **Q: What does a stopped copy or Replace leave on the console?**
 A folder named after the destination with `.ava-part` on the end, and possibly an empty folder under
@@ -2305,7 +2406,7 @@ drives. Add the folder (or folders) that holds your games under **Games → Fold
 inside, up to six folders deep, is found by what it is (packages, game folders, `.exfat` /
 `.ffpkg` / `.ffpfs` / `.ffpfsc` images, `.zip` / `.7z` / `.rar` archives), however the folders
 are named. Each item is read from the file itself, so nothing needs renaming first. A drive, an
-external disk or a mounted network share all work. It is PS Game Library, built into ps5upload.
+external disk or a mounted network share all work.
 
 **Q: Can the Collection read my NAS without mounting it?**
 Yes. Save the server under **Shared Folders** (SMB, FTP, FTPS, SFTP or WebDAV), then in **Games →
@@ -3067,7 +3168,7 @@ a game's cheats are applied, and one for each cheat that couldn't be applied or 
 changed.
 
 **Q: What is Play? Where did Remote Play go?**
-From 10.0.0, Remote Play is called **Play** and sits right under Home in the sidebar (and in the phone tab bar). It is the same thing: your PS5's screen streamed into the app, played with a controller, the keyboard or touch, and it wakes the console from rest mode on its own. Home shows a **Play** card (Play, or Continue the last game); a game's page has **Play** (start the game and stream it here) next to **Launch on PS5** (start it on the TV only); search has "Play {game}". Everything else in the app works without it, and the Home card can be hidden (Play › Set up brings it back). "Remote Play" is still the name of Sony's feature underneath, so the console's own setting and Sony's PS Remote Play app keep that name.
+From 10.0.0, Remote Play is called **Play** and sits right under Home in the sidebar (and in the phone tab bar). It is the same thing: your PS5's screen streamed into the app, played with a controller, the keyboard or touch, and it wakes the console from rest mode on its own. Home shows a **Play** card (Play, or Continue the last game); a game's page has **Play** (start the game and stream it here) next to **Launch on PS5** (start it on the TV only); search has "Play {game}". Everything else in the app works without it, and the Home card can be hidden (Play › Set up brings it back). "Remote Play" is still the name of the console's own feature underneath, so the PS5's setting keeps that name.
 
 **Q: How do I set Play up? (np-fake-signin, pairing, and the rest)**
 Open **Play › Set up** (or Set up Play on Home). It is a checklist that reads the console every few seconds and ticks each step by itself: connect to the PS5 (the helper running), sign in to a user, give that user an account ID (Accounts), sign the account in offline with np-fake-signin (run from the checklist; restart the PS5 afterwards and the step ticks once it is back), turn Remote Play on (one button, and allow it for the user on newer firmware), let the PS5 be woken from rest mode (only the console shows these settings, so you tick that one yourself), pair this app (one button), and play. The open step is always the next one to do.
@@ -3125,6 +3226,13 @@ still looks wrong, set Play › Settings › **Video decoding** to **Software** 
 
 **Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Play?**
 Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controls › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. A stick that moves by itself (drift) gets its own **Stick dead zones** there: let go of it, see how far out it rests, and set its zone a little past that. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
+
+**Q: A stick moves by itself (drift). Can I give it a dead zone?**
+Yes, per controller (13.0.0): **Play › Settings › Controls › Controllers › Stick dead zones**. Let
+go of the stick, see how far out it rests (the readout shows it live), and set its zone a little
+past that; pushed all the way it still reaches the end. Under 8% is the usual small zone, and
+**Reset** puts it back. It is saved for that controller and applies in Remote Play, Play Rooms and
+the phone pad.
 
 **Q: Linux: my DualSense has no touchpad, motion or adaptive triggers.**
 The app needs to open the controller, and on Linux `/dev/hidraw*` is root's unless a udev rule says
@@ -3190,7 +3298,7 @@ never reach the agent. MCP.md lists those tools.
 
 **Q: What can't the API or an agent do?**
 Schedules, play time and the notification inbox live in the app on each device, and a phone as a
-controller and a friend joining Play Together are for the person holding that device. API.md lists what
+controller and a friend joining a Play Room are for the person holding that device. API.md lists what
 to use instead.
 
 **Q: Can I install a package while I play?**
@@ -3274,15 +3382,15 @@ Experimental, from 9.5.0. First turn on **Microphone (experimental)** in Play �
 Then press the **Microphone** button on the picture's bar (desktop and full screen), or **Mic** in
 the **⋯** menu (phones). It's off until you press it; the first press asks
 for permission to use the mic. While it's on, the icon has a red dot and your voice is sent to the
-PS5 the way chiaki-ng sends it, meant for party and game chat. Press it again to turn it
+PS5 for party and game chat. Press it again to turn it
 off: the mic is released and the console's mic is muted. It also turns off when the stream stops
 or moves to another window. Echo cancellation and noise suppression are on, so headphones aren't
 required, but they help. The button is missing where the browser can't encode the sound the way
 the PS5 expects (it needs WebCodecs audio encoding with Opus: current Chrome and Edge have it;
 other browsers and the Linux desktop app may not). Nothing about the mic is saved.
 
-It's experimental: it follows chiaki-ng's microphone code byte for byte (the same 48 kHz Opus
-frames, packets and encryption). If your friends can't hear you, or the stream misbehaves while the
+It's experimental: the sound goes to the PS5 as 48 kHz Opus over the stream's own encrypted
+connection. If your friends can't hear you, or the stream misbehaves while the
 mic is on, turn it off and tell us in a GitHub issue. The desktop apps ask the system for the mic (on
 macOS: System Settings › Privacy & Security › Microphone; on Android and iPhone, the usual
 permission prompt). If you said no once, allow it there and press the button again.
@@ -3331,8 +3439,8 @@ can (see "How do I set Play up?"):
 6. **Pair the app**: the Pair button in Play › Set up (or Connection › Wake & sign in › Set up).
    One click; the keys stay on this computer. Do it again after resetting the console or
    changing the user. If it fails, the message gives the console's reason, and **Pair with the
-   PIN shown on the PS5** pairs the way PS Remote Play does: on the PS5 open Settings › System ›
-   Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
+   PIN shown on the PS5** pairs with the PS5's own link code instead: on the PS5 open Settings ›
+   System › Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
    works on any firmware. If it says 80108b03, the step is on the console: open Settings › System ›
    Remote Play and turn on Enable Remote Play (greyed out: this PS5 user's account usually isn't
    activated, so activate it in Accounts › Users; still off, or won't stay on: run the offline sign-in
@@ -3345,8 +3453,8 @@ can (see "How do I set Play up?"):
 
 If the picture stays black or stutters, use a wired connection or 5 GHz Wi-Fi, try 720p or 30 fps,
 and let the app through this computer's firewall on the local network (TCP and UDP 9295–9304). A
-browser needs WebCodecs (a current Chrome, Edge or Safari). To use Sony's PS Remote Play app or
-chiaki-ng instead, **Generate PIN** under **Accounts** registers a device without the PS5's menus.
+browser needs WebCodecs (a current Chrome, Edge or Safari). To link another Remote Play app to the
+PS5, **Generate PIN** under **Accounts** registers it without the PS5's menus.
 Play › Set up lists what to check if it still does not work.
 
 Play shows the console selected in the app. If another console is streaming, it keeps
@@ -3481,23 +3589,260 @@ that PS5.
 
 ---
 
+## Play Rooms: play with friends
+
+**Q: What is a Play Room?**
+Your PS5 game, opened to friends (13.0.0; it used to be called Play Together). You stream your PS5
+with Play, and friends join as Player 2, 3 and 4 from a phone, a computer, a TV or their own PS5,
+each with their own controller. Open it in **Play › Play Room**, which has three tabs: **Your
+room** (make and run yours), **Rooms** (find one to join) and **Join with a code/link**. "How do I
+play with a friend as Player 2?" walks through a first game.
+
+Making a room asks for a **name** (3 to 32 characters), the **size** (2, 3 or 4 players, you
+included), **who can see it**, an optional **password**, and under **More**: approvals, chat,
+voice, language, region, watching, and **Show on this network** (PS5s and phones on your Wi-Fi can
+ask without a code). The game is picked up from what your PS5 is playing. You can change all of it
+later in **Room settings** while the room is open. Your invite link and code keep working whatever
+you change.
+
+**Q: Who can find my Play Room, and who gets in?**
+**Who can see it** (13.0.0):
+
+- **Private**: only people you invite (your link, QR code or short code).
+- **Friends**: people you've played with see that it's open (in their Rooms list and in PS5Upload
+  Play).
+- **Public**: anyone using PS5Upload can find it in **Rooms** and ask to join. It asks you to
+  confirm first, and needs **Invites work: Anywhere** (Settings › App › Play Room). People from the
+  public list never get your PS5 user, and PS & Create stay off for them.
+
+Changing who can see it never removes anyone. Whoever finds it, **you still decide who plays**:
+each ask shows over your picture and in the room with **Let in** and **Say no** (and **Let all from
+that PS5 in** for several people on one PS5). Under **Ask me before anyone joins, except:**, people
+you've played with get in without asking (on unless you turn it off), and the password can let
+people in too if you tick it.
+
+**The password** (optional, 4 or more characters) is for people who find your room; people you
+invite never need it. After five wrong tries a person waits 10 minutes, and the room tells you
+when many wrong passwords come in, so you can change it. **What people see before joining** is
+yours to choose too: player names, their connection quality, the stream quality and how long you've
+been playing. Never anyone's address.
+
+**Q: What can I do as the host of a Play Room?**
+Each player's menu in your room (13.0.0):
+
+- **Move to Player 2, 3 or 4**, and **Give Player 1** / **Take Player 1 back**.
+- **Mute voice** and **Mute chat** for that person.
+- **Remove…**: **Remove (they can ask again)**, **Remove, and don't let them back in this room**,
+  or **Remove, and block on this computer**. **Room settings › Blocked** lists who is blocked, with
+  **Unblock**, and **Recent players** has **Forget**.
+
+For the whole room: **Lock room** (no one new can ask; **Unlock** opens it again), **Mute all**,
+**Ready check** (everyone answers Ready?), **New link** (the old invite stops working) and **Close
+room**, which asks first while friends are in ("Close your room? Sam leaves the game."). Lowering
+the size below the people already in asks you to remove someone first.
+
+**Q: Two friends have the same name. What happens?**
+Names are unique in a room (13.0.0). The second "Sam" is offered "Sam (2)" (**Join as Sam (2)**),
+or can pick another name. A name is 1 to 24 characters, and room and player names can't hold links
+or long numbers.
+
+**Q: How do I find a room to join?**
+In **Rooms** (13.0.0), in three places with the same rooms:
+
+- **The app:** **Play › Play Room › Rooms**: **Your friends' rooms** (people you've played with),
+  **Nearby** (games on your network) and **Public rooms**.
+- **The website's Rooms page** (`https://ps5upload.phantomptr.com/rooms/`): pick a room, then
+  **Join in this browser**, **Open in PS5Upload**, or **Play on my PS5** (see "What's the easiest
+  way for a friend to join?").
+- **PS5Upload Play** on a PS5: **Join a friend's game** (see "How do I join a game on my TV with
+  PS5Upload Play?").
+
+Each card shows the game, the players and the room's size, a lock when it needs a password, and your
+ping to it (**about … ms** from where you both are, **last time … ms**, or **… ms measured**).
+**Details** shows who's playing, the game, the stream's quality, how long it's been going, and
+whether your connection can carry the stream; the host decides what it shows. Sort by **Best for
+you**, **Lowest latency**, **Game**, **Most players**, **Has space** or **Newest**, search a game, and
+filter by **No password**, **Works with my version**, **Near me** and language. **Ask to join**
+sends your name (and the password, if needed); the host lets you in. **Hide this host** takes a
+host's rooms out of your list. A room needs PS5Upload 13.0.0 or newer on both sides, and the card
+says when one side has to update. Got an invite instead? **Join with a code/link**.
+
+**Q: Can we chat and talk in a Play Room?**
+Yes (13.0.0), when the host allows it. **Chat**: ready-made quick messages (Ready?, GG, One more?,
+Brb…) and short text, 140 characters at most. **Voice**: push-to-talk, or an open mic where the
+host allows it. Your mic is off until you turn it on.
+
+- **Push-to-talk:** in the app and the join page, hold **Hold to talk** or the **`** key. In
+  PS5Upload Play, hold **Create** (the DualSense's mic works). **Use open mic** appears when the
+  room allows it; use headphones so others don't hear the game twice.
+- **The host** sets **Chat** (Off, Quick messages only, On) and **Voice** (Off, Push-to-talk only,
+  Open mic allowed), can start new players muted, and mutes anyone's voice or chat, or all at once.
+- **For you only:** each person's volume and **Mute**, and **Hide** for their messages. **Tell the
+  host** flags someone to the host.
+- **Accept the rules first.** Before your first chat, voice or public room, each app shows **Play
+  Rooms: you're responsible for what you say and do**; press **I understand** (or **Not now**).
+  **Rules & responsibility** shows it again.
+- In a browser, voice needs the secure (`https://`) invite link; on a plain home-network link the
+  page says "To talk too, open the secure invite link." If the connection gets tight, voice pauses
+  so the game keeps going.
+
+Chat and voice go only between the people in the room: nothing goes through our server, and nothing
+is kept.
+
+**Q: What do Excellent, Good, Playable and Poor mean? And Home network, Tailscale, Internet?**
+Each player's connection has a word (13.0.0), the same in the app, the join page and PS5Upload Play:
+
+| Word | Round trip up to |
+|---|---|
+| **Excellent** | 20 ms |
+| **Good** | 40 ms |
+| **Playable** | 80 ms |
+| **Poor** | more than that |
+
+How steady the connection is, how much it loses and whether it carries the stream count too, and a
+player who keeps falling behind is marked lower. The way they play is **Home network** (your
+Wi-Fi), **Tailscale** (when you both use the Tailscale app) or **Internet**. The shortest way wins
+unless another is a tier better: a Poor home network (a far Wi-Fi extender) loses to an Excellent
+Tailscale. PS5Upload Play keeps the other ways as backups and changes way during the game when the
+one in use stops answering or another stays clearly better ("Now playing over Tailscale"), keeping
+your place. The host sees each player's way, word and delay, for example "Home network · Good ·
+12 ms". Over the internet nothing relays the game: when two networks can't reach each other, it
+says **Couldn't connect from their network**.
+
+**Q: What's the easiest way for a friend to join?**
+Most ways need no typing (13.0.0):
+
+- **Nearby:** on your Wi-Fi, your room shows on its own: in the app under **Playing nearby** and
+  **Rooms › Nearby**, and on PS5Upload Play's home screen as **Join …'s game** (one press). Room
+  settings › **Show on this network** turns it off.
+- **Play again:** someone who joined you from PS5Upload Play before sees **Play again with …**;
+  you're still asked.
+- **Friends' rooms:** with your room set to Friends, people you've played with see "…'s room is
+  open".
+- **The phone and the TV ("Play on my PS5"):** PS5Upload Play's home screen shows a QR code. Your
+  friend scans it with their phone, opens your invite link on that phone, and taps **Play on my
+  PS5**: the PS5 starts joining by itself. The order doesn't matter.
+- **Send it to their PS5:** after a game, your room lists **Friends' PS5s**; **Send invite** puts
+  "… invites you to play" on their TV while PS5Upload Play is open there.
+- **The short code** (6 characters, like `K7M-2QX`) and the link still work everywhere.
+
+**Q: Do friends keep playing if I close the app, or my phone sleeps?**
+Yes (13.0.0). The game goes on for up to 4 hours without your device, then ends. While friends are
+in, anything that would end their game asks first, with their names: stopping Remote Play, putting
+the PS5 in rest mode, restarting or turning it off, closing or switching the game, and replacing or
+stopping the helper ("… are playing on this PS5. Stop anyway?", **Keep playing** or **Stop
+anyway**). Closing the app's window offers **Keep running (recommended)** or **Quit and end their
+game**. Minion on the PS5 warns too ("Friends are playing here now…") and shows the room the
+computer hosts.
+
+---
+
+## PS5Upload Play (on a friend's PS5)
+
+**Q: What is PS5Upload Play?**
+A PS5 app (13.0.0) for playing together from the couch:
+
+- **Join a friend's game on your own PS5.** It plays a friend's Play Room full screen on your TV
+  with your own controller: picture, sound, rumble, and chat and voice with the DualSense mic.
+  Several controllers on one PS5 can each be a player.
+- **Host from your own PS5.** See who's asking (and let them in or not), who's playing, your invite
+  code and QR code, and your room's settings, without going to the computer.
+
+Your friend still streams from PS5Upload on their computer or phone; PS5Upload Play is the TV side.
+It doesn't need the PS5Upload helper on the PS5 that joins, but uses it when it runs (for Tailscale,
+and to pair by itself). Its Settings has the music, button sounds, language, **Forget remembered
+computers**, **Thanks & Support** (the same supporter list as the app), **How it works**,
+**Controls** and **Rules & responsibility** (△ there opens Terms & privacy). It is free and
+unofficial.
+
+**Q: How do I install PS5Upload Play?**
+Two ways (13.0.0):
+
+- **ProsperoStore** on the PS5.
+- **PS5Upload**, from any of: **Settings › This PS5 › PS5Upload Play**, the **Play Room** screen
+  (Play › Play Room › Your room, before you create a room), or **Minion**'s Home on the PS5.
+  **Install**, **Update**, **Open on the PS5** and **Remove** are there (Remove can keep its
+  settings, or delete them and the paired computers too).
+
+Either way can update the other's copy. If another app is changing apps on the PS5 at the same
+time, PS5Upload asks you to let it finish first.
+
+**Q: How does PS5Upload Play pair with PS5Upload?**
+Pairing is needed only to host from the PS5; joining a game needs none. Once per PS5 (13.0.0):
+
+- **With the helper running** on that PS5, it pairs by itself: no code to type.
+- **Without the helper**, choose **Pair with PS5Upload on …** in PS5Upload Play (or **Show a pairing
+  code**), then type the code from the TV in PS5Upload: **Play › Play Room**, on the
+  **PS5Upload Play** card (**Code on the TV**, **Pair**).
+  The TV counts down how long the code works, and too many wrong codes lock it for a while.
+
+A PS5 that gets a new address stays paired when PS5Upload can tell it's the same PS5 (its helper
+proves it). The same card lists the paired PS5s with **Unpair**. PS5Upload Play
+finds the computer that runs your PS5 by itself (**PS5Upload Play can find this computer** in
+Settings › App › Play Room; off, type the computer's address in PS5Upload Play instead).
+
+**Q: How do I join a game on my TV with PS5Upload Play?**
+Open it: the home screen puts the best next step first, one press each: **Back to …'s game**, **…'s
+room is open**, **… invites you to play**, **Join …'s game** (on this network) or **Play again
+with …**. Otherwise **Join a friend's game** lists **Your friends' rooms**, **Shared with you**,
+**Nearby** and **Public rooms**, then **Enter a code** and **Type an address**. L1 / R1 change the
+sort, △ opens the filters, □ opens a room's details. Then type a name (and a password, on the
+keyboard, if the room has one), wait while the host lets you in, and play.
+
+What it needs: your friend has PS5Upload open with a Play Room, and you're on the same network, on
+Tailscale (with the helper running on your PS5), or have their invite on your phone (see "What's
+the easiest way for a friend to join?"). A friend somewhere else over the internet is played
+through a PS5Upload (13.0.0 or newer) open on a computer at your home, with **PS5Upload Play can
+find this computer** on; without one, it says what to turn on.
+
+**Q: Can I host my Play Room from my PS5 with PS5Upload Play?**
+Yes, once it's paired (see "How does PS5Upload Play pair with PS5Upload?"). Start Remote Play in
+PS5Upload › Play first, then choose **Host from this PS5** (or **PS5Upload on …: host from here**).
+**My room** shows who's asking (with how they came and their connection), who's playing, your
+invite code and QR code, and the room settings (who can see it, password, size, approvals, chat,
+voice, mute all, lock, blocked, name), plus **New invite code** and **Close the Play Room**. L1 / R1
+switch to **Remote Play** and **This PS5**. Changes that open the room wider or end it ask first.
+
+**Q: Can several people on one PS5 join together?**
+Yes (13.0.0). While PS5Upload Play joins, the other controllers on that PS5 show under **Players
+on this PS5**: hold ✕ on one to come along. Each is its own player. The host sees "…'s PS5: 2
+players" and can **Let all from that PS5 in**. A room holds 4 players, the host included, so 3
+friends at most.
+
+**Q: Which buttons does PS5Upload Play use?**
+- D-pad or left stick: move. ✕ choose, ○ back, △ help, OPTIONS settings.
+- L1 / R1: tabs and sorts.
+- In a game, hold **OPTIONS + TOUCHPAD** for your friend's PS button.
+- Hold **OPTIONS + TOUCHPAD** and press △ for the **Room menu**: chat, mic, volume.
+- With your mic on, hold **Create** to talk.
+- Hold **L1 + R1 + OPTIONS + TOUCHPAD** to leave the game.
+
+△ shows the same list, and Settings › **Show the controls while playing** keeps a reminder on
+screen.
+
+---
+
 ## PS5Upload Minion (on the console)
 
 **Q: What is PS5Upload Minion?**
 A page that runs on the PS5 itself, in the PS5's web browser, for when your PC isn't nearby.
-The PS5Upload helper serves it on port 9180. It has seven sections, on the left:
+The PS5Upload helper serves it on port 9180. It has eight sections, on the left:
 
-- **Home**: the running game (with Close game), the tasks that are running (with Cancel) and
-  your drives.
+- **Home**: the running game (with Close game), the queue (13.0.0), the tasks that are running
+  (with Cancel) and your drives; the Play Room your computer hosts, a **PS5Upload Play** card
+  (install, update, open), and **Thanks & Support**.
 - **Games**, with two views. **Installed**: start, close, hide or uninstall your games, with
   each game's version, size and where it is stored. **On Drives & Shares**: press **Scan** and it
   looks through your network shares and this PS5's drives for
   games (`.pkg` files, game folders and disk images) and shows them as a cover grid with title,
-  version, type and the system software they need. Install a package from the TV (one on a
-  share is copied to the PS5 first and the copy removed afterwards), or copy a game folder or
-  image to a drive's `homebrew` folder and add it to the home screen. Results are kept on the
+  version, type and the system software they need. **Install** a package from the TV (one on a
+  share is copied to the PS5 first and the copy removed afterwards), or **Copy to the PS5** a game
+  folder or image into a drive's `homebrew` folder and add it to the home screen; both go into
+  the queue. Results are kept on the
   PS5, and a scan stops at a size limit so a huge share cannot hang it.
-- **Saves**: back up a game's save and put it back later, to the internal drive or a USB drive.
+- **Saves**: back up a game's save and put it back later, to the internal drive or a USB drive;
+  it also shows where the games you keep in step with another PS5 stand (see "How does save sync
+  between two PS5s work?").
 - **Files**: browse, copy, move, rename, delete, view, verify and search; set permissions, make
   and edit text files. **Network shares** adds an SMB share (a PC or NAS) you can browse like a
   drive and copy to and from. **Extract** unpacks a `.zip`, `.7z`, `.rar` (multi-part too) or
@@ -3506,14 +3851,18 @@ The PS5Upload helper serves it on port 9180. It has seven sections, on the left:
   `.rar`, pick the first part (`.part1.rar`, or the `.rar` of an old `.r00` set) with the others in
   the same folder. Pick a `.pkg` on internal storage or USB to see its icon,
   title, version and type and **Install** it (a USB package is copied to internal storage first,
-  then the copy removed). **Load payload** sends an `.elf` or `.bin` on the console to the
+  then the copy removed). **Add to queue** queues a package, or anything on a network share.
+  **Load payload** sends an `.elf` or `.bin` on the console to the
   payload loader, after a confirm.
+- **Convert**: make a game image or a plain folder on the PS5 itself (see "Can I convert a game
+  on the PS5 itself, without a computer?").
 - **Cheats** for the running game, including **Find cheats** to download them to the console.
 - **System**, with three views. **Fan**: temperatures, fan speed and the fan target.
   **Processes**: what runs now; stop a game or a payload (system processes cannot be stopped).
   **Clean up**: get space back from updates of removed games, leftover packages, temp files and
   leftovers of removed games (the same as the desktop's Clean Up screen).
-- **Settings**: theme, language, full screen, the tips, and the switches below.
+- **Settings**: theme, language, full screen, the tips, the USB Ethernet adapter, Thanks &
+  Support, and the switches below.
 
 **Q: How do I open it?**
 Pick the **PS5Upload Minion** tile on the PS5 home screen. You can also open
@@ -3591,6 +3940,26 @@ option is greyed out with that note.
 Converting on the console doesn't make packages (`.pkg`), read archives or write `.ffpfsc` yet:
 use Convert on the computer for those. A 30 GB game takes about 6½ minutes with every byte
 checked on a PS5 Pro.
+
+**Q: Can Minion queue several copies and installs?**
+Yes (13.0.0). In Minion, **Install** and **Copy to the PS5** in Games › On Drives & Shares, and
+**Add to queue** in Files (a package, or anything on a network share), add to one queue that runs
+one item after another, also with Minion closed. **Home** shows it: what runs now with its speed
+and time left, then what waits in order (**#2 in line**…), with **Remove from queue**, **Move to
+top**, **Pause** / **Resume** and **Clear finished**.
+
+- A failure doesn't stop the rest: it stays listed with the reason.
+- An install waits while the PS5 installs something else ("Waiting for the PS5 to finish another
+  install"), and a game's page shows only its own copy or install, so other games can be copied or
+  installed while one runs.
+- The queue is kept on the PS5. If the helper restarts during an install, the queue pauses and
+  says so: check that game on the PS5, then press **Resume**.
+- The app on your computer lists what waits in the PS5's queue too.
+
+**Q: Where is Thanks & Support on the PS5?**
+In Minion (on **Home** and in **Settings**) and in PS5Upload Play (on its home screen and in its
+Settings), since 13.0.0: the same page as the app's, with the same supporter list, Ko-fi and the
+other ways to support as QR codes to scan with your phone. See "How can I support PS5Upload?".
 
 ---
 
@@ -3808,7 +4177,7 @@ starts the container with a new identity. The Devices screen warns when this is 
 **Q: Can I run the engine standalone (without the desktop app)?**
 Yes — `ps5upload-engine` is a self-contained HTTP server on port 19113. It binds every
 interface (`0.0.0.0:19113`, so the PS5 can fetch packages from `/pkg-host/` during a Stream
-install). Apart from that, a phone controller's and a Play Together friend's pages (`/pad`, `/join`
+install). Apart from that, a phone controller's and a Play Room friend's pages (`/pad`, `/join`
 and their sockets, which check their own code or invite), it answers only loopback callers and the
 addresses in `PS5UPLOAD_ALLOW_IP`; any other source gets a `403`. The desktop app uses it under the
 hood; CLI users can hit the `/api/*` endpoints directly.
@@ -4001,7 +4370,8 @@ Say what went wrong and what you were doing, fill in your setup (firmware, other
 **Read them from the console** fills them in), pick **when it happened**, attach screenshots if
 you have them, then press **Create report**. The `.zip` is saved, and **Post to GitHub** or **Post
 to Discord** (the **#bugs-report** channel) opens the place to send it, with the text ready to
-paste. The app can't attach the zip for you: drag it in yourself before you submit (on GitHub, into
+paste. On GitHub, the "Remote Play, Play Room or PS5Upload Play problem" form asks the useful
+questions for those; for a Play Room, make the report on the computer or phone that hosts the room. The app can't attach the zip for you: drag it in yourself before you submit (on GitHub, into
 the issue's **Bug report zip** box; **Show in folder** finds it). Both are read. A report with logs is worth ten "it doesn't work"
 messages: it usually has the exact error in it.
 
@@ -4010,8 +4380,10 @@ A single `.zip` with diagnostics only (never your games or app data):
 
 - `report.md` and `report.json`: your description, the app version and platform, the connected
   PS5 (model, firmware, storage, running processes), and what each feature was doing: Remote
-  Play, Play Together, phone controllers and watch parties, Go live, Hush, the cheats engine,
-  `ps5upload://` links (counts and states only), and how the last Remote Play start ended.
+  Play, the Play Room (listed or not, locked, how many are blocked), PS5Upload Play (paired,
+  connected, its version), phone controllers and watch parties, Go live, Hush, the cheats engine,
+  the USB Ethernet adapter, `ps5upload://` links (counts and states only, never chat, names or
+  addresses), and how the last Remote Play start ended.
 - `timeline.txt`: what the app and the engine recorded in the time you picked, in order.
 - `logs/`: the app's and the engine's logs; the PS5 helper's log and the console's kernel log
   when a console was connected; crash reports (desktop app).
@@ -4025,11 +4397,11 @@ choose**). For more detail, raise the **Recording level** on the **Logs** tab (D
 reproduce the problem, then make the report.
 
 **Q: What are Detailed logs?**
-A switch on the **Logs** tab (11.0.1) for the hard Remote Play and Play Together cases, like a
+A switch on the **Logs** tab (11.0.1) for the hard Remote Play and Play Room cases, like a
 console that keeps refusing to start. While it is on, the app records much more: the console's
 replies, each start-up step's timing and retries, and each friend's join, reconnect and picture
 requests. It turns itself off after 24 hours and never records keys, codes, tokens or passwords.
-For a Remote Play or Play Together problem: turn it on, try again, then make the bug report; the
+For a Remote Play or Play Room problem: turn it on, try again, then make the bug report; the
 Bug Report page says whether the extra detail is in it.
 
 **Q: Is it safe to post publicly?**
@@ -4048,11 +4420,17 @@ Logs page to find them.
 ## Supporting PS5Upload
 
 **Q: How can I support PS5Upload?**
-Open **Thanks & Support** (in the sidebar, under Bug Report), or the same section on the
-website. It has Ko-fi (card or PayPal, once or monthly) and Bitcoin, Ethereum, Solana and XRP
+Open **Thanks & Support** (in the sidebar, under Bug Report), the same section on the website, or
+the same page in Minion and PS5Upload Play on the PS5 (13.0.0). It has Ko-fi (card or PayPal, once or monthly) and Bitcoin, Ethereum, Solana and XRP
 addresses straight to my wallet, each with a QR code and the one network to send it on. Everyone
 who supports it is thanked there by the name they gave on Ko-fi, most support first; amounts are
 never shown. Want your name changed or taken off? Say so on Discord.
+
+**Q: What does a donation get me?**
+Nothing but thanks. Support is voluntary: a donation is a gift that buys nothing, unlocks no
+feature, creates no obligation for either of us and isn't refundable. Every feature is free for
+everyone. Ko-fi and the crypto networks handle the payment under their own terms, and crypto sent
+on the wrong network can't be recovered.
 
 ## Disclaimer
 
@@ -4074,5 +4452,61 @@ without warranty of any kind.
 - No support guaranteed — free volunteer-built tool.
 
 If those terms aren't acceptable, do not use this software.
+
+The full terms are in [DISCLAIMER.md](DISCLAIMER.md). They are a plain-language summary, not
+legal advice.
+
+**Q: Is PS5Upload made or approved by Sony?**
+No. PS5Upload is an unofficial, independent project. It is not affiliated with, endorsed by or
+sponsored by Sony Interactive Entertainment. PlayStation and PS5 are Sony's trademarks, named only
+to say what PS5Upload works with.
+
+**Q: Can I lose data, damage my console or get banned?**
+Yes, it can happen, and it's your risk. PS5Upload comes with no warranty, and the people who make
+it aren't liable for lost data, damage to a console or any other device, a banned or restricted
+account or console, or anything else a platform does. Back up what you can't afford to lose.
+
+**Q: Can I use it to download or share games?**
+No. PS5Upload manages your own games, saves and backups. It doesn't provide games, link to them or
+help anyone get games they don't own, and Share with a friend never sends retail games. Use only
+content you own or have the right to use, and follow the laws where you live.
+
+**Q: What does PS5Upload know about me? (Privacy)**
+Nothing it sends anywhere. There are no accounts and no usage data (no telemetry, analytics or
+tracking). Your games, files, settings and logs stay on your own devices and PS5s, and a bug
+report goes only where you post it. To connect people over the internet (internet invites,
+PS5Upload Play's waiting room, the Rooms list), the Play Rooms hub sees each device's network
+address and what a listed room shows (its name, the host's name, the game, the player count and
+its settings). It keeps them in memory only while they're needed (a room's card until it closes,
+12 hours at most), writes nothing to disk, logs no addresses or names, and never carries chat,
+voice or video. Services you choose to use (GitHub for updates and payloads, Tailscale, artwork
+and cheat sources, streaming sites, Ko-fi) follow their own privacy terms. Details:
+[DISCLAIMER.md](DISCLAIMER.md) § 9.
+
+**Q: Who is responsible for what happens in a Play Room?**
+The people in it. PS5Upload only provides the tool: nobody behind it runs, monitors, records or
+moderates rooms, chat, voice, player names or room names. Each person is responsible for what they
+say and do, and parents and guardians for supervising children. To protect yourself: don't share
+personal details with people you don't know, keep your room Private or give it a password, mute,
+hide or block anyone who bothers you, and leave any room you don't like. A host can remove and
+block people and turn chat and voice off. Report threats or illegal content to the police where
+you live.
+
+**Q: What does "Experimental" mean?**
+A feature marked Experimental (such as the PS5's USB Ethernet adapter) is new and has been tried
+on little or no hardware. It may not work. Use it at your own risk, and turn it off if it
+misbehaves.
+
+**Q: Where are the licenses and the source code?**
+PS5Upload is free software under the GPL v3. The README's Credits section, the `LICENSES/` folder
+and the notice files list the open-source work it builds on, each under its own license. Every
+release's full source is the repository at that release's tag (clone with `--recursive` to get the
+submodules too).
+
+**Q: How do I send a legal question or a takedown request?**
+Write to phantomptr@gmail.com or open an issue on
+[GitHub](https://github.com/phantomptr/ps5upload/issues) (keep private details out of public
+issues). Say what the material is, where it is and why. Security problems go through
+[SECURITY.md](SECURITY.md).
 
 ---

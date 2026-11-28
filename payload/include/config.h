@@ -5,7 +5,7 @@
  * UI tell apart an old payload still running from a build that includes
  * a particular fix, without having to boot the console. Keep in sync
  * with the desktop app's package.json during releases. */
-#define PS5UPLOAD2_VERSION "12.6.45"
+#define PS5UPLOAD2_VERSION "12.6.46"
 /* Author credit — embedded in the startup toast so anyone looking at
  * the console screen knows who wrote the software that just loaded.
  * Kept separate from VERSION so release scripts can bump the version
@@ -37,5 +37,12 @@
 #define WEBUI_PORT 9180
 /* The home-screen tile that opens the browser on the web UI (webui_tile.c). */
 #define WEBUI_TILE_TITLE_ID "PSUP00001"
+
+/* PS5Upload Play, the native app that ships with PS5Upload (title id, install folder). */
+#define PLAY_APP_TITLE_ID "FAKE99261"
+/* Its loopback API (app_api.h): 127.0.0.1 only, always on while the helper runs, Minion or not. */
+#define PLAY_APP_API_PORT 9181
+/* Its Tailscale forward (tailnet_node_forward_open): 127.0.0.1 only, to one tailnet peer's engine. */
+#define PLAY_APP_FORWARD_PORT 9182
 
 #endif

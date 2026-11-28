@@ -108,6 +108,15 @@ fn c_payload_binds_only_9120() {
         "the keyboard & mouse companion must listen on 127.0.0.1 only"
     );
     binders.retain(|p| p != "src/vinput_companion.c" && !p.starts_with("vinput/"));
+    // The USB Ethernet adapter daemon (payload/usbnet/, a process of its own): its control port
+    // is on the console's loopback only, and what it serves on the adapter is lwIP's, never the
+    // kernel's (fwd_lwip.c uses lwip_bind/lwip_listen, which this check does not count).
+    let usbnet = std::fs::read_to_string(payload().join("usbnet/main.c")).unwrap();
+    assert!(
+        usbnet.contains("htonl(INADDR_LOOPBACK)") && !usbnet.contains("INADDR_ANY"),
+        "the USB adapter daemon's control port must be on 127.0.0.1 only"
+    );
+    binders.retain(|p| !p.starts_with("usbnet/"));
     // The SMB daemon listens on the console's loopback only: the helper is its one client.
     let smbd = std::fs::read_to_string(payload().join("smb/smbd_main.c")).unwrap();
     assert!(
@@ -131,6 +140,14 @@ fn c_payload_binds_only_9120() {
         "power_phase.c must never listen"
     );
     binders.retain(|p| p != "src/power_phase.c");
+    // PS5Upload Play's app API (app_api.h) listens on the console's loopback only, whatever
+    // Minion's LAN setting says: never INADDR_ANY.
+    let app_api = std::fs::read_to_string(payload().join("src/app_api_server.c")).unwrap();
+    assert!(
+        app_api.contains("htonl(INADDR_LOOPBACK)") && !app_api.contains("INADDR_ANY"),
+        "the app API must listen on 127.0.0.1 only"
+    );
+    binders.retain(|p| p != "src/app_api_server.c");
     binders.sort();
     assert_eq!(
         binders,

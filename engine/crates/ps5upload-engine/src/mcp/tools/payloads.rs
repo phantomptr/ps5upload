@@ -182,6 +182,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "payload_id": text("A payload of the library, from payloads_catalog."),
                     "release": text("With `payload_id`: only this version of the local copy."),
                     "port": whole("The loader's port. Default 9021."),
+                    "confirm_friends": super::confirm_friends(),
                 }),
                 &["console"],
             ),

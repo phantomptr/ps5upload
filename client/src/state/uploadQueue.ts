@@ -1,5 +1,6 @@
 import { consoleAddr } from "../lib/addr";
 import { create } from "zustand";
+import { friendsPlaying } from "../lib/rpStopConfirm";
 import { audit } from "./auditLog";
 
 import { pkgMkdirChain } from "../lib/pkgStorage";
@@ -3541,7 +3542,18 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             // has its install queued right after it: sleeping then would cut
             // either one off.
             if (shouldRestAfterRun(get().items, h, runStartedAt, installInFlight.has(h))) {
-              void powerStandby(mgmtAddr(h))
+              // Play Rooms: never rest a PS5 friends are playing on (the scenario audit).
+              void friendsPlaying(h)
+                .catch(() => 0)
+                .then((friends) => {
+                  if (friends > 0) {
+                    pushNotification(
+                      "info",
+                      withConsolePrefix(h, trStatic("queue_rest_skipped_friends", "Uploads done. Friends are playing, so the PS5 stays on.")),
+                    );
+                    return;
+                  }
+              return powerStandby(mgmtAddr(h))
                 .then((ack) => {
                   pushNotification(
                     ack.ok ? "info" : "warning",
@@ -3567,6 +3579,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
                       e instanceof Error ? e.message : String(e)
                     }`,
                   );
+                });
                 });
             }
           }

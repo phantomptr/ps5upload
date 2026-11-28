@@ -371,6 +371,11 @@ static void escape_makes_valid_json(void) {
     CHECK(n == 4 && strcmp(out, "a") == 0);
 }
 
+static int64_t elapsed_if_first_byte_1(const uint8_t id[16], void *ctx) {
+    (void)ctx;
+    return id[0] == 1 ? 61999 : -1;
+}
+
 static int mine_if_first_byte_1(const uint8_t id[16], void *ctx) {
     (void)ctx;
     return id[0] == 1;
@@ -402,14 +407,19 @@ static void jobs_to_json(void) {
     r.jobs_count = 2;
     ava1_w_init(&w, enc, sizeof enc);
     CHECK(ava1_job_list_result_encode(&r, &w) == 0);
-    CHECK(webui_jobs_to_json(enc, w.len, mine_if_first_byte_1, NULL, out, sizeof out) == 2);
+    CHECK(webui_jobs_to_json(enc, w.len, mine_if_first_byte_1, NULL, NULL, out, sizeof out) == 2);
     CHECK(strcmp(out,
                  "{\"jobs\":[{\"job\":\"01ababababababababababababababab\",\"kind\":\"copy\",\"state\":\"running\","
                  "\"files_done\":1,\"files_total\":2,\"bytes_done\":3,\"bytes_total\":4,\"mine\":true},"
                  "{\"job\":\"00000000000000000000000000000000\",\"kind\":\"op\",\"state\":\"failed\","
                  "\"files_done\":0,\"files_total\":0,\"bytes_done\":0,\"bytes_total\":0,\"mine\":false}]}") == 0);
     CHECK(json_valid(out));
-    CHECK(webui_jobs_to_json(enc, w.len, NULL, NULL, out, 40) == -1);
+    CHECK(webui_jobs_to_json(enc, w.len, NULL, NULL, NULL, out, 40) == -1);
+    /* #981: a job whose start is known says how long it has run; the others leave it out */
+    CHECK(webui_jobs_to_json(enc, w.len, mine_if_first_byte_1, elapsed_if_first_byte_1, NULL, out, sizeof out) == 2);
+    CHECK(strstr(out, "\"bytes_total\":4,\"mine\":true,\"elapsed_s\":61}") != NULL);
+    CHECK(strstr(out, "\"bytes_total\":0,\"mine\":false}") != NULL);
+    CHECK(json_valid(out));
 }
 
 static size_t status_enc(const ava1_status_t *st, uint8_t *enc, size_t cap) {
@@ -512,12 +522,15 @@ static void path_job_args(void) {
 static void extract_tail(void) {
     char out[512], args[640], back[256];
     int merge = -1, list = -1;
-    CHECK(webui_extract_tail(out, sizeof out, "/data/x", NULL, 0, 0, 0, NULL) > 0);
+    CHECK(webui_extract_tail(out, sizeof out, "/data/x", NULL, 0, 0, 0, NULL, 0) > 0);
     CHECK(strcmp(out, ",\"dest\":\"/data/x\",\"merge\":false,\"replace\":false") == 0);
-    CHECK(webui_extract_tail(out, sizeof out, "/data/x", "p\"w", 1, 0, 1, "") > 0);
+    /* Free the archive as it unpacks: asked for by name, never sent otherwise. */
+    CHECK(webui_extract_tail(out, sizeof out, "/data/x", NULL, 0, 0, 0, NULL, 1) > 0);
+    CHECK(strcmp(out, ",\"dest\":\"/data/x\",\"merge\":false,\"replace\":false,\"free\":true") == 0);
+    CHECK(webui_extract_tail(out, sizeof out, "/data/x", "p\"w", 1, 0, 1, "", 0) > 0);
     CHECK(strcmp(out, ",\"dest\":\"/data/x\",\"password\":\"p\\\"w\",\"merge\":true,\"replace\":false,\"list\":true") ==
           0);
-    CHECK(webui_extract_tail(out, sizeof out, "/data/\xe5\xae\x8c", NULL, 1, 1, 0, "Game/Game (2)/readme.txt/") > 0);
+    CHECK(webui_extract_tail(out, sizeof out, "/data/\xe5\xae\x8c", NULL, 1, 1, 0, "Game/Game (2)/readme.txt/", 0) > 0);
     CHECK(webui_path_job_args(args, sizeof args, "/data/a.zip", NULL, out) > 0);
     CHECK(json_valid(args));
     CHECK(webui_json_str(args, strlen(args), "top", back, sizeof back) == 1 &&
@@ -526,9 +539,9 @@ static void extract_tail(void) {
     CHECK(webui_json_bool(args, strlen(args), "merge", &merge) == 1 && merge == 1);
     CHECK(webui_json_bool(args, strlen(args), "list", &list) == 0);
     /* no room, or no folder: nothing, and the password is not left behind */
-    CHECK(webui_extract_tail(out, 40, "/data/x", "secret", 0, 0, 0, NULL) == -1 && out[0] == '\0');
+    CHECK(webui_extract_tail(out, 40, "/data/x", "secret", 0, 0, 0, NULL, 0) == -1 && out[0] == '\0');
     CHECK(memchr(out, 's', 40) == NULL);
-    CHECK(webui_extract_tail(out, sizeof out, NULL, NULL, 0, 0, 0, NULL) == -1);
+    CHECK(webui_extract_tail(out, sizeof out, NULL, NULL, 0, 0, 0, NULL, 0) == -1);
 }
 
 static void name_checks(void) {
@@ -869,6 +882,13 @@ static void proc_guards(void) {
     CHECK(webui_proc_game_running(j, n, "NPXS40087", 0) == 0); /* system apps are not games */
     CHECK(webui_proc_game_running("{\"procs\":[]}", strlen("{\"procs\":[]}"), "X", 1) == 0);
     CHECK(webui_proc_game_running("{\"x\":1}", 7, "X", 1) == -1);
+    {
+        uint64_t id = 0;
+        CHECK(webui_proc_title_app_id(j, n, "PPSA01650", &id) == 1 && id == 77);
+        CHECK(webui_proc_title_app_id(j, n, "NPXS40087", &id) == 0); /* not an app */
+        CHECK(webui_proc_title_app_id(j, n, "FAKE99261", &id) == 0);
+        CHECK(webui_proc_title_app_id("{\"x\":1}", 7, "X", &id) == -1);
+    }
 }
 
 static void array_strings(void) {

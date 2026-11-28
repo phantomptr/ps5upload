@@ -16,9 +16,9 @@ const peer = (name: string, ip: string, online: boolean, path = "idle", latency_
 const peers = [
   peer("pixel-9-ps5u.tail1.ts.net.", "100.64.0.20", true),
   peer("old-laptop", "100.64.0.21", false),
-  peer("yunpengs-ps5fat-ps5u", "100.64.0.11", true, "relayed"),
-  peer("yunpengs-ps5pro-ps5u", "100.64.0.10", true, "direct", 24.4),
-  peer("yunpengs-mbp-ps5u", "100.64.0.22", true),
+  peer("sams-ps5fat-ps5u", "100.64.0.11", true, "relayed"),
+  peer("sams-ps5pro-ps5u", "100.64.0.10", true, "direct", 24.4),
+  peer("sams-mbp-ps5u", "100.64.0.22", true),
 ];
 
 const html = (devices: ReturnType<typeof orderDevices>) =>
@@ -44,11 +44,11 @@ describe("Tailscale device list", () => {
   });
 
   it("knows a PS5, a phone and a computer", () => {
-    expect(deviceKind("yunpengs-ps5pro-ps5u")).toBe("ps5");
+    expect(deviceKind("sams-ps5pro-ps5u")).toBe("ps5");
     expect(deviceKind("den-ps5u", true)).toBe("ps5");
     expect(deviceKind("pixel-9-ps5u.tail1.ts.net.")).toBe("phone");
     expect(deviceKind("yuns-iphone")).toBe("phone");
-    expect(deviceKind("yunpengs-mbp-ps5u")).toBe("computer");
+    expect(deviceKind("sams-mbp-ps5u")).toBe("computer");
     // A phone with "ps5" in its name is still a phone: no Add as a console.
     expect(deviceKind("yuns-ps5-pixel-ps5u")).toBe("phone");
     expect(deviceKind("ps5-remote-android-ps5u")).toBe("phone");
@@ -56,7 +56,7 @@ describe("Tailscale device list", () => {
 
   it("puts PS5s first, by their name in the app, then this device, then online, then offline", () => {
     const d = orderDevices(peers, {
-      self: { name: "yunpengs-mac-ps5u", ip: "100.64.0.2" },
+      self: { name: "sams-mac-ps5u", ip: "100.64.0.2" },
       consoles: [{ host: "192.168.1.20", ip: "100.64.0.10" }],
       profiles: [{ id: "p1", name: "Pro", host: "192.168.1.20" }],
     });
@@ -73,7 +73,7 @@ describe("Tailscale device list", () => {
     expect(d[2].self).toBe(true);
     const out = html(d);
     expect(out).toContain("Pro");
-    expect(out).toContain(" · yunpengs-ps5pro-ps5u");
+    expect(out).toContain(" · sams-ps5pro-ps5u");
     expect(out).toContain("This device");
     // Five others, four of them online.
     expect(out).toContain("Devices on your Tailscale network (5 · 4 online)");

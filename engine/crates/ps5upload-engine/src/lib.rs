@@ -15,6 +15,7 @@
 //! The API is the route table in `build_app`, plus the sub-routers it merges.
 
 mod activity;
+// Thanks & Support for PS5Upload Play and Minion: GET /api/support (public, from the client's data).
 mod ampr_emu_api;
 mod ampr_index_api;
 mod ampr_trace;
@@ -83,7 +84,15 @@ mod image_edit_in_place;
 mod inspect;
 mod install;
 mod join;
+mod join_chat;
+mod join_comms;
+mod join_friends;
+mod join_history;
+mod join_names;
 mod join_net;
+mod join_room;
+mod join_route;
+mod join_voice;
 mod link;
 mod link_drops;
 mod link_lz4;
@@ -106,14 +115,20 @@ mod payloads_api;
 mod pkg_install;
 mod pkg_name_api;
 mod pkg_sidecar;
+mod play_app;
+mod play_app_install;
+mod play_discovery;
 mod pldmgr_api;
 mod profile_image;
 mod ps2_saves;
+mod public_limit;
 mod queue_api;
 mod remote;
 mod remote_download;
 mod remote_pkg;
 mod remove_backport;
+mod room_seal;
+mod rp_dev_replay;
 mod rp_diag;
 mod rp_golive;
 mod rp_keyboard;
@@ -129,6 +144,8 @@ mod save_copy;
 mod save_folders;
 mod save_layout;
 mod save_sync;
+mod save_sync_auto;
+mod save_sync_console;
 mod self_host;
 mod server_out;
 mod settings_api;
@@ -138,15 +155,20 @@ mod shared_state;
 mod source_removal;
 mod space_check;
 mod state_io;
+mod support_api;
 mod tailnet_api;
 mod tailnet_discover;
 pub(crate) mod tailnet_engine;
+mod tailnet_guest;
 pub(crate) mod tailnet_system;
 mod telemetry;
 mod title_restore_api;
+mod together_guard;
 mod trophy_fix_routes;
 mod uninstall_source;
 mod unpack_packs;
+mod usbnet_api;
+pub(crate) mod usbnet_engine;
 mod vinput_api;
 mod wake_login_api;
 mod web_pages;
@@ -168,6 +190,8 @@ mod ava1_only_tests;
 mod event_hooks_tests;
 #[cfg(test)]
 mod queue_api_tests;
+#[cfg(test)]
+mod together_guard_tests;
 
 use axum::http::HeaderMap;
 use axum::{
@@ -938,14 +962,30 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // the invite or the resume token itself. The rest of /api/join is the host's.
         || path == "/join"
         || path == "/api/join/ws"
+        // PS5Upload Play on the host's PS5 (play_app.rs): its socket, which checks the app's
+        // token itself and tells an app without one only that the engine is there.
+        || path == "/api/play/app"
         // …and an internet invite's signalling straight to this engine (join_net/local_signal),
         // for this engine's own rooms only: the guest still checks the certificate and the key.
         || path == "/api/join/signal"
+        // …and the checks socket a guest's app measures each way to this engine with before it
+        // joins and, gently, while it plays (join_route.rs): echoes only, no guest state.
+        || path == "/api/join/probe"
+        // …and a Play Room's preview (Details before joining, join_room_api.rs): what the host
+        // chose to show, never an address; rate-limited per address.
+        || path == "/api/join/preview"
+        // …and PS5Upload Play on a PS5 joining a friend's internet room through this engine
+        // (join_net/bridge.rs): it must be reachable from LAN peers (the PS5). It reaches only
+        // the hub in the settings and the engine answering there, checked against the link's
+        // fingerprint; a few at once per address.
+        || path == "/api/join/bridge"
         // A friend receiving a Share (share/mod.rs) on the home network: the page and its
         // socket, which serves only what the sender allowed. The rest of /api/share is the
         // sender's.
         || path == "/share"
         || path == "/api/share/ws"
+        // Thanks & Support (support_api.rs): public names and links for PS5Upload Play on the PS5.
+        || path == "/api/support"
         || peer.is_loopback()
         || allow_rules_contain(&cfg.allowed_ips, peer)
 }
@@ -1642,7 +1682,9 @@ fn attach_live_notes(cfg: &mut TransferConfig, job_id: Uuid) {
 
 /// Adds a running job's live notes to its snapshot JSON: `phase` (`"skipping"` with
 /// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word), `settling`,
-/// `verifying` (the console reads its last large files back, #783) and, once the console has
+/// `verifying` (the console reads its last large files back, #783), `link` (`usb` with
+/// `link_mbps`, or `console`: which of the console's links the job's session went through, only
+/// for a console that has reported a USB Ethernet adapter) and, once the console has
 /// every byte, `all_sent_ms` / `console_quiet_ms` (#873). Fields
 /// that do not apply are absent, so the client shows nothing for them. A snapshot that is not
 /// `running` is returned as it is.
@@ -1715,6 +1757,18 @@ pub(crate) fn merge_live_notes(
             {
                 o.insert("route_reason".into(), why.into());
             }
+        }
+        _ => {}
+    }
+    // Which of the console's links the job's session went through, only for a console that
+    // has reported a USB Ethernet adapter: `usb` with its speed, or `console` (its own address).
+    match n.link.load(Relaxed) {
+        ps5upload_core::transfer::LIVE_LINK_USB => {
+            o.insert("link".into(), "usb".into());
+            o.insert("link_mbps".into(), n.link_mbps.load(Relaxed).into());
+        }
+        ps5upload_core::transfer::LIVE_LINK_CONSOLE => {
+            o.insert("link".into(), "console".into());
         }
         _ => {}
     }
@@ -3070,6 +3124,10 @@ struct FsExtractReq {
     /// Top-level entries to rename (`to`) or leave out (`to` empty or absent) while extracting.
     #[serde(default)]
     top: Vec<FsExtractTop>,
+    /// Delete the archive as it is unpacked (opt-in; the archive can't be used again). With
+    /// `list`, only how that would go (`free` in the answer).
+    #[serde(default)]
+    free: bool,
     #[serde(default)]
     op_id: u64,
 }
@@ -3081,12 +3139,21 @@ struct FsExtractTop {
     to: Option<String>,
 }
 
-/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, op_id}`
+/// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, list?, top?, free?, op_id}`
 /// — extract an archive on the console into `dest` there (the helper's extractor payload does the
 /// decoding). Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200
 /// `{ok, path, files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the
 /// helper's cause otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...).
 /// The password is never logged.
+///
+/// `free: true` deletes the archive as it is unpacked, so the game needs about its own size of
+/// free space: a set of parts (`.part1.rar`, `.7z.001`, ...) is checked whole first, then each part
+/// goes once everything in it is out and on the drive; anything else goes once the unpack is done.
+/// The answer adds `parts_freed`, `bytes_freed`. A failure after a part went is 502
+/// `fs_extract_partly_freed: <freed> <left> <first part left> | <folder kept> | <cause>`: the
+/// folder is kept and the parts left are renamed `.partial-deleted`. With `list`, the answer adds
+/// `free: {mode: "parts"|"end"|"", parts, archive_bytes, unpacked, peak, same_drive, known, why,
+/// saves}` (`saves`: how much less free space it needs than without freeing).
 ///
 /// "Extract here" (#891): `list: true` only reads the archive's top-level names and answers
 /// `{ok, path, listed: true, top: [names], top_dirs: [the folders among them], top_more}` (`dest` is the folder, `merge` false: a
@@ -3127,18 +3194,20 @@ async fn ps5_fs_extract(
         replace: req.replace && !list,
         list,
         top: if list { None } else { top },
+        free_archive: req.free,
     };
     let started = std::time::Instant::now();
     crate::log_at!(
         Info,
         "files",
-        "fs_extract: addr={addr} path={} dest={} merge={} replace={} list={} renames={} password={} op_id={op_id}",
+        "fs_extract: addr={addr} path={} dest={} merge={} replace={} list={} renames={} free={} password={} op_id={op_id}",
         x.path,
         x.dest,
         x.merge,
         x.replace,
         x.list,
         pairs.len(),
+        x.free_archive,
         x.password.is_some()
     );
     let path_for_log = x.path.clone();
@@ -3159,15 +3228,20 @@ async fn ps5_fs_extract(
                 return json_err(StatusCode::NOT_IMPLEMENTED, "fs_extract_list_unsupported")
                     .into_response();
             }
-            Json(serde_json::json!({
+            let mut out = serde_json::json!({
                 "ok": true,
                 "path": done.path,
                 "listed": true,
                 "top": done.top_names(),
                 "top_dirs": done.top_dir_names(),
                 "top_more": done.top_more,
-            }))
-            .into_response()
+            });
+            if let Some(plan) = &done.free {
+                let mut p = serde_json::to_value(plan).unwrap_or_default();
+                p["saves"] = plan.saves().into();
+                out["free"] = p;
+            }
+            Json(out).into_response()
         }
         Ok(done) => {
             crate::log_at!(Info, "files",
@@ -3180,6 +3254,11 @@ async fn ps5_fs_extract(
                 done.links,
                 started.elapsed().as_millis()
             );
+            if done.parts_freed > 0 {
+                crate::log_at!(Info, "files",
+                    "fs_extract: freed {} part(s), {} bytes, of {path_for_log} ({} could not be deleted)",
+                    done.parts_freed, done.bytes_freed, done.free_not_removed);
+            }
             Json(serde_json::json!({
                 "ok": true,
                 "path": done.path,
@@ -3189,6 +3268,9 @@ async fn ps5_fs_extract(
                 "skipped": done.skipped,
                 "unsafe": done.unsafe_entries,
                 "links": done.links,
+                "parts_freed": done.parts_freed,
+                "bytes_freed": done.bytes_freed,
+                "free_not_removed": done.free_not_removed,
             }))
             .into_response()
         }
@@ -3465,12 +3547,28 @@ struct AppLaunchReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title_id: String,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-async fn ps5_app_launch(Json(req): Json<AppLaunchReq>) -> impl IntoResponse {
+/// Launch an installed title on the console.
+///
+/// A launch replaces the game running now: with friends playing through Play Together, 409
+/// `friends_playing` unless confirmed (together_guard.rs).
+async fn ps5_app_launch(
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
+    Json(req): Json<AppLaunchReq>,
+) -> axum::response::Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     let title_id = req.title_id;
     let started = std::time::Instant::now();
     crate::log_at!(Info, "files", "app_launch: addr={addr} title_id={title_id}");
@@ -4949,6 +5047,9 @@ struct AppLifecycleReq {
     addr: Option<String>,
     action: String,
     app_id: u32,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 /// POST /api/ps5/app/lifecycle — suspend / resume / kill a running app.
@@ -4957,10 +5058,15 @@ struct AppLifecycleReq {
 /// desktop app reaches this through a Tauri command that calls core
 /// directly, with no HTTP route behind it, so "Close game" simply did not
 /// exist on the web UI. Same missing-half class as fs_read_preview.
+///
+/// `kill` and `suspend` with friends playing through Play Together: 409 `friends_playing` unless
+/// confirmed (together_guard.rs).
 async fn ps5_app_lifecycle(
     State(_state): State<AppState>,
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
     Json(req): Json<AppLifecycleReq>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let action = match req.action.as_str() {
         "suspend" => AppAction::Suspend,
         "resume" => AppAction::Resume,
@@ -4977,6 +5083,13 @@ async fn ps5_app_lifecycle(
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if matches!(action, AppAction::Kill | AppAction::Suspend) {
+        if let Some(r) =
+            together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+        {
+            return r;
+        }
+    }
     let app_id = req.app_id;
     let r = tokio::task::spawn_blocking(move || app_lifecycle(&addr, action, app_id))
         .await
@@ -5068,17 +5181,28 @@ struct ProcessKillReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     pid: i32,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-/// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`.
+/// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`. With friends playing through
+/// Play Together: 409 `friends_playing` unless confirmed (together_guard.rs).
 async fn ps5_process_kill(
     State(_state): State<AppState>,
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
     Json(req): Json<ProcessKillReq>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Destructive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     let pid = req.pid;
     let r: Result<ProcessKillAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || process_kill(&addr, pid))
@@ -5097,6 +5221,9 @@ async fn ps5_process_kill(
 struct HelperStopReq {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 /// POST /api/ps5/helper/stop — Body: `{ addr }`. Asks the console's helper to exit
@@ -5106,14 +5233,23 @@ struct HelperStopReq {
 /// when nothing answered. 409 `{ "error", "reason": "busy" }` while a job runs; 502
 /// `{ "error", "reason": "refused" (not paired) | "failed" (the real error) | "still_running" }`
 /// otherwise. 409 `reason: "stopping"` while another stop or removal of that console runs.
+/// With friends playing through Play Together (the helper runs their controllers): 409
+/// `friends_playing` unless confirmed (together_guard.rs).
 async fn ps5_helper_stop(
     installs: pkg_install::PkgInstallStateHandle,
+    headers: HeaderMap,
+    confirm: together_guard::ConfirmQuery,
     req: HelperStopReq,
 ) -> axum::response::Response {
     // Disruptive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     // Marked first, then the jobs read: from here until the stop ends the queue starts nothing
     // on this console (it can take seconds), and no request starts a job there
     // (helper_stop::try_enter). A second stop or removal of it meanwhile is told one runs.
@@ -5168,6 +5304,9 @@ struct HelperUninstallReq {
     /// changes and the helper keeps running. Answers `state: "ready"`.
     #[serde(default)]
     check: bool,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
 /// POST /api/ps5/helper/uninstall — Body: `{ addr, keep_backups, check }`. "Remove PS5Upload from this
@@ -5182,11 +5321,21 @@ struct HelperUninstallReq {
 /// went with the folders.
 async fn ps5_helper_uninstall(
     installs: pkg_install::PkgInstallStateHandle,
+    headers: HeaderMap,
+    confirm: together_guard::ConfirmQuery,
     req: HelperUninstallReq,
 ) -> axum::response::Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    // The helper runs friends' controllers; a check alone changes nothing.
+    if !req.check {
+        if let Some(r) =
+            together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+        {
+            return r;
+        }
+    }
     // As for a stop: marked before the jobs are read, held for the whole call (up to 240 s).
     let Some(stopping) = helper_stop::begin_stopping(&addr) else {
         let e = helper_stop::UninstallError::AlreadyStopping;
@@ -5255,13 +5404,20 @@ struct PowerControlReq {
     addr: Option<String>,
     /// One of "reboot" | "shutdown" | "standby" | "tick".
     action: String,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-/// POST /api/ps5/power/control — Body: `{ addr, action }`.
+/// POST /api/ps5/power/control — Body: `{ addr, action }`. Reboot, shutdown and standby with
+/// friends playing through Play Together: 409 `friends_playing` unless confirmed
+/// (together_guard.rs).
 async fn ps5_power_control(
     State(_state): State<AppState>,
+    headers: HeaderMap,
+    Query(confirm): Query<together_guard::ConfirmQuery>,
     Json(req): Json<PowerControlReq>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Destructive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
@@ -5279,6 +5435,13 @@ async fn ps5_power_control(
             .into_response()
         }
     };
+    if !matches!(action, PowerAction::Tick) {
+        if let Some(r) =
+            together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+        {
+            return r;
+        }
+    }
     let r: Result<SystemControlAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || system_control(&addr, action))
             .await
@@ -7305,8 +7468,19 @@ async fn ps5_status(
         Ok::<_, anyhow::Error>(json)
     })
     .await;
-    // The path the check took, for its connect timings.
-    let path = connect_path(&ps5upload_core::route::via(&console));
+    // The path the check took, for its connect timings: what its session's handshake dialled
+    // tells the console's USB adapter from its own address.
+    let usb = match ps5upload_ava1::pool::pool().session_dialed(&console).await {
+        Some(dialed) => matches!(
+            ps5upload_core::route::link_of(
+                &ps5upload_core::events::console_host(&console),
+                &dialed
+            ),
+            Some(ps5upload_core::route::Link::Usb { .. })
+        ),
+        None => false,
+    };
+    let path = connect_path(&ps5upload_core::route::via(&console), usb);
     ps5upload_ava1::timings::update(&console, |t| t.path = Some(path.to_string()));
 
     use ps5upload_core::events::{emit, Cat, Level};
@@ -7328,6 +7502,9 @@ async fn ps5_status(
             helper_send::after_status_ok(&console, &json);
             // A helper with the converter gets the zstd runtime it needs (background, once).
             convert_runtime::after_status(console_addr(&console), &json);
+            // The console's USB adapter (experimental): what the helper says of it, so
+            // transfers can use it (usbnet_engine.rs; in the background when it asks).
+            usbnet_engine::after_status(&console, &json);
             spawn_console_upgrade_cleanup(console);
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -7352,10 +7529,12 @@ async fn ps5_status(
     }
 }
 
-/// The connect timings' name for how a console is reached.
-fn connect_path(via: &ps5upload_core::route::Via) -> &'static str {
+/// The connect timings' name for how a console is reached (`usb`: its session went through the
+/// console's USB Ethernet adapter, which is the home network too).
+fn connect_path(via: &ps5upload_core::route::Via, usb: bool) -> &'static str {
     use ps5upload_core::route::Via;
     match via {
+        Via::Lan if usb => "usb",
         Via::Lan => "lan",
         Via::TailnetDirect { .. } => "tailnet_direct",
         Via::TailnetRelayed => "tailnet_relayed",
@@ -7541,15 +7720,22 @@ mod connect_timings_tests {
 
     #[test]
     fn each_way_to_a_console_has_its_name() {
-        assert_eq!(connect_path(&Via::Lan), "lan");
+        assert_eq!(connect_path(&Via::Lan, false), "lan");
+        // At home through the console's USB adapter.
+        assert_eq!(connect_path(&Via::Lan, true), "usb");
         assert_eq!(
-            connect_path(&Via::TailnetDirect {
-                latency_ms: Some(3.0)
-            }),
+            connect_path(
+                &Via::TailnetDirect {
+                    latency_ms: Some(3.0)
+                },
+                false
+            ),
             "tailnet_direct"
         );
-        assert_eq!(connect_path(&Via::TailnetRelayed), "tailnet_relayed");
-        assert_eq!(connect_path(&Via::System), "tailnet_system");
+        assert_eq!(connect_path(&Via::TailnetRelayed, false), "tailnet_relayed");
+        assert_eq!(connect_path(&Via::System, false), "tailnet_system");
+        // The adapter is never in place of a tailnet route.
+        assert_eq!(connect_path(&Via::System, true), "tailnet_system");
     }
 
     #[tokio::test]
@@ -13444,6 +13630,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
+    // The hello tells each console's PS5Upload Play this port (before any session opens).
+    if let Ok(at) = listener.local_addr() {
+        mesh_api::set_listening(at);
+    }
     // Convert (and the package viewer) read games on saved servers and the console in place.
     convert_source::register();
     // Every management call (hardware, filesystem, apps, ...) goes through one transport
@@ -13451,8 +13641,16 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     host_guard::log_settings();
     // A console it cannot serve is a `helper_not_ava1` error, never another protocol.
     ps5upload_ava1::mgmt::install();
+    // Friends' PS5s over the engine's own tailnet node: a listener of their own on 127.0.0.1 that
+    // serves only their two sockets (tailnet_guest.rs), which the node serves on this engine's
+    // HTTP port (the port bound, a fallback one included). Before the node starts; kept while the
+    // engine serves.
+    let _guest = tailnet_guest::boot(listener.local_addr().map_or(0, |a| a.port())).await;
     // The engine's own tailnet node (when turned on) and the away routing (tailnet_engine.rs).
     tailnet_engine::boot();
+    // The consoles' USB Ethernet adapters (experimental): probes them and settles which link
+    // transfers use (usbnet_engine.rs). The router it answers through is installed above.
+    usbnet_engine::boot();
     // Every new session says who this engine is, whatever opened it (Devices showed a phone
     // that had only checked the console's status as an app from before 8.0.0).
     ps5upload_ava1::pool::on_new_session(mesh_api::greet);
@@ -13535,6 +13733,14 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // work" and the rest as they were last set.
     self_host::log_settings();
     join::load_invites();
+    // PS5Upload Play: a `play` event on the feed when a console's status changes.
+    play_app::spawn_feed();
+    // …the grant each console's helper hands its app, renewed while the session lasts…
+    play_app::spawn_grants();
+    // …and a LAN responder so the app finds this engine without the helper (UDP 19261).
+    if let Ok(at) = listener.local_addr() {
+        play_discovery::start(at, cfg.allow_ips.clone());
+    }
     // The built-in hub, only when PS5UPLOAD_HUB_LISTEN asks for it (a listener of its own).
     builtin_hub::start().await;
 
@@ -13592,13 +13798,17 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     );
     // Save backups to a network share: on an interval, or when a game is closed (#592).
     save_backup_server::spawn();
-    // Save sync between two consoles: suggests a copy after a game closes, never copies itself.
+    // Save sync between two consoles: suggests a copy after a game closes, and keeps the games
+    // the user turned on in step by itself (save_sync_auto).
     save_sync::spawn();
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
     pkg_install::spawn_stale_upload_sweep(sweep_installs);
     // What the other devices see of this engine, with no window open to say so.
     mesh_api::spawn_presence(state_jobs_for_presence);
+    // A test engine only: a recorded session played as a live Play Together host
+    // (PS5UPLOAD_DEV_REPLAY_HOST, rp_dev_replay.rs). Nothing without the variable.
+    rp_dev_replay::start_from_env();
     // Server copies an earlier run left behind (an extract that failed, then the app closed)
     // are removed here: nothing else knows them after a restart.
     tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
@@ -13759,6 +13969,10 @@ fn build_app_and_mcp(
         .route(
             "/api/tailnet",
             get(tailnet_api::engine_status).post(tailnet_api::engine_op),
+        )
+        .route(
+            "/api/ps5/usbnet",
+            get(usbnet_api::status).post(usbnet_api::op),
         )
         .route("/api/tailnet/route", get(tailnet_api::route))
         .route("/api/tailnet/check", get(tailnet_api::check))
@@ -14023,6 +14237,20 @@ fn build_app_and_mcp(
         .route("/api/save-sync/status", get(save_sync::get_status))
         .route("/api/save-sync/apply", post(save_sync::post_apply))
         .route("/api/save-sync/dismiss", post(save_sync::post_dismiss))
+        .route("/api/save-sync/games", get(save_sync_auto::get_games))
+        .route(
+            "/api/save-sync/auto",
+            axum::routing::put(save_sync_auto::put_auto),
+        )
+        .route(
+            "/api/save-sync/sync-now",
+            post(save_sync_auto::post_sync_now),
+        )
+        .route("/api/save-sync/resolve", post(save_sync_auto::post_resolve))
+        .route(
+            "/api/save-sync/first-copy",
+            post(save_sync_auto::post_first_copy),
+        )
         .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),
@@ -14292,15 +14520,23 @@ fn build_app_and_mcp(
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route(
             "/api/ps5/helper/stop",
-            post(move |Json(req): Json<HelperStopReq>| {
-                ps5_helper_stop(helper_stop_installs.clone(), req)
-            }),
+            post(
+                move |headers: HeaderMap,
+                      Query(confirm): Query<together_guard::ConfirmQuery>,
+                      Json(req): Json<HelperStopReq>| {
+                    ps5_helper_stop(helper_stop_installs.clone(), headers, confirm, req)
+                },
+            ),
         )
         .route(
             "/api/ps5/helper/uninstall",
-            post(move |Json(req): Json<HelperUninstallReq>| {
-                ps5_helper_uninstall(helper_uninstall_installs.clone(), req)
-            }),
+            post(
+                move |headers: HeaderMap,
+                      Query(confirm): Query<together_guard::ConfirmQuery>,
+                      Json(req): Json<HelperUninstallReq>| {
+                    ps5_helper_uninstall(helper_uninstall_installs.clone(), headers, confirm, req)
+                },
+            ),
         )
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
@@ -14382,19 +14618,58 @@ fn build_app_and_mcp(
         .route("/join", get(join::page))
         .route("/api/join/ws", get(join::ws))
         .route("/api/join/relay", get(join::relay))
+        .route("/api/join/bridge", get(join::bridge))
         .route("/api/join/signal", get(join::signal))
+        // Play Together routes (join_route.rs): the checks socket a guest measures its ways with,
+        // and what the host and an agent read about each guest's way.
+        .route("/api/join/probe", get(join_route::probe))
+        .route("/api/join/routes", get(join::routes))
         .route("/api/join", get(join::get_state))
         .route("/api/join/open", post(join::open))
         .route("/api/join/close", post(join::close))
         .route("/api/join/invite", post(join::invite))
         .route("/api/join/decide", post(join::decide))
         .route("/api/join/kick", post(join::kick))
+        .route("/api/join/room", post(join::room))
+        .route("/api/join/unblock", post(join::unblock))
+        .route("/api/join/seat", post(join::seat))
+        // Play Rooms: the ready check, and Recent players (the host's only, join_history.rs).
+        .route("/api/join/ready", post(join::ready))
+        .route("/api/join/history", get(join_history::get))
+        .route("/api/join/history/forget", post(join_history::forget_route))
+        .route("/api/join/preview", get(join::preview))
+        .route("/api/join/rooms", get(join::rooms_proxy))
+        .route("/api/join/rooms/status", get(join::rooms_status_proxy))
+        .route(
+            "/api/join/rooms/{id}/preview",
+            get(join::rooms_preview_proxy),
+        )
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
+        // Play Rooms chat and voice: the host's settings, mutes, own line and mic (join_comms.rs).
+        .route("/api/join/comms", post(join_comms::set_comms))
+        .route("/api/join/mute", post(join_comms::set_mute))
+        .route("/api/join/chat", post(join_comms::host_chat))
+        .route("/api/join/voice", post(join_comms::host_voice))
+        .route("/api/join/friends", get(join_friends::list))
+        .route("/api/join/friends/forget", post(join_friends::forget_route))
+        .route("/api/join/friends/send", post(join_friends::send))
+        .route("/api/play/app", get(play_app::ws))
+        .route("/api/play/app/pair", post(play_app::pair))
+        .route("/api/play/app/unpair", post(play_app::unpair))
+        .route("/api/play/app/paired", get(play_app::paired))
+        .route("/api/play/app/moved", post(play_app::moved))
+        .route("/api/play/app/pair_confirm", post(play_app::pair_confirm))
+        // PS5Upload Play on a PS5: install, update, remove, open (play_app_install.rs).
+        .route("/api/play/app/installed", get(play_app_install::installed))
+        .route("/api/play/app/install", post(play_app_install::install))
+        .route("/api/play/app/remove", post(play_app_install::remove))
+        .route("/api/play/app/open", post(play_app_install::open))
         // Share: an app's things to a friend (share/mod.rs).
         .route("/share", get(share::page))
         .route("/api/share/ws", get(share::ws))
+        .route("/api/support", get(support_api::support))
         .route("/api/share", get(share::list).post(share::create))
         .route("/api/share/check", post(share::check))
         .route("/api/share/{id}", get(share::get_one).delete(share::cancel))
@@ -15310,6 +15585,10 @@ mod loopback_guard_tests {
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/join"));
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
         assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/signal"));
+        assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/probe"));
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/preview"));
+        // PS5Upload Play on a PS5 joining an internet room through this engine.
+        assert!(loopback_allows(&c, ip("192.168.1.40"), "/api/join/bridge"));
         // The host's side of Play Together stays on this computer.
         for p in [
             "/api/join",
@@ -15318,12 +15597,26 @@ mod loopback_guard_tests {
             "/api/join/invite",
             "/api/join/decide",
             "/api/join/kick",
+            "/api/join/room",
+            "/api/join/rooms",
+            "/api/join/seat",
+            "/api/join/unblock",
+            "/api/join/ready",
+            "/api/join/history",
+            "/api/join/history/forget",
             "/api/join/playing",
             "/api/join/settings",
+            "/api/join/comms",
+            "/api/join/mute",
+            "/api/join/chat",
+            "/api/join/voice",
             "/api/join/relay",
+            "/api/join/routes",
+            "/api/join/probe/x",
             "/api/join/ws/x",
             "/api/join/wsx",
             "/api/join/signal/x",
+            "/api/join/bridge/x",
             "/join/../api/join/open",
             "/joinx",
             "/join/x",
@@ -15331,6 +15624,52 @@ mod loopback_guard_tests {
             assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
         }
         assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/join/open"));
+    }
+
+    /// The main listener's guard is not widened for Tailscale: a 100.x peer (the system app's, or
+    /// anyone routed here) is a LAN peer. The engine's own node never delivers here at all; its
+    /// guest port has a listener and router of its own (tailnet_guest.rs).
+    #[test]
+    fn a_tailnet_peer_on_the_main_listener_is_a_lan_peer() {
+        let c = cfg(&[]);
+        for p in ["/api/join/ws", "/api/play/app"] {
+            assert!(loopback_allows(&c, ip("100.101.2.3"), p), "{p}");
+        }
+        for p in [
+            "/api/join/open",
+            "/api/play/app/pair",
+            "/api/play/app/paired",
+            "/api/ps5/status",
+            "/api/tailnet/status",
+            "/api/jobs",
+        ] {
+            assert!(!loopback_allows(&c, ip("100.101.2.3"), p), "{p}");
+        }
+    }
+
+    #[test]
+    fn ps5upload_play_reaches_only_its_socket_and_pairing_stays_on_this_computer() {
+        let c = cfg(&[]);
+        assert!(loopback_allows(&c, ip("192.168.1.50"), "/api/play/app"));
+        for p in [
+            "/api/play/app/pair",
+            "/api/play/app/unpair",
+            "/api/play/app/paired",
+            "/api/play/app/moved",
+            "/api/play/app/pair_confirm",
+            "/api/play/app/x",
+            "/api/play/appx",
+            "/api/play",
+        ] {
+            assert!(!loopback_allows(&c, ip("192.168.1.50"), p), "{p}");
+        }
+        assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/pair"));
+        assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/moved"));
+        assert!(loopback_allows(
+            &c,
+            ip("127.0.0.1"),
+            "/api/play/app/pair_confirm"
+        ));
     }
 
     #[test]
@@ -16184,6 +16523,29 @@ mod helpers_tests {
     }
 
     #[test]
+    fn a_running_job_says_which_link_only_for_a_console_with_a_usb_adapter() {
+        use ps5upload_core::route::Link;
+        use ps5upload_core::transfer::LiveNotes;
+        let n = LiveNotes::default();
+        let running = serde_json::json!({"status": "running", "bytes_sent": 1});
+        // No adapter ever reported: nothing new.
+        n.note_link(None);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert!(v.get("link").is_none() && v.get("link_mbps").is_none());
+        n.note_link(Some(Link::Usb { mbps: 2500 }));
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            (v["link"].as_str(), v["link_mbps"].as_u64()),
+            (Some("usb"), Some(2500))
+        );
+        // Fell back to the console's own address: no speed.
+        n.note_link(Some(Link::Console));
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(v["link"], "console");
+        assert!(v.get("link_mbps").is_none());
+    }
+
+    #[test]
     fn a_running_snapshot_carries_the_live_notes_and_a_finished_one_does_not() {
         use ps5upload_core::transfer::{LiveNotes, LIVE_PHASE_SKIPPING};
         use std::sync::atomic::Ordering::Relaxed;
@@ -16451,9 +16813,12 @@ mod helpers_tests {
         assert_eq!(del.status(), StatusCode::BAD_REQUEST);
         let power = ps5_power_control(
             State(state),
+            HeaderMap::new(),
+            Query(together_guard::ConfirmQuery::default()),
             Json(PowerControlReq {
                 addr: Some(String::new()),
                 action: "reboot".into(),
+                confirm_friends: false,
             }),
         )
         .await

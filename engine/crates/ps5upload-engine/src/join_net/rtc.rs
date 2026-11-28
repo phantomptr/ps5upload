@@ -668,6 +668,8 @@ pub(crate) enum Cmd {
     AudioOn(u64),
     /// One of the session's sound messages: `[3][header]` or `[4][u16 BE index][Opus packet]`.
     Audio(u64, Bytes),
+    /// A Play Rooms voice bundle for the peer's `voice` channel (join_voice.rs).
+    Voice(u64, Bytes),
     /// A guest session ended.
     Gone(u64),
     /// The router mapping, made or lost.
@@ -1141,6 +1143,8 @@ struct Peer {
     mid: String,
     signal: mpsc::UnboundedSender<(String, serde_json::Value)>,
     cid: Option<ChannelId>,
+    /// Play Rooms voice's own channel (the page's `voice`, unordered and without resends).
+    vcid: Option<ChannelId>,
     to_session: Option<mpsc::Sender<Message>>,
     flow: Arc<Flow>,
     /// Data-channel messages (binary pieces already framed) not yet taken by the channel.
@@ -1501,6 +1505,11 @@ impl Driver {
                     to_audio(p, &b, Instant::now());
                 }
             }
+            Cmd::Voice(id, b) => {
+                if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
+                    to_voice(p, &b);
+                }
+            }
             Cmd::Gone(id) => {
                 if let Some(p) = self.peers.iter_mut().find(|p| p.id == id) {
                     p.to_session = None;
@@ -1602,6 +1611,7 @@ impl Driver {
             mid: first_mid(&sdp),
             signal,
             cid: None,
+            vcid: None,
             to_session: None,
             flow,
             out: VecDeque::new(),
@@ -1885,6 +1895,23 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             );
         }
         Event::ChannelOpen(cid, label) => {
+            // Play Rooms voice: a guest's second channel, once the session's is open.
+            if label == VOICE_LABEL
+                && p.kind == Kind::Join
+                && p.cid.is_some()
+                && p.vcid.is_none()
+                && p.closing_at.is_none()
+            {
+                p.vcid = Some(cid);
+                p.info.voice.store(true, Ordering::Relaxed);
+                crate::log_at!(
+                    Debug,
+                    "together",
+                    "join: internet guest {}: voice channel open",
+                    p.info.gid
+                );
+                return;
+            }
             if label != p.kind.label() || p.cid.is_some() || p.closing_at.is_some() {
                 return;
             }
@@ -1945,6 +1972,23 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             }
         }
         Event::ChannelData(d) => {
+            if p.vcid.is_some() && Some(d.id) == p.vcid {
+                // Voice frames only, whole, and dropped (never the peer) when the session is busy:
+                // they never take the room the pad frames on the session channel need.
+                if d.binary
+                    && d.data.first() == Some(&crate::join_voice::KIND_VOICE_UP)
+                    && d.data.len() <= 4 + crate::join_voice::OPUS_MAX
+                {
+                    if let Some(tx) = p
+                        .to_session
+                        .as_ref()
+                        .filter(|t| t.capacity() > TO_SESSION / 2)
+                    {
+                        let _ = tx.try_send(Message::Binary(d.data.into()));
+                    }
+                }
+                return;
+            }
             if Some(d.id) != p.cid {
                 return;
             }
@@ -1984,6 +2028,11 @@ fn on_event(p: &mut Peer, e: Event, cmd: &mpsc::UnboundedSender<Cmd>) {
             }
         }
         Event::ChannelClose(cid) => {
+            if Some(cid) == p.vcid {
+                p.vcid = None;
+                p.info.voice.store(false, Ordering::Relaxed);
+                return;
+            }
             if Some(cid) == p.cid {
                 p.to_session = None;
                 if p.closing_at.is_none() {
@@ -2372,6 +2421,18 @@ fn to_audio(p: &mut Peer, b: &[u8], now: Instant) {
     }
 }
 
+/// The label of the data channel a guest page opens for Play Rooms voice.
+pub(crate) const VOICE_LABEL: &str = "voice";
+
+/// A voice bundle onto the peer's `voice` channel, whole (one bundle is a few hundred bytes); a
+/// bundle the channel does not take now is dropped, never queued.
+fn to_voice(p: &mut Peer, b: &[u8]) {
+    let Some(cid) = p.vcid else { return };
+    if let Some(mut ch) = p.rtc.channel(cid) {
+        let _ = ch.write(true, b);
+    }
+}
+
 /// RTP ticks (48 kHz) per frame from the sound's header: `[channels][?][u32 rate][u32 samples
 /// per frame]` (big-endian, pad/watchPlayer.ts reads it the same way).
 pub(crate) fn audio_ticks(h: &[u8]) -> Option<u64> {
@@ -2558,6 +2619,8 @@ pub(crate) static TEST_NAT: Mutex<Option<nat::Search>> = Mutex::new(None);
 #[cfg(test)]
 #[path = "track_bench.rs"]
 mod track_bench;
+#[cfg(test)]
+pub(crate) use track_bench::{hold_room, release_room};
 
 #[cfg(test)]
 mod track_tests {

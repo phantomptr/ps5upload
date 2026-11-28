@@ -23,6 +23,7 @@
 #include "kernel_rw_lock.h"
 #include "sony_api_lock.h"
 #include "tailnet_node.h"
+#include "usbnet.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pp_state g_pp = {PP_NORMAL, PP_WHY_NONE, 0, 0, PP_OK_PROBES, 0, 0, 0, 0};
@@ -172,6 +173,8 @@ static void log_size_guard(int quiet) {
  * Caller holds g_mu. */
 static void apply_tailnet_locked(void) {
     int want = !pp_net_usable(&g_pp);
+    /* The USB adapter daemon too (usbnet.h): stopped from the first sign of rest, never blocks. */
+    usbnet_set_paused(want);
     if (tailnet_node_set_paused(want) != 0) return; /* busy starting or stopping: next poll */
     if (want == g_tn_want) return;
     /* One line per change, written after the node has been told (its fsync never delays a pause). */

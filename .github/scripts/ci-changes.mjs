@@ -24,6 +24,7 @@ export const LANES = {
   desktop: "rust desktop (3 OS)",
   android: "android (apk build)",
   scripts: "repo scripts on macOS and Windows (Ubuntu always runs)",
+  play: "PS5Upload Play (apps/play: the native PS5 app, built in Docker)",
 };
 
 const ALL = Object.keys(LANES);
@@ -64,6 +65,12 @@ export const RULES = [
   { pattern: ".github/dependabot.yml", lanes: [] },
   // Read by the codeql workflow only.
   { pattern: ".github/codeql/**", lanes: [] },
+
+  // PS5Upload Play, the native PS5 app: its own Docker build. The engine embeds the zip only
+  // when one was built (release builds), so no other lane reads these files; version-sync, which
+  // always runs, checks its param.json against VERSION.
+  { pattern: "apps/play/**", lanes: ["play"] },
+  { pattern: "scripts/check-play-version*", lanes: ["play", "scripts"] },
 
   // The Play Together hub stands alone: no workspace crate depends on it and it on none.
   { pattern: "engine/crates/ps5upload-hub/**", lanes: ["hub"] },

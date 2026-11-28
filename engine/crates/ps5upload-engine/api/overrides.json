@@ -184,6 +184,29 @@
    "summary": "This device's drive folders on every console, with their status"
   },
   "GET /api/engine/update": {
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "properties": {
+         "friends_playing": {
+          "description": "Who plays through Play Together now, read fresh on each call: an update or restart ends their game, so ask first. Empty when nobody is in.",
+          "items": {
+           "properties": {
+            "console": { "type": "string" },
+            "friends": { "items": { "type": "string" }, "type": "array" }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
    "summary": "Whether a newer engine release exists"
   },
   "GET /api/fakelibs/scan/{id}": {
@@ -200,6 +223,9 @@
   },
   "GET /api/jobs/{id}/summary": {
    "summary": "A finished job's transfer summary"
+  },
+  "GET /api/join/bridge": {
+   "summary": "A socket that joins a friend's internet Play Together room as a WebRTC guest for PS5Upload Play"
   },
   "GET /api/join/relay": {
    "summary": "A socket that forwards a guest page to the host engine's /api/join/ws or /api/join/signal"
@@ -1198,6 +1224,12 @@
   },
   "POST /api/ps5/tailnet": {
    "summary": "Put the console on Tailscale, pause, sign out, rename it or change who may reach it"
+  },
+  "GET /api/ps5/usbnet": {
+   "summary": "The console's USB network adapter (experimental): its state and address, and whether transfers use it"
+  },
+  "POST /api/ps5/usbnet": {
+   "summary": "Turn the console's USB network adapter on or off, or set its address (experimental)"
   },
   "GET /api/tailnet": {
    "summary": "This engine's own Tailscale node and the consoles it reaches through it"

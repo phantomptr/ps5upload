@@ -3216,6 +3216,49 @@ async fn the_stream_tools_name_the_session_they_mean() {
     }
 }
 
+/// The tools that would end friends' play pass the user's `confirm_friends` to their route, and
+/// leave it out when not given (the route then asks).
+#[tokio::test]
+async fn the_tools_that_end_friends_play_pass_the_confirm_on() {
+    let server = echo_server();
+    let c = "1.2.3.4";
+    for (tool, args, path) in [
+        (
+            "power_control",
+            json!({"console": c, "action": "standby"}),
+            "/api/ps5/power/control",
+        ),
+        (
+            "games_launch",
+            json!({"console": c, "title_id": "PPSA00001"}),
+            "/api/ps5/app/launch",
+        ),
+        (
+            "processes_kill",
+            json!({"console": c, "pid": 77}),
+            "/api/ps5/process/kill",
+        ),
+        (
+            "payloads_send",
+            json!({"console": c, "path": "/tmp/p.elf"}),
+            "/api/payload/send",
+        ),
+        (
+            "rp_stop",
+            json!({"console": c, "session": 3}),
+            "/api/ps5/rp/stop",
+        ),
+    ] {
+        let asked = route_of(&server, tool, args.clone()).await;
+        assert_eq!(asked["path"], path, "{tool}");
+        assert!(asked["body"].get("confirm_friends").is_none(), "{tool}");
+        let mut confirmed = args;
+        confirmed["confirm_friends"] = json!(true);
+        let asked = route_of(&server, tool, confirmed).await;
+        assert_eq!(asked["body"]["confirm_friends"], true, "{tool}");
+    }
+}
+
 #[tokio::test]
 async fn a_passcode_stays_out_of_the_words_of_the_answer() {
     let result = echo_server()

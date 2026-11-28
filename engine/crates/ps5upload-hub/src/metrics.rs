@@ -252,6 +252,13 @@ pub struct Metrics {
     pub stun_requests: AtomicU64,
     pub stun_ignored: AtomicU64,
     pub stun_limited: AtomicU64,
+    /// Guests whose socket had no Origin: an app's own client (PS5Upload's bridge for
+    /// PS5Upload Play), not a browser page. Counts only, like the rest.
+    pub joins_app: AtomicU64,
+    /// Guest sockets closed, and the time they were open in all (ms): the hub's load per join
+    /// (docs: apps/play/docs/ROUTES.md, "What the hub costs").
+    pub guests_left: AtomicU64,
+    pub guest_ms: AtomicU64,
     errors: [AtomicU64; ErrorKind::ALL.len()],
     limited: [AtomicU64; Limit::ALL.len()],
     strays: [AtomicU64; Stray::ALL.len()],
@@ -284,6 +291,22 @@ impl Metrics {
 
     pub fn limited_by(&self, limit: Limit) -> u64 {
         self.limited[limit.index()].load(Ordering::Relaxed)
+    }
+
+    /// A guest took its place in a room (`app`: its socket had no Origin).
+    pub fn guest_joined(&self, app: bool) {
+        if app {
+            Self::inc(&self.joins_app);
+        }
+    }
+
+    /// A guest's socket closed after `open` connected.
+    pub fn guest_left(&self, open: std::time::Duration) {
+        Self::inc(&self.guests_left);
+        self.guest_ms.fetch_add(
+            open.as_millis().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
     }
 
     pub fn stray(&self, class: Stray) {
@@ -372,6 +395,21 @@ impl Metrics {
             &self.reclaims,
         );
         counter("hub_joins_total", "Guests joined.", &self.joins);
+        counter(
+            "hub_joins_app_total",
+            "Guests joined from an app's own client (no Origin: the bridge for PS5Upload Play).",
+            &self.joins_app,
+        );
+        counter(
+            "hub_guests_left_total",
+            "Guest sockets closed.",
+            &self.guests_left,
+        );
+        counter(
+            "hub_guest_connected_ms_total",
+            "Time guest sockets were open, in all (ms).",
+            &self.guest_ms,
+        );
         counter("hub_signals_total", "Signals forwarded.", &self.signals);
         counter(
             "hub_host_signals_dropped_total",

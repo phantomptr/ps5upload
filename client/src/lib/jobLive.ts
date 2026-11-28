@@ -30,6 +30,10 @@
 //   route / route_reason          a console-to-console copy (#433): "direct" between the consoles,
 //                                 or "relay" through this computer and why (live while running, and
 //                                 in the finished job's commit_ack)
+//   link / link_mbps              which network a transfer to a console with a USB Ethernet adapter
+//                                 takes: "usb" (the adapter's own address, at link_mbps) or
+//                                 "console" (its own network). Only for a console that reported an
+//                                 adapter; never the same thing as `route`
 //
 // The contract is written down in protocol/ps5upload-ava1/PROFILE.md §8.
 
@@ -65,6 +69,10 @@ export interface JobLive {
   /** A console-to-console copy's route, and why it went through this computer. */
   route?: "direct" | "relay";
   routeReason?: string;
+  /** A console with a USB Ethernet adapter: the transfer goes over the adapter ("usb") or the
+   *  console's own network ("console"), and the adapter's link speed (Mbit/s) when known. */
+  link?: "usb" | "console";
+  linkMbps?: number;
 }
 
 /** The snapshot fields this module reads (all optional). */
@@ -85,6 +93,8 @@ export interface JobLiveFields {
   console_quiet_ms?: number | null;
   route?: string | null;
   route_reason?: string | null;
+  link?: string | null;
+  link_mbps?: number | null;
   commit_ack?: {
     bottleneck?: string | null;
     warning?: string | null;
@@ -141,9 +151,12 @@ export function jobLiveFromSnapshot(
   const route = routeWord === "direct" || routeWord === "relay" ? routeWord : undefined;
   const reasonWord = (snap.route_reason ?? snap.commit_ack?.route_reason ?? "").trim();
   const routeReason = route === "relay" && reasonWord ? reasonWord : undefined;
+  const link = snap.link === "usb" || snap.link === "console" ? snap.link : undefined;
+  const mbps = Number(snap.link_mbps) || 0;
+  const linkMbps = link === "usb" && mbps > 0 ? mbps : undefined;
   const quietFor = Number(snap.console_quiet_ms) || 0;
   const quietMs = quietFor >= QUIET_AFTER_MS ? quietFor : undefined;
-  if (!skipping && !measuring && !listing && !bottleneck && !settling && !verifying && !unsettled && !route && !quietMs) return undefined;
+  if (!skipping && !measuring && !listing && !bottleneck && !settling && !verifying && !unsettled && !route && !link && !quietMs) return undefined;
   const counted =
     settling && typeof snap.settle_files_left === "number" && Number.isFinite(snap.settle_files_left);
   const settleLeft = counted ? Math.max(0, snap.settle_files_left as number) : 0;
@@ -172,5 +185,7 @@ export function jobLiveFromSnapshot(
     ...(unsettled ? { unsettled } : {}),
     ...(route ? { route } : {}),
     ...(routeReason ? { routeReason } : {}),
+    ...(link ? { link } : {}),
+    ...(linkMbps ? { linkMbps } : {}),
   };
 }

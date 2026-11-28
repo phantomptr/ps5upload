@@ -9,6 +9,7 @@ import {
   type LanguageCode,
 } from "../i18n";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { LANGUAGE_LIST } from "../lib/languageNames";
 
 const STORAGE_KEY = "ps5upload.lang";
 
@@ -17,29 +18,7 @@ const STORAGE_KEY = "ps5upload.lang";
  * RTL detection is handled in `applyLang()` below; Arabic and Persian
  * trigger it (`RTL_LANGS`).
  */
-export const LANGUAGES: { code: LanguageCode; label: string }[] = [
-  { code: "en", label: "English" },
-  { code: "zh-CN", label: "简体中文" },
-  { code: "zh-TW", label: "繁體中文" },
-  { code: "hi", label: "हिन्दी" },
-  { code: "es", label: "Español" },
-  { code: "ar", label: "العربية" },
-  { code: "bn", label: "বাংলা" },
-  { code: "pl", label: "Polski" },
-  { code: "pt-BR", label: "Português (Brasil)" },
-  { code: "ru", label: "Русский" },
-  { code: "ja", label: "日本語" },
-  { code: "de", label: "Deutsch" },
-  { code: "fr", label: "Français" },
-  { code: "ko", label: "한국어" },
-  { code: "tr", label: "Türkçe" },
-  { code: "vi", label: "Tiếng Việt" },
-  { code: "id", label: "Bahasa Indonesia" },
-  { code: "it", label: "Italiano" },
-  { code: "th", label: "ไทย" },
-  { code: "hu", label: "Magyar" },
-  { code: "fa", label: "فارسی" },
-];
+export const LANGUAGES: { code: LanguageCode; label: string }[] = LANGUAGE_LIST.map((l) => ({ code: l.code as LanguageCode, label: l.label }));
 
 export const RTL_LANGS: Set<LanguageCode> = new Set(["ar", "fa"]);
 

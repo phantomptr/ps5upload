@@ -121,6 +121,15 @@ describe("createJobWaiter", () => {
     await expect(wait("a", () => true)).rejects.toMatchObject({ status: 401 });
   });
 
+  it("#981: hands each read of a running job to the caller (its bytes for the speed line)", async () => {
+    const running = { ...job("a", "running"), bytes_done: 10, bytes_total: 100 };
+    const reads = [[running], [{ ...running, bytes_done: 40 }], [job("a", "done")]];
+    const wait = createJobWaiter({ fetchJobs: async () => reads.shift() ?? [], sleep: async () => undefined });
+    const seen: number[] = [];
+    await expect(wait("a", undefined, (j) => seen.push(j.bytes_done))).resolves.toBe("done");
+    expect(seen).toEqual([10, 40]);
+  });
+
   it("no stop, no cancel", async () => {
     const reads = [[job("a", "running")], [job("a", "done")]];
     const cancel = vi.fn(async () => undefined);
@@ -178,6 +187,9 @@ describe("the page's one batch", () => {
       return empty();
     });
     expect(currentBatch()).toMatchObject({ bytesDone: 300, bytesTotal: 1200 });
+    // #981: each report is a speed sample, and how long the batch has run.
+    expect(currentBatch()?.rate).toMatchObject({ bytesPerSec: 0, stalled: false });
+    expect(currentBatch()?.elapsedS).toBeGreaterThanOrEqual(0);
     release();
     await run;
     expect(currentBatch()).toBeNull();

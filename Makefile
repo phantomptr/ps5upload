@@ -116,7 +116,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: ios-init ios-build run-ios android-deps android-init android-build android-deploy _android-install-if-device run-android run-android-background
 .PHONY: emu-create emu-start emu-stop emu-status emu-test
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
-.PHONY: sync-version sync-version-check check-helper-version
+.PHONY: sync-version sync-version-check check-helper-version check-play-version play-app
 .PHONY: docker-engine docker-engine-run
 
 # Default target
@@ -177,6 +177,7 @@ help:
 	@echo "Version:"
 	@echo "  make sync-version       - Sync downstream files from VERSION (canonical source)"
 	@echo "  make sync-version-check - Fail if any downstream file drifts from VERSION"
+	@echo "  make check-play-version - Fail if PS5Upload Play's contentVersion differs from VERSION"
 	@echo ""
 	@echo "Packaging:"
 	@echo "  make dist             - Tauri bundle for the current OS"
@@ -449,6 +450,20 @@ sync-version:
 
 sync-version-check:
 	@node scripts/update-version.js --check
+
+# PS5Upload Play (apps/play) carries this version as its contentVersion (13.0.0 -> 13.000.000).
+# With PLAY_ZIP=<file> (or after `make play-app`, the zip in apps/play/dist) the built zip too.
+check-play-version:
+	@if [ -n "$(PLAY_ZIP)" ]; then node scripts/check-play-version.mjs --zip "$(PLAY_ZIP)"; \
+	elif [ -d apps/play/dist ]; then node scripts/check-play-version.mjs --dist; \
+	else node scripts/check-play-version.mjs; fi
+
+# The PS5Upload Play release zip (apps/play/dist/PS5Upload-Play-FAKE99261-<version>.zip), built in
+# Docker by the app's own Makefile; the engine embeds it when present (engine build.rs). Nothing
+# to do while the app is not in the tree.
+play-app:
+	@if [ -f apps/play/Makefile ]; then $(MAKE) -C apps/play release && node scripts/check-play-version.mjs --dist; \
+	else echo "play-app: no apps/play/Makefile in this tree; skipped"; fi
 
 payload: setup-payload installer
 	@echo "Building PS5 payload..."
@@ -1104,7 +1119,7 @@ test-payload: payload
 		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) \
 		-o $(SELFTEST_DIR)/ps5upload-webui-server-selftest \
 		$(PAYLOAD_DIR)/tests/webui_server_selftest.c $(PAYLOAD_DIR)/src/webui_server.c \
-		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c
+		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c $(PAYLOAD_DIR)/src/rate_gate.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-webui-server-selftest
 	@echo "✓ silent, half-sent and flooding web clients never stall the helper; an idle connection holds no worker; transfers leave one worker for the page"
 	@echo "Running webui codec self-test (host build)..."
@@ -1185,6 +1200,36 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mesh-selftest
 	@echo "✓ devices connect (or ask, and are allowed or declined), are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
+	@echo "Running PS5Upload Play's loopback app API self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-app-api-selftest \
+		$(PAYLOAD_DIR)/tests/app_api_selftest.c $(PAYLOAD_DIR)/src/app_api.c $(PAYLOAD_DIR)/src/webui_http.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-api-selftest
+	@echo "✓ the app API answers only 127.0.0.1/localhost Hosts with no Origin, within its size limit; Remote Play turns on only when confirmed"
+	@echo "Running Play Rooms hosted-by marker + one-time grant self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-play-host-selftest \
+		$(PAYLOAD_DIR)/tests/play_host_selftest.c $(PAYLOAD_DIR)/src/play_host.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-play-host-selftest
+	@echo "✓ a room is kept per engine, replaced whole, gone after its time, bounded and cleaned; a grant is handed out once and expires"
+	@echo "Running the helper's request-rate gate self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -pthread \
+		-I$(PAYLOAD_DIR)/include -o $(SELFTEST_DIR)/ps5upload-rate-gate-selftest \
+		$(PAYLOAD_DIR)/tests/rate_gate_selftest.c $(PAYLOAD_DIR)/src/rate_gate.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-rate-gate-selftest
+	@echo "✓ a person's pace is always served; only a source that keeps going while told to wait waits longer, never banned"
+	@echo "Running PS5Upload Play install self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-play-app-selftest \
+		$(PAYLOAD_DIR)/tests/play_app_selftest.c $(PAYLOAD_DIR)/src/play_app.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-play-app-selftest
+	@echo "✓ PS5Upload Play installs the store app's way: staging, one folder rename or an overlay with param.json last, the same receipt"
 	@echo "Running the tailnet core's unit tests (host build, ASan + UBSan)..."
 	@$(MAKE) -j$(JOBS) -s -C tailnet test
 	@$(MAKE) -j$(JOBS) -s -C tailnet SAN=1 lib
@@ -1204,6 +1249,13 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-tasks-selftest
 	@echo "✓ the apps see what the page started, how it ended and that it was cancelled, and nothing a PC started"
+	@echo "Running console page queue self-test (host build, #982)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-console-queue-selftest \
+		$(PAYLOAD_DIR)/tests/console_queue_selftest.c $(PAYLOAD_DIR)/src/console_queue.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-queue-selftest
+	@echo "✓ the console's queue runs in order, one at a time; cancel, move to top, failures go on, a restart pauses after an install"
 	@echo "Running helper log levels self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-plog-selftest \
@@ -1477,6 +1529,19 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/power_phase_live_selftest.c $(PAYLOAD_DIR)/src/power_phase.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-power-phase-live-selftest
 	@echo "✓ going to rest and the minute after a wake: no fan or kernel work, tailnet without sockets until the network is back"
+	@echo "Running USB Ethernet adapter self-tests (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-usbnet-selftest $(PAYLOAD_DIR)/tests/usbnet_selftest.c $(PAYLOAD_DIR)/src/usbnet_util.c \
+		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/usbnet/rtl.c $(PAYLOAD_DIR)/usbnet/ncm.c $(PAYLOAD_DIR)/usbnet/link.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-usbnet-selftest
+	@echo "✓ adapter IDs, descriptors, bulk aggregates, the link debounce and Minion's PROXY line"
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -w -pthread -I$(PAYLOAD_DIR)/usbnet \
+		-I$(PAYLOAD_DIR)/include -Ithird_party/lwip/src/include -o $(SELFTEST_DIR)/ps5upload-usbnet-dhcp-selftest \
+		$(PAYLOAD_DIR)/tests/usbnet_dhcp_selftest.c $(PAYLOAD_DIR)/usbnet/net.c $(PAYLOAD_DIR)/usbnet/sys_arch.c \
+		$(wildcard third_party/lwip/src/core/*.c) $(wildcard third_party/lwip/src/core/ipv4/*.c) \
+		$(wildcard third_party/lwip/src/api/*.c) third_party/lwip/src/netif/ethernet.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-usbnet-dhcp-selftest
+	@echo "✓ the adapter's network layer gets, reads back and releases a DHCP lease, and takes a static address"
 	@echo "Running save param.sfo self-test (host build, ASan + UBSan)..."
 	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
 		-I$(PAYLOAD_DIR)/include -o $(SELFTEST_DIR)/ps5upload-save-sfo-selftest \

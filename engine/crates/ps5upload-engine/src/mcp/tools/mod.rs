@@ -559,6 +559,11 @@ fn hint_for(
     // alone (AUTOMATION.md).
     let exact = |code: &str| -> Option<&'static str> {
         Some(match code {
+            "friends_playing" => {
+                "Friends are playing on this PS5 through Play Together (`friends` names them), \
+                 and this would end their game. Ask the user; only if they say go ahead, call the \
+                 tool again with confirm_friends: true."
+            }
             "no_session" => {
                 "Nothing is streaming from that console. rp_start starts a stream if the user \
                  asked for one; in the app it is Play › Start."
@@ -703,6 +708,25 @@ pub(super) fn console_required() -> Value {
         "type": "string",
         "description": "The PS5's address, like 192.168.1.100 (consoles_list shows the known ones).",
     })
+}
+
+/// `confirm_friends` on a tool that would end friends' play through Play Together
+/// (together_guard.rs): the route answers `friends_playing` until the user says go ahead.
+pub(super) fn confirm_friends() -> Value {
+    json!({
+        "type": "boolean",
+        "description": "Only after the user said go ahead although friends are playing on this \
+                        PS5 through Play Together (the tool failed with `friends_playing`, \
+                        naming them). Never on your own.",
+    })
+}
+
+/// `body` with the tool's `confirm_friends`, when it was given.
+pub(super) fn with_confirm_friends(mut body: Value, args: &Args) -> Value {
+    if let Some(yes) = args.flag("confirm_friends") {
+        body["confirm_friends"] = json!(yes);
+    }
+    body
 }
 
 /// A JSON object without its null fields: what a route's optional fields look like left out.
@@ -1036,6 +1060,33 @@ mod tests {
             &reply(403, r#"{"error":"local_only"}"#),
         ));
         assert!(text.contains("localhost"), "{text}");
+    }
+
+    #[test]
+    fn friends_playing_says_to_ask_the_user_first() {
+        let output = engine_failure(
+            "POST /api/ps5/power/control",
+            &reply(
+                409,
+                r#"{"error":"friends_playing","friends":["Mia"],"console":"1.2.3.4","message":"Friends are playing on this PS5. Stop anyway?"}"#,
+            ),
+        );
+        let text = message(&output);
+        assert!(text.contains("confirm_friends"), "{text}");
+        assert!(text.contains("Ask the user"), "{text}");
+        let result = output.to_result();
+        assert_eq!(result["structuredContent"]["body"]["friends"][0], "Mia");
+        let args = Args(serde_json::Map::from_iter([(
+            "confirm_friends".to_string(),
+            json!(true),
+        )]));
+        assert_eq!(
+            with_confirm_friends(json!({"addr": "c"}), &args)["confirm_friends"],
+            true
+        );
+        assert!(with_confirm_friends(json!({}), &Args::default())
+            .get("confirm_friends")
+            .is_none());
     }
 
     #[test]

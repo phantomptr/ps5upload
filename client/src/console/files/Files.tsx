@@ -47,7 +47,7 @@ import { UnpackDialog, unpackCauseText, unpackErrorText } from "./UnpackDialog";
 import { PkgDialog } from "./PkgDialog";
 import { installBusyText, installMessage, installPhaseText, installStoppable, isPayload, isPkg, loadPayload, payloadErrorText, startInstall } from "./pkg";
 import { ExtractDialog, extractCauseText, extractErrorText, type ExtractStart } from "./ExtractDialog";
-import { isExtractableArchive, toExtractResult } from "../../lib/archiveName";
+import { isExtractableArchive, partlyFreed, toExtractResult } from "../../lib/archiveName";
 import { VerifyDialog } from "./VerifyDialog";
 import {
   copyItems,
@@ -66,6 +66,8 @@ import {
   type BatchResult,
 } from "./move";
 import { extractLeftSomething, extractOpensDest, stillAsking } from "./askGuard";
+import { rateText, RateLine } from "../ui/rate";
+import { addToQueue } from "../queue/queue";
 import { batchOptions, currentBatch, startBatch, stopBatch, useBatch, waitJob, type BatchProgress } from "./batch";
 import {
   askConflict,
@@ -146,7 +148,7 @@ export type FilesAsk =
   | { kind: "upload" }
   /** On the console itself: how to upload here from a phone (its address, or LAN access to switch on). */
   | { kind: "phoneupload" }
-  | { kind: "pick"; op: "copy" | "move"; names: string[] }
+  | { kind: "pick"; op: "copy" | "move" | "queue"; names: string[] }
   | { kind: "info"; name: string }
   /** `edit`: straight into the text editor. */
   | { kind: "view"; name: string; type: ViewKind; edit?: boolean }
@@ -376,7 +378,9 @@ export interface FilesViewProps {
   pwOver?: PwAsk | null;
   onPwOverCancel?: () => void;
   onMkdir: (name: string) => void;
-  onPicked: (op: "copy" | "move", names: string[], destDir: string) => void;
+  onPicked: (op: "copy" | "move" | "queue", names: string[], destDir: string) => void;
+  /** Add the package at `path` to the console's queue (#982). */
+  onQueueInstall?: (path: string, name: string) => void;
   /** Open `dir` in Files with `name` focused (a search result); null name: the folder itself. */
   onReveal?: (dir: string, name: string | null) => void;
   /** Create an empty file named so in the folder shown (then it opens in the editor). */
@@ -394,13 +398,21 @@ export interface FilesViewProps {
   onShareRemove?: (id: string) => void;
 }
 
+/** Why an item could not be added to the console's queue (#982). */
+export function queueErrorText(e: unknown): string {
+  if (e instanceof ApiError && e.code === "queue_full") return t("cw_queue_full");
+  if (e instanceof ApiError && (e.status === 404 || e.code === "not_found")) return t("cw_queue_unsupported");
+  return filesErrorText(e) ?? String(e);
+}
+
 /** `line` · 45% · 1.2 GB / 2.6 GB, when the batch reports its bytes (a network-share copy, unpack). */
 function withBytes(line: string, b: Busy): string {
   const total = b.bytesTotal ?? 0;
   if (total <= 0) return line;
   const done = Math.min(b.bytesDone ?? 0, total);
   const pct = Math.min(100, Math.floor((done / total) * 100));
-  return `${line} · ${t("cw_home_percent", { n: pct })} · ${formatBytes(done)} / ${formatBytes(total)}`;
+  const rate = rateText(b.rate, b.elapsedS);
+  return `${line} · ${t("cw_home_percent", { n: pct })} · ${formatBytes(done)} / ${formatBytes(total)}${rate ? ` · ${rate}` : ""}`;
 }
 
 /** "Copying 3 of 40" (item `at` is being sent or is running), or "Stopping…". */
@@ -413,14 +425,15 @@ export function busyText(b: Busy | null): string | null {
   }
   const at = Math.max(1, b.at);
   if (b.op === "copy") return withBytes(t("cw_files_batch_copy", { at, total: b.total }), b);
-  if (b.op === "move") return t("cw_files_batch_move", { at, total: b.total });
+  if (b.op === "move") return withBytes(t("cw_files_batch_move", { at, total: b.total }), b);
   if (b.op === "chmod") return t("cw_files_fixperm_batch", { at, total: b.total });
   if (b.op === "rename") return t("cw_files_br_batch", { at, total: b.total });
   if (b.op === "unpack") return withBytes(t("cw_files_unpack_batch", { name: baseName(b.paths?.[0] ?? "") }), b);
   if (b.op === "extract") return withBytes(t("cw_files_extract_batch", { name: baseName(b.paths?.[0] ?? "") }), b);
   if (b.op === "install") {
     const name = baseName(b.paths?.[0] ?? "");
-    return `${name}: ${installBusyText(installPhaseText(b.phase), b.bytesDone ?? 0, b.bytesTotal ?? 0)}`;
+    const rate = rateText(b.rate, b.elapsedS);
+    return `${name}: ${installBusyText(installPhaseText(b.phase), b.bytesDone ?? 0, b.bytesTotal ?? 0)}${rate ? ` · ${rate}` : ""}`;
   }
   return t("cw_files_batch_delete", { at, total: b.total });
 }
@@ -433,7 +446,7 @@ export function sheetActions(names: string[], entries: Entry[], pinned: boolean 
   if (names.length !== 1) return ["clipcopy", "cut", "copy", "move", "bulkrename", "fixperm", "delete"];
   const e = entries.find((x) => x.name === names[0]);
   const out: SheetAction[] = [];
-  if (e && e.kind === "file" && isPkg(e.name)) out.push("install");
+  if (e && e.kind === "file" && isPkg(e.name)) out.push("install", "queue");
   if (e && e.kind === "file" && isPayload(e.name)) out.push("loadpayload");
   if (e && e.kind !== "dir" && viewKind(e.name)) out.push("view");
   // Any small file opens in the text editor (a .cfg, .conf, .sh…); a binary one says it cannot.
@@ -451,7 +464,7 @@ export function sheetActions(names: string[], entries: Entry[], pinned: boolean 
 
 /** On a network share only Copy works: into the clipboard (to paste on the console) or Copy to… a console folder. */
 export function smbSheetActions(): SheetAction[] {
-  return ["clipcopy", "copy"];
+  return ["clipcopy", "copy", "queue"];
 }
 
 /** `names` as bulk rename items, in the order the list shows them (numbering follows it). */
@@ -530,6 +543,7 @@ export function extractMessage(end: OpEnd | { end: "error"; error: unknown }, me
     if (r.skipped > 0) parts.push(t("cw_files_extract_done_skipped_v2", { n: r.skipped }));
     if (r.unsafe > 0) parts.push(t("cw_files_extract_done_unsafe_v2", { n: r.unsafe }));
     if (r.links > 0) parts.push(t("cw_files_extract_done_links_v2", { n: r.links }));
+    if (r.partsFreed > 0) parts.push(t("cw_files_extract_freed", { size: formatBytes(r.bytesFreed) }));
     return { tone: "info", text: parts.join(" ") };
   }
   if (end.end === "cancelled") return { tone: "info", text: t(merged ? "cw_files_extract_stopped_merge" : "cw_files_extract_stopped") };
@@ -539,6 +553,17 @@ export function extractMessage(end: OpEnd | { end: "error"; error: unknown }, me
     return why ? { tone: "error", text: t("cw_files_extract_failed", { reason: why }) } : null;
   }
   const cause = opCause(end.status);
+  // Stopped after part of the archive was deleted as it unpacked: why, then what is gone and where
+  // everything unpacked so far is.
+  const gone = partlyFreed(end.status?.message ?? "");
+  if (gone) {
+    const inner = gone.cause.replace(/[:\s].*$/, "");
+    const reason =
+      inner === "fs_extract_cancelled"
+        ? t("cw_files_extract_free_stopped")
+        : (extractCauseText(inner) ?? t("cw_files_unpack_failed_generic", { cause: inner || "?" }));
+    return { tone: "error", text: t("cw_files_extract_err_partly_freed", { reason, folder: gone.folder, n: gone.left }) };
+  }
   const why = extractCauseText(cause) ?? t("cw_files_unpack_failed_generic", { cause: cause || "?" });
   return { tone: "error", text: t("cw_files_extract_failed", { reason: why }) };
 }
@@ -756,6 +781,10 @@ function askView(p: FilesViewProps) {
                 return p.onAsk({ kind: "unpack", name });
               case "install":
                 return p.onAsk({ kind: "pkg", name });
+              case "queue":
+                // From a share: a copy into a console folder, picked first. A package here: its install.
+                if (isSmbPath(path)) return p.onAsk({ kind: "pick", op: "queue", names: a.names });
+                return p.onQueueInstall?.(joinPath(path, name), name);
               case "loadpayload":
                 return p.onAsk({ kind: "payload", name });
               case "extract":
@@ -922,7 +951,7 @@ function askView(p: FilesViewProps) {
     case "pick":
       return (
         <PathPicker
-          title={t(a.op === "copy" ? "cw_files_copy_to" : "cw_files_move_to")}
+          title={t(a.op === "move" ? "cw_files_move_to" : a.op === "queue" ? "cw_queue_add" : "cw_files_copy_to")}
           subtitle={namesTitle(a.names)}
           volumes={p.volumes ?? []}
           shares={isSmbPath(path) ? undefined : (p.shares ?? undefined)}
@@ -980,6 +1009,9 @@ function TasksLine({ tasks }: { tasks: Job[] }) {
     <div className="cw-msg" role="status">
       {t("cw_files_tasks", { n: tasks.length })}
       {pct != null ? ` · ${t("cw_home_percent", { n: pct })}` : ""}
+      {tasks.length === 1 ? (
+        <RateLine id={tasks[0].job} done={tasks[0].bytes_done} total={tasks[0].bytes_total} elapsedS={tasks[0].elapsed_s} prefix=" · " />
+      ) : null}
       <div className="cw-bar" aria-hidden>
         <div className={`cw-bar-fill${pct == null ? " is-unknown" : ""}`} style={{ width: `${pct ?? 100}%` }} />
       </div>
@@ -1701,9 +1733,22 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   );
 
   const onPicked = useCallback(
-    (op: "copy" | "move", names: string[], destDir: string) => {
+    (op: "copy" | "move" | "queue", names: string[], destDir: string) => {
       setAsk(null);
       if (path == null) return;
+      if (op === "queue") {
+        // Into the console's queue (#982): each item a copy of its own, run one after another.
+        if (isSmbPath(destDir)) return;
+        void (async () => {
+          try {
+            for (const n of names) await addToQueue({ kind: "copy", src: joinPath(path, n), dest: joinPath(destDir, n), name: n });
+            setMessage({ tone: "info", text: t("cw_queue_added_n", { n: names.length }) });
+          } catch (e) {
+            setMessage({ tone: "error", text: queueErrorText(e) });
+          }
+        })();
+        return;
+      }
       const kinds = new Map(dir.entries.map((e) => [e.name, e.kind]));
       const items = () => names.map((n) => ({ path: joinPath(path, n), dir: kinds.get(n) === "dir" }));
       if (isSmbPath(path)) {
@@ -1941,6 +1986,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         ...(start.replace ? { replace: true } : {}),
         // "Choose items" (#969): the top-level entries left out.
         ...(start.skip && start.skip.length > 0 ? { top: skipTop(start.skip) } : {}),
+        // "Delete the archive as it's unpacked": the helper deletes it, part by part.
+        ...(start.free ? { free: true } : {}),
       };
       const run = startBatch(
         "extract",
@@ -2417,6 +2464,13 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         remote={remote}
         onOpenSettings={ctx.hasSection("settings") ? () => ctx.openSection("settings") : undefined}
         onPicked={onPicked}
+        onQueueInstall={(pkg, name) => {
+          setAsk(null);
+          addToQueue({ kind: "install", src: pkg, name }).then(
+            () => setMessage({ tone: "info", text: t("cw_queue_added", { name }) }),
+            (e: unknown) => setMessage({ tone: "error", text: queueErrorText(e) }),
+          );
+        }}
         onReveal={onReveal}
         shares={shares}
         onShareSaved={onShareSaved}

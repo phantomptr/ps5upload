@@ -285,6 +285,9 @@ export interface ArchiveFreeCheck {
   /** The free room the job needs in the output folder, and what is there (when known). */
   needed: number;
   free: number | null;
+  /** How much less free room that is than with the archive kept to the end (0 on another
+   *  drive). Absent from an engine older than this. */
+  saves?: number;
 }
 
 export const fpkg = {

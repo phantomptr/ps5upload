@@ -56,11 +56,12 @@ int webui_list_to_json(const uint8_t *res, size_t n, char *out, size_t cap);
 /* An encoded ava1_job_list_result_t as
  *   {"jobs":[{"job":"<32 hex>","kind":"upload"|"download"|"copy"|"op"|"other",
  *             "state":"running"|"done"|"failed","files_done":N,"files_total":N,
- *             "bytes_done":N,"bytes_total":N,"mine":bool},...]}
- * `mine` (may be NULL: never mine) tells whether a job is the caller's. Returns the number of
- * jobs written or -1 (does not decode, or does not fit). */
-int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx), void *ctx,
-                       char *out, size_t cap);
+ *             "bytes_done":N,"bytes_total":N,"mine":bool[,"elapsed_s":N]},...]}
+ * `mine` (may be NULL: never mine) tells whether a job is the caller's. `elapsed` (may be NULL)
+ * gives the milliseconds since a job started, or < 0 when that is not known: elapsed_s is left out
+ * then (#981). Returns the number of jobs written or -1 (does not decode, or does not fit). */
+int webui_jobs_to_json(const uint8_t *res, size_t n, int (*mine)(const uint8_t id[16], void *ctx),
+                       int64_t (*elapsed)(const uint8_t id[16], void *ctx), void *ctx, char *out, size_t cap);
 
 /* The longest operation result /api/jobs/status carries (a HASH result is ~2.2 KiB with a long
  * path; CRC32 and FFPFSC_UNPACK far less). A longer one is answered as "result":null. */
@@ -98,12 +99,13 @@ int webui_rename_detour(const char *from, const char *to, unsigned salt, char *t
 int webui_path_job_args(char *out, size_t cap, const char *path, const char *name, const char *tail);
 
 /* An archive extract's members after the path, as archive_extract.c reads them:
- * ,"dest":"…"[,"password":"…"],"merge":b,"replace":b[,"list":true][,"top":"…"]. `password` and
- * `top` NULL (or `top` "") leave theirs out; `top` is the extractor's "from/to/…" (an empty `to`
- * leaves that top-level entry out: "Choose items", #969). Returns the length, or -1 when it does
- * not fit (out is then ""). */
+ * ,"dest":"…"[,"password":"…"],"merge":b,"replace":b[,"list":true][,"free":true][,"top":"…"]. `password`
+ * and `top` NULL (or `top` "") leave theirs out; `top` is the extractor's "from/to/…" (an empty `to`
+ * leaves that top-level entry out: "Choose items", #969). `free_archive`: delete the archive as it is
+ * unpacked (payload/extractor/src/xfree.h); with `list`, only ask how that would go. Returns the
+ * length, or -1 when it does not fit (out is then ""). */
 int webui_extract_tail(char *out, size_t cap, const char *dest, const char *password, int merge, int replace,
-                       int list, const char *top);
+                       int list, const char *top, int free_archive);
 
 /* 16 bytes as 32 lowercase hex characters + NUL. */
 void webui_hex16(const uint8_t id[16], char out[33]);
@@ -227,6 +229,9 @@ const char *webui_proc_kill_refusal(const char *json, size_t n, uint64_t pid);
 /* From a PROCESS_LIST reply: 1 when a game ("app") process with title id `tid` runs (when
  * `other` is set: a game with any OTHER title id), 0 when none, -1 when the reply does not parse. */
 int webui_proc_game_running(const char *json, size_t n, const char *tid, int other);
+/* From a PROCESS_LIST reply: the app_id of the app process with title id `tid` (what APP_LIFECYCLE
+ * kill takes). 1 found (*app_id set), 0 not running or no app_id, -1 the reply does not parse. */
+int webui_proc_title_app_id(const char *json, size_t n, const char *tid, uint64_t *app_id);
 
 /* ---- search index (INDEX_START / INDEX_STATUS / INDEX_SEARCH / INDEX_CANCEL, runtime.c) ----
  * The handlers read their bodies with a quote-to-quote scan (no JSON unescaping), so every string the

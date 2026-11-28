@@ -5,6 +5,7 @@ import { Button, Spinner } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { ProgressBar } from "../../components/ProgressBar";
 import { formatBytes } from "../../lib/format";
+import { RateFigures } from "../../components/RateFigures";
 import { invoke } from "../../lib/invokeLogged";
 import { isAndroid } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -359,7 +360,12 @@ export function ArchivePackagesCard({ host }: { host: string }) {
         <div className="mt-3" role="status">
           <div className="mb-1 flex items-center gap-2 text-xs">
             <Spinner size={14} tone="accent" />
-            <span>{phaseText}</span>
+            <span>
+              {phaseText}
+              {phase?.phase === "unpacking" && phase.total > 0 && (
+                <RateFigures id="rarpkg-unpack" done={phase.sent} total={phase.total} prefix=" · " className="text-[var(--color-muted)]" />
+              )}
+            </span>
           </div>
           {phase?.phase === "unpacking" && phase.total > 0 && (
             <ProgressBar value={phase.sent / phase.total} size="sm" />

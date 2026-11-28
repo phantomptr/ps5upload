@@ -26,6 +26,7 @@
 #define LOCK_TTL_MAX_S 600u
 #define PRUNE_EVERY_MS (3600u * 1000u)
 #define VIA_MAX 12
+#define PLAY_PATH_MAX 128 /* a Play endpoint path (join_ws, app_ws), with its NUL */
 /* A device that asked to connect while approval is on: listed for the owner to Allow or Decline
  * for this long. Allowed, it has the same time to connect; declined, it is not asked about again
  * until then. */
@@ -45,6 +46,13 @@ typedef struct {
      * a code, launched by its app, or listed before 12.2). Kept in v1/via, so an older helper reading
      * v1/devices sees the file it knows. */
     char via[VIA_MAX];
+    /* Where PS5Upload Play reaches it, from its last hello ({"play":{port,join_ws,app_ws}}, engines
+     * from 13): play is 1 when that hello carried the object; port 0 / "" for a part that was
+     * missing or not valid. In memory only: never saved, never in MESH_STATE (an older app would
+     * not know it), only in mesh_engines_json. */
+    int play;
+    uint16_t play_port;
+    char play_join[PLAY_PATH_MAX], play_app[PLAY_PATH_MAX];
 } dev_t_;
 
 enum { ASK_ASKING = 0, ASK_ALLOWED = 1, ASK_DECLINED = 2 };
@@ -812,15 +820,51 @@ static void put_settings(buf_t *b) {
     putf(b, "{\"require_approval\":%s,\"prune_days\":%u}", M.require_approval ? "true" : "false", M.prune_days);
 }
 
+/* A path from a Play object ("/..." with no quote, backslash, space or control character, shorter
+ * than cap), or "" (shown as null). */
+static void item_path(const char *item, size_t il, const char *key, char *out, size_t cap) {
+    size_t i;
+    out[0] = 0;
+    if (!item || webui_json_str(item, il, key, out, cap) != 1 || out[0] != '/') {
+        out[0] = 0;
+        return;
+    }
+    for (i = 0; out[i]; i++)
+        if ((unsigned char)out[i] < 0x21 || out[i] == '"' || out[i] == '\\' || out[i] == 0x7f) {
+            out[0] = 0;
+            return;
+        }
+}
+
+/* The port of a Play object (1..65535), or 0. */
+static unsigned item_port(const char *item, size_t il) {
+    uint64_t port = 0;
+    if (!item || webui_json_u64(item, il, "port", &port) != 1 || port == 0 || port > 65535) return 0;
+    return (unsigned)port;
+}
+
 static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap,
                     const mesh_online_t *on, int non) {
     char name[NAME_MAX_], kind[KIND_MAX], os[OS_MAX], app[APP_MAX], hex[65], *tmp;
+    char play_join[PLAY_PATH_MAX], play_app[PLAY_PATH_MAX];
+    const char *pv = NULL;
+    size_t pvl = 0;
+    unsigned play_port = 0;
     uint8_t ev[32];
-    int evicted = 0, isnew = 0, i;
+    int evicted = 0, isnew = 0, i, play = 0;
     uint32_t ip = 0;
     dev_t_ *d;
     buf_t b = { out, 0, cap, 0 };
     name[0] = kind[0] = os[0] = app[0] = 0;
+    play_join[0] = play_app[0] = 0;
+    /* Where PS5Upload Play reaches this engine (engines from 13). A hello without it clears it: the
+     * engine no longer offers it. */
+    if (top_value(body, n, "play", &pv, &pvl) == 1 && pvl && pv[0] == '{') {
+        play = 1;
+        play_port = item_port(pv, pvl);
+        item_path(pv, pvl, "join_ws", play_join, sizeof play_join);
+        item_path(pv, pvl, "app_ws", play_app, sizeof play_app);
+    }
     /* Each read whole (a string never decodes longer than the body that holds it), then cut to its
      * field on a character boundary, as the engine cuts it. A name of 64 bytes or more did not fit
      * the buffer and was dropped: the console went on showing the old one. */
@@ -849,6 +893,10 @@ static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *
     if (app[0]) snprintf(d->app, sizeof d->app, "%s", app);
     d->last = now_ms();
     if (ip) d->ip = ip;
+    d->play = play;
+    d->play_port = (uint16_t)play_port;
+    snprintf(d->play_join, sizeof d->play_join, "%s", play_join);
+    snprintf(d->play_app, sizeof d->play_app, "%s", play_app);
     if (isnew) add_event("joined", caller, "%s connected for the first time", shown_name(d));
     /* A Docker engine whose /data was not kept comes back under a new key after every update: the
      * same name and address, kind docker, the old one offline. Only its list entry goes (its nickname
@@ -870,6 +918,9 @@ static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *
     putstr(&b, hex);
     puts_(&b, ",\"helper\":");
     putstr(&b, M.helper);
+    /* This helper serves PS5Upload Play's loopback app API (127.0.0.1:9181, app_api.h): the engine
+     * tells the app "an older helper" from "no helper" by it. */
+    puts_(&b, ",\"app_api\":true");
     putf(&b, ",\"rev\":%llu,\"new\":%s,\"settings\":", (unsigned long long)M.rev, isnew ? "true" : "false");
     put_settings(&b);
     puts_(&b, "}");
@@ -1414,6 +1465,168 @@ static int do_announce(const uint8_t caller[32], const char *body, size_t n, cha
     r = snprintf(out, cap, "{\"ok\":true,\"rev\":%llu}", (unsigned long long)M.rev);
     pthread_mutex_unlock(&g_mu);
     return r < 0 || (size_t)r >= cap ? -1 : r;
+}
+
+/* ---- the engines the console knows (PS5Upload Play's loopback app API, app_api.h) ---- */
+
+/* The first {"kind":"play_host",...} object in a presence array: 1 (span in *v, *vl), else 0. */
+static int find_play_item(const char *s, size_t n, const char **v, size_t *vl) {
+    size_t i = 0;
+    skip_ws(s, n, &i);
+    if (i >= n || s[i] != '[') return 0;
+    i++;
+    for (;;) {
+        size_t st;
+        char kind[16];
+        skip_ws(s, n, &i);
+        if (i >= n || s[i] == ']') return 0;
+        st = i;
+        if (skip_value(s, n, &i) != 0) return 0;
+        if (s[st] == '{' && webui_json_str(s + st, i - st, "kind", kind, sizeof kind) == 1 &&
+            !strcmp(kind, "play_host")) {
+            *v = s + st;
+            *vl = i - st;
+            return 1;
+        }
+        skip_ws(s, n, &i);
+        if (i < n && s[i] == ',') i++;
+    }
+}
+
+/* One engine as the app reads it; `item` is its play_host presence item (NULL: none, and then
+ * what its hello said, if anything). */
+static void put_engine(buf_t *b, const dev_t_ *d, const char *item, size_t il) {
+    char ipt[16], join[PLAY_PATH_MAX], app[PLAY_PATH_MAX], hex[65];
+    unsigned port;
+    ip_text(d->ip, ipt);
+    to_hex(d->key, hex);
+    if (item) {
+        port = item_port(item, il);
+        item_path(item, il, "join_ws", join, sizeof join);
+        item_path(item, il, "app_ws", app, sizeof app);
+    } else {
+        /* Empty when its hello carried no play object (cleared at every hello). */
+        port = d->play_port;
+        snprintf(join, sizeof join, "%s", d->play_join);
+        snprintf(app, sizeof app, "%s", d->play_app);
+    }
+    /* The engine's id (its AVA1 key, as the engine's own mesh id): the app keeps computers by it,
+     * never by address (an address changes; two Tailscale engines share the forward's). */
+    puts_(b, "{\"id\":");
+    putstr(b, hex);
+    puts_(b, ",\"name\":");
+    putstr(b, shown_name(d));
+    puts_(b, ",\"kind\":");
+    putstr(b, d->kind);
+    puts_(b, ",\"version\":");
+    putstr(b, d->app);
+    putf(b, ",\"addr\":\"%s\",\"tailnet\":%s", ipt, is_tailnet_ip(d->ip) ? "true" : "false");
+    if (port)
+        putf(b, ",\"port\":%u", port);
+    else
+        puts_(b, ",\"port\":null");
+    if (join[0]) {
+        puts_(b, ",\"join_ws\":");
+        putstr(b, join);
+    } else {
+        puts_(b, ",\"join_ws\":null");
+    }
+    if (app[0]) {
+        puts_(b, ",\"app_ws\":");
+        putstr(b, app);
+    } else {
+        puts_(b, ",\"app_ws\":null");
+    }
+    puts_(b, "}");
+}
+
+int mesh_engines_json(char *out, size_t cap) {
+    mesh_online_t *on;
+    int non, i, first = 1, best = -1;
+    uint64_t best_at = 0;
+    buf_t b = { out, 0, cap, 0 };
+    if (!out || cap < 64) return -1;
+    /* Heap: the caller's stack is small. */
+    if (!(on = calloc(MESH_MAX_DEVICES, sizeof *on))) return fail(out, cap, "out_of_memory");
+    non = M.h.online ? M.h.online(on, MESH_MAX_DEVICES) : 0;
+    pthread_mutex_lock(&g_mu);
+    /* The engine the app should dial: the online device that offers Play, with a play_host item in
+     * its presence (heard at its presence's time) or a play object in its hello (heard when it was
+     * last heard from); the one heard from last when there are several. */
+    for (i = 0; i < MESH_MAX_DEVICES; i++) {
+        const dev_t_ *d = &M.dev[i];
+        const char *v;
+        size_t vl;
+        uint64_t at;
+        if (!d->used || d->blocked || !d->ip || !is_online(d->key, on, non)) continue;
+        if (find_play_item(d->activity, strlen(d->activity), &v, &vl))
+            at = d->activity_at;
+        else if (d->play)
+            at = d->last;
+        else
+            continue;
+        if (best < 0 || at > best_at) {
+            best = i;
+            best_at = at;
+        }
+    }
+    puts_(&b, "{\"engine\":");
+    if (best >= 0) {
+        const char *v = NULL;
+        size_t vl = 0;
+        const dev_t_ *d = &M.dev[best];
+        (void)find_play_item(d->activity, strlen(d->activity), &v, &vl);
+        put_engine(&b, d, v, vl);
+    } else {
+        puts_(&b, "null");
+    }
+    /* Every device connected now: an engine that does not publish the item yet still says where it is. */
+    puts_(&b, ",\"online\":[");
+    for (i = 0; i < MESH_MAX_DEVICES; i++) {
+        const dev_t_ *d = &M.dev[i];
+        const char *v = NULL;
+        size_t vl = 0;
+        if (!d->used || d->blocked || !is_online(d->key, on, non)) continue;
+        if (!find_play_item(d->activity, strlen(d->activity), &v, &vl)) v = NULL;
+        if (!first) puts_(&b, ",");
+        put_engine(&b, d, v, vl);
+        first = 0;
+    }
+    puts_(&b, "]}");
+    pthread_mutex_unlock(&g_mu);
+    free(on);
+    return b.err ? fail(out, cap, "reply_too_large") : (int)b.len;
+}
+
+int mesh_engine_info(const uint8_t key[32], mesh_engine_t *out) {
+    mesh_online_t *on;
+    const dev_t_ *d;
+    int non, found = 0;
+    if (!key || !out) return 0;
+    memset(out, 0, sizeof *out);
+    if (!(on = calloc(MESH_MAX_DEVICES, sizeof *on))) return 0;
+    non = M.h.online ? M.h.online(on, MESH_MAX_DEVICES) : 0;
+    pthread_mutex_lock(&g_mu);
+    d = find_dev(key);
+    if (d && !d->blocked) {
+        const char *v = NULL;
+        size_t vl = 0;
+        found = 1;
+        snprintf(out->name, sizeof out->name, "%s", shown_name(d));
+        snprintf(out->kind, sizeof out->kind, "%s", d->kind);
+        out->ip = d->ip;
+        out->online = is_online(d->key, on, non);
+        if (find_play_item(d->activity, strlen(d->activity), &v, &vl)) {
+            out->play_port = item_port(v, vl);
+            item_path(v, vl, "app_ws", out->app_ws, sizeof out->app_ws);
+        } else {
+            out->play_port = d->play_port;
+            snprintf(out->app_ws, sizeof out->app_ws, "%s", d->play_app);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    free(on);
+    return found;
 }
 
 int mesh_call(int which, const uint8_t caller[32], const char *body, size_t n, char *out, size_t cap) {

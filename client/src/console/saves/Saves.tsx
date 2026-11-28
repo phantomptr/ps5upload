@@ -32,6 +32,7 @@ import {
   type SaveUser,
   usbBackupRoot,
 } from "./model";
+import { loadSaveSync, SaveSyncCard, type SyncEntry } from "./saveSync";
 
 /** A place backups can go: the internal drive, or a USB drive (#528). */
 export interface BackupPlace {
@@ -82,6 +83,9 @@ export interface SavesViewProps {
   onAsk: (a: SaveAsk | null) => void;
   onConfirm: () => void;
   onCloseGame: (appId: number) => void;
+  /** Save sync as the app keeps it for this PS5 (read only), and when it was read; null or
+   *  missing: none to show. */
+  sync?: { entries: SyncEntry[]; at: number } | null;
 }
 
 const when = (b: Backup) => formatDateTime(b.when);
@@ -232,6 +236,7 @@ function Sheet({ s, p }: { s: SaveTitle; p: SavesViewProps }) {
           error={p.askError}
           onConfirm={p.onConfirm}
           onCancel={() => p.onAsk(null)}
+          roomNotice={p.ask.kind === "restore"}
         />
       ) : null}
     </Modal>
@@ -297,6 +302,7 @@ export function SavesView(p: SavesViewProps) {
           </span>
         </div>
       ) : null}
+      <SaveSyncCard entries={p.sync?.entries ?? null} user={p.user} names={p.names} now={p.sync?.at ?? 0} />
       {p.message && !open ? (
         <div className={`cw-msg ${p.message.tone === "error" ? "is-error" : "is-info"}`} role={p.message.tone === "error" ? "alert" : "status"}>
           {p.message.text}
@@ -364,6 +370,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
   const [askError, setAskError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [places, setPlaces] = useState<BackupPlace[]>(() => backupPlaces([]));
+  const [sync, setSync] = useState<{ entries: SyncEntry[]; at: number } | null>(null);
   const [place, setPlaceState] = useState(lastPlace);
   const setPlace = (r: string) => {
     lastPlace = r;
@@ -371,6 +378,10 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
   };
   const root = useRef<HTMLDivElement>(null);
   const live = useRef(true);
+  const loadSync = useCallback(async () => {
+    const s = await loadSaveSync().catch(() => null);
+    if (live.current) setSync(s ? { entries: s, at: Date.now() } : null);
+  }, []);
 
   useEffect(() => {
     live.current = true;
@@ -449,6 +460,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
   useEffect(() => {
     void loadUserList();
     void loadPlaces();
+    void loadSync();
     loadNames().then(
       (n) => {
         if (!live.current) return;
@@ -457,7 +469,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
       },
       () => live.current && setNamesRead(true),
     );
-  }, [loadUserList, loadPlaces]);
+  }, [loadUserList, loadPlaces, loadSync]);
 
   useEffect(() => {
     if (user) void loadUserSaves(user, place);
@@ -513,6 +525,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
           if (a === "refresh" && !st.task) {
             void loadUserList();
             void loadPlaces();
+            void loadSync();
             if (user) void loadUserSaves(user, place);
             return true;
           }
@@ -520,7 +533,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
         },
         () => root.current,
       ),
-    [loadUserList, loadUserSaves, loadPlaces, user, place],
+    [loadUserList, loadUserSaves, loadPlaces, loadSync, user, place],
   );
 
   const running = ctx.status?.running ? { titleId: ctx.status.running.title_id, appId: ctx.status.running.app_id } : null;
@@ -601,7 +614,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
 
   const closeGame = async (appId: number) => {
     try {
-      await call("/api/app/close", { app_id: appId });
+      await call("/api/app/close", { app_id: appId, room_ok: true });
     } catch (e) {
       patch({ message: { tone: "error", text: saveErrorText(e) } });
     }
@@ -627,6 +640,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
         askError={askError}
         places={places}
         place={place}
+        sync={sync}
         onPlace={(r) => {
           if (st.task || r === place) return;
           setSizes(new Map());
@@ -647,6 +661,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
         onRefresh={() => {
           void loadUserList();
           void loadPlaces();
+          void loadSync();
           if (user) void loadUserSaves(user, place);
         }}
         onBackUp={(s) => void doBackUp(s)}

@@ -3,6 +3,22 @@ import { onNavAction, type NavAction } from "../nav";
 import { t } from "../strings";
 import { useBackLevel } from "../backHistory";
 import { useModalFocus } from "./restoreFocus";
+import { refreshRoom, roomWarning, useRoom } from "../room/room";
+
+/** While friends play in a Play Room on this console: who, and that this ends it for them too. */
+function RoomWarning() {
+  const room = useRoom(false);
+  // Read now: the dialog must name whoever plays at this moment, not ten seconds ago.
+  useEffect(() => {
+    void refreshRoom();
+  }, []);
+  const text = roomWarning(room);
+  return text ? (
+    <p className="cw-msg is-error" role="alert" data-room-warning>
+      {text}
+    </p>
+  ) : null;
+}
 
 /**
  * The dialog's controller handling: ○ is "no". Every other action is swallowed
@@ -34,7 +50,10 @@ export function ConfirmDialog({
   onAlt,
   onConfirm,
   onCancel,
+  roomNotice,
 }: {
+  /** The action ends the running game (close, stop): names the players of a Play Room here. */
+  roomNotice?: boolean;
   title: string;
   body?: string;
   confirmLabel: string;
@@ -77,6 +96,7 @@ export function ConfirmDialog({
       >
         <h2 id="cw-dialog-title">{title}</h2>
         {body ? <p id="cw-dialog-body">{body}</p> : null}
+        {roomNotice ? <RoomWarning /> : null}
         {error ? (
           <p className="cw-field-error" role="alert">
             {error}

@@ -217,6 +217,8 @@ const base = (over: Partial<LibraryViewProps> = {}): LibraryViewProps => ({
   onCopy: vi.fn(),
   onRegister: vi.fn(),
   onShowInFiles: null,
+  queue: { paused: false, reason: "", items: [] },
+  onCancelQueued: vi.fn(),
   ...over,
 });
 const html = (over: Partial<LibraryViewProps> = {}) => renderToStaticMarkup(<LibraryView {...base(over)} />);
@@ -296,6 +298,41 @@ describe("Library section", () => {
     expect(h).not.toContain(t("cw_lib_register"));
     expect(html({ open: "ps4:CUSA07842", copied: { key: folder.key, path: "/mnt/usb0/homebrew/CUSA07842" } })).toContain(t("cw_lib_register"));
     expect(html({ open: "ps4:CUSA07842", onShowInFiles: vi.fn() })).toContain(t("cw_cleanup_show_in_files"));
+  });
+
+  it("#982: a game's page shows its own queued copy, never another game's, and another game can still be queued", () => {
+    const entries = entriesOf(base().sources, new Map([["3fa2c1d0", parseScan(SCAN_JSON)]]));
+    const folder = entries.find((e) => e.kind === "folder")!;
+    const item = {
+      id: 7,
+      kind: "copy" as const,
+      state: "running" as const,
+      step: 0,
+      src: folder.at,
+      dest: "/mnt/usb0/homebrew/CUSA07842",
+      name: "CUSA07842",
+      key: folder.key,
+      job: "smb:abc",
+      error: "",
+      wait: "",
+      elapsed_s: 30,
+      bytes_done: 50,
+      bytes_total: 100,
+      cancel: false,
+    };
+    const queue = { paused: false, reason: "", items: [item] };
+    // The copying game: its progress and Stop, no second Copy.
+    const own = html({ open: "ps4:CUSA07842", queue });
+    expect(own).toContain(t("cw_queue_copying"));
+    expect(own).toContain(t("cw_lib_stop"));
+    expect(own).not.toContain(t("cw_lib_copy_here"));
+    // Another game: nothing of that copy, and its Install is not held.
+    const other = html({ open: "ps5:PPSA01650", queue });
+    expect(other).not.toContain(t("cw_queue_copying"));
+    expect(other).toMatch(new RegExp(`<button[^>]*class="cw-focusable cw-button is-primary"(?![^>]*disabled)[^>]*>.*?${t("cw_lib_install")}`));
+    // Copied: Register the folder where the queue put it.
+    const done = html({ open: "ps4:CUSA07842", queue: { ...queue, items: [{ ...item, state: "done" as const }] } });
+    expect(done).toContain(t("cw_lib_register"));
   });
 
   it("says when the drives for a copy could not be read, instead of reading them forever", () => {

@@ -11,7 +11,7 @@ use axum::extract::ws::{Message as AxMsg, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use futures_util::{SinkExt, StreamExt};
 use str0m::change::{SdpAnswer, SdpPendingOffer};
-use str0m::channel::ChannelId;
+use str0m::channel::{ChannelConfig, ChannelId, Reliability};
 use str0m::media::{Direction, KeyframeRequestKind, MediaKind, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
@@ -254,6 +254,8 @@ pub(crate) enum GIn {
     Media(Vec<u8>, bool),
     /// A sound frame off the audio track (one Opus packet).
     Audio(Vec<u8>),
+    /// A message on the page's `voice` channel (Play Rooms voice, join_voice.rs).
+    Voice(Vec<u8>),
 }
 
 pub(crate) enum GOut {
@@ -261,6 +263,10 @@ pub(crate) enum GOut {
     Binary(Vec<u8>),
     /// The browser's keyframe request on the video track (a PLI).
     Pli,
+    /// Opens the page's `voice` channel (unordered, no resends), as the room page does.
+    OpenVoice,
+    /// A message on the `voice` channel.
+    Voice(Vec<u8>),
 }
 
 pub(crate) struct TestGuest {
@@ -445,6 +451,7 @@ async fn drive(
     let mut reasm = Reassembler::new(64 << 20);
     let mut buf = vec![0u8; 2048];
     let mut pending: Vec<(bool, Vec<u8>)> = Vec::new();
+    let mut vcid: Option<ChannelId> = None;
     loop {
         // Out what can go.
         if let Some(mut ch) = rtc.channel(cid) {
@@ -488,6 +495,9 @@ async fn drive(
                             Piece::Pong(_) => {}
                         }
                     }
+                    Event::ChannelData(d) if Some(d.id) == vcid => {
+                        let _ = in_tx.send(GIn::Voice(d.data.to_vec()));
+                    }
                     Event::ChannelClose(id) if id == cid => return,
                     Event::MediaData(d) if Some(d.mid) == amid => {
                         let _ = in_tx.send(GIn::Audio(d.data.to_vec()));
@@ -518,6 +528,19 @@ async fn drive(
             m = out_rx.recv() => match m {
                 Some(GOut::Text(t)) => pending.push((false, t.into_bytes())),
                 Some(GOut::Binary(b)) => pending.extend(chunk::split(&b).into_iter().map(|p| (true, p))),
+                Some(GOut::OpenVoice) => {
+                    vcid = Some(rtc.direct_api().create_data_channel(ChannelConfig {
+                        label: "voice".into(),
+                        ordered: false,
+                        reliability: Reliability::MaxRetransmits { retransmits: 0 },
+                        ..ChannelConfig::default()
+                    }));
+                }
+                Some(GOut::Voice(b)) => {
+                    if let Some(mut ch) = vcid.and_then(|v| rtc.channel(v)) {
+                        let _ = ch.write(true, &b);
+                    }
+                }
                 Some(GOut::Pli) => {
                     if let Some(mut w) = mid.and_then(|m| rtc.writer(m)) {
                         let _ = w.request_keyframe(None, KeyframeRequestKind::Pli);

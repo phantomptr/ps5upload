@@ -219,6 +219,7 @@ static void test_hello_and_state(void) {
     online(1, 0x0100a8c0u);
     r = call(MESH_HELLO, 1, "{\"name\":\"MacBook\",\"kind\":\"desktop\",\"os\":\"macOS 27\",\"app\":\"8.0.0\"}");
     CHECK(has(r, "\"helper\":\"8.0.0\"") && has(r, "\"new\":true") && has(r, "\"require_approval\":false"));
+    CHECK(has(r, "\"app_api\":true"));
     r = call(MESH_STATE, 1, "{}");
     CHECK(has(r, "\"name\":\"MacBook\"") && has(r, "\"kind\":\"desktop\"") && has(r, "\"online\":true"));
     CHECK(has(r, "\"ip\":\"192.168.0.1\"") && has(r, "\"kind\":\"joined\""));
@@ -497,6 +498,155 @@ static void test_events(void) {
     CHECK(has(call(99, 1, "{}"), "bad_method"));
 }
 
+/* The engines' ids as mesh_engines_json writes them (key_of: n, zeros, 0xab). */
+#define ID1 "01000000000000000000000000000000000000000000000000000000000000ab"
+#define ID2 "02000000000000000000000000000000000000000000000000000000000000ab"
+
+/* mesh_engines_json (PS5Upload Play's GET /v1/mesh): the engine that says where the app reaches it. */
+static void test_play_engines(void) {
+    char out[4096];
+    start();
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(!strcmp(out, "{\"engine\":null,\"online\":[]}"));
+    online(1, 0x0100a8c0u); /* 192.168.0.1 */
+    online(2, 0x050a4064u); /* 100.64.10.5 (a tailnet address) */
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"kind\":\"desktop\",\"os\":\"macOS\",\"app\":\"13.0.0\"}");
+    call(MESH_HELLO, 2, "{\"name\":\"Phone\",\"kind\":\"android\",\"os\":\"Android\",\"app\":\"13.0.0\"}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":null,\"online\":[{\"id\":\"" ID1 "\",\"name\":\"Desk\""));
+    CHECK(has(out, "\"addr\":\"192.168.0.1\",\"tailnet\":false,\"port\":null"));
+    CHECK(has(out, "\"addr\":\"100.64.10.5\",\"tailnet\":true"));
+    g_now += 1000;
+    call(MESH_ACTIVITY, 1,
+         "{\"items\":[{\"kind\":\"upload\",\"pct\":3},{\"kind\":\"play_host\",\"port\":19113,"
+         "\"join_ws\":\"/api/join/ws\",\"app_ws\":\"/api/play/app\",\"addr\":\"6.6.6.6\"}]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID1 "\",\"name\":\"Desk\",\"kind\":\"desktop\",\"version\":\"13.0.0\",\"addr\":\"192.168.0.1\","
+                   "\"tailnet\":false,\"port\":19113,\"join_ws\":\"/api/join/ws\",\"app_ws\":\"/api/play/app\"}"));
+    CHECK(!has(out, "6.6.6.6")); /* the address is the session's, never the item's */
+    /* A second engine heard from later wins; bad ports and paths read as null. */
+    g_now += 1000;
+    call(MESH_ACTIVITY, 2, "{\"items\":[{\"kind\":\"play_host\",\"port\":70000,\"join_ws\":\"ws://x\",\"app_ws\":\"/a b\"}]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID2 "\",\"name\":\"Phone\""));
+    CHECK(has(out, "\"tailnet\":true,\"port\":null,\"join_ws\":null,\"app_ws\":null}"));
+    /* Gone offline: not offered. */
+    g_non = 1;
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID1 "\",\"name\":\"Desk\"") && !has(out, "Phone"));
+    /* Too small a buffer: a refusal, never a cut answer. */
+    CHECK(mesh_engines_json(out, 80) > 0 && has(out, "reply_too_large"));
+    CHECK(mesh_engines_json(out, 10) == -1);
+}
+
+/* Whether the file v1/<name> holds needle. */
+static int file_has(const char *name, const char *needle) {
+    char path[400], buf[16384];
+    size_t n;
+    FILE *f;
+    snprintf(path, sizeof path, "%s/v1/%s", g_dir, name);
+    if (!(f = fopen(path, "rb"))) return 0;
+    n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    return strstr(buf, needle) != NULL;
+}
+
+/* Engines from 13 carry their Play endpoints in the hello: offered to the app, kept in memory only,
+ * never shown to other devices. */
+static void test_play_hello(void) {
+    char out[4096];
+    const char *r;
+    start();
+    online(1, 0x0100a8c0u); /* 192.168.0.1 */
+    online(2, 0x0200a8c0u); /* 192.168.0.2 */
+    call(MESH_HELLO, 1,
+         "{\"name\":\"Desk\",\"kind\":\"desktop\",\"os\":\"macOS\",\"app\":\"13.0.0\",\"play\":{\"port\":19113,"
+         "\"join_ws\":\"/api/join/ws\",\"app_ws\":\"/api/play/app\",\"addr\":\"6.6.6.6\"}}");
+    call(MESH_HELLO, 2, "{\"name\":\"Old\",\"kind\":\"desktop\",\"os\":\"Windows\",\"app\":\"12.6.0\"}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID1 "\",\"name\":\"Desk\",\"kind\":\"desktop\",\"version\":\"13.0.0\",\"addr\":\"192.168.0.1\","
+                   "\"tailnet\":false,\"port\":19113,\"join_ws\":\"/api/join/ws\",\"app_ws\":\"/api/play/app\"}"));
+    CHECK(has(out, "{\"id\":\"" ID2 "\",\"name\":\"Old\",\"kind\":\"desktop\",\"version\":\"12.6.0\",\"addr\":\"192.168.0.2\",\"tailnet\":false,"
+                   "\"port\":null,\"join_ws\":null,\"app_ws\":null}"));
+    CHECK(!has(out, "6.6.6.6"));
+    /* Other devices never see it: not in the state, not in presence, not on disk. */
+    r = call(MESH_STATE, 2, "{}");
+    CHECK(has(r, "\"name\":\"Desk\"") && !has(r, "play") && !has(r, "19113") && !has(r, "/api/"));
+    CHECK(has(r, "\"activity\":[]"));
+    CHECK(file_has("devices", "Desk") && !file_has("devices", "19113") && !file_has("devices", "/api/"));
+    /* Nor after a restart: the next hello says it again. */
+    reload();
+    online(1, 0x0100a8c0u);
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":null,\"online\":[{\"id\":\"" ID1 "\",\"name\":\"Desk\""));
+    /* Bad port and paths read as null, but it still offers Play. */
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"play\":{\"port\":70000,\"join_ws\":\"ws://x\",\"app_ws\":\"/a b\"}}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID1 "\",\"name\":\"Desk\"") &&
+          has(out, "\"tailnet\":false,\"port\":null,\"join_ws\":null,\"app_ws\":null}"));
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"play\":{\"port\":0,\"join_ws\":\"/a\\\"b\",\"app_ws\":\"/a\\\\b\"}}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "\"port\":null,\"join_ws\":null,\"app_ws\":null}"));
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"play\":{\"port\":\"19113\",\"join_ws\":7}}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "\"port\":null,\"join_ws\":null,\"app_ws\":null}"));
+    /* Not an object: no Play. */
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"play\":[19113]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":null,"));
+    /* Offered, then a hello without it (the engine stopped offering it): cleared. */
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"play\":{\"port\":19200,\"join_ws\":\"/j\",\"app_ws\":\"/p\"}}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "\"port\":19200,\"join_ws\":\"/j\",\"app_ws\":\"/p\"}"));
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\"}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":null,") && !has(out, "19200"));
+    /* The one heard from last wins: a hello engine against a presence-item engine. */
+    online(2, 0x0200a8c0u);
+    g_now += 1000;
+    call(MESH_ACTIVITY, 2, "{\"items\":[{\"kind\":\"play_host\",\"port\":19300,\"join_ws\":\"/j2\",\"app_ws\":\"/p2\"}]}");
+    g_now += 1000;
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"play\":{\"port\":19113,\"join_ws\":\"/j\",\"app_ws\":\"/p\"}}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID1 "\",\"name\":\"Desk\"") && has(out, "\"port\":19113"));
+    g_now += 1000;
+    call(MESH_ACTIVITY, 2, "{\"items\":[{\"kind\":\"play_host\",\"port\":19300,\"join_ws\":\"/j2\",\"app_ws\":\"/p2\"}]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID2 "\",\"name\":\"Old\"") && has(out, "\"port\":19300,\"join_ws\":\"/j2\",\"app_ws\":\"/p2\"}"));
+    /* A presence item wins over the same device's hello. */
+    g_now += 1000;
+    call(MESH_ACTIVITY, 1, "{\"items\":[{\"kind\":\"play_host\",\"port\":19400,\"join_ws\":\"/j4\",\"app_ws\":\"/p4\"}]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID1 "\",\"name\":\"Desk\"") && has(out, "\"port\":19400"));
+    /* Blocked: not offered. */
+    CHECK(has(call(MESH_DEVICE, 2,
+                   "{\"op\":\"block\",\"id\":\"01000000000000000000000000000000000000000000000000000000000000ab\"}"),
+              "\"ok\":true"));
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"id\":\"" ID2 "\",\"name\":\"Old\""));
+}
+
+/* mesh_engine_info (Play Rooms' and the grants' names): a known device's name, kind, address,
+ * session and Play endpoint; an unknown or blocked one is not found. */
+static void test_engine_info(void) {
+    mesh_engine_t e;
+    uint8_t k[32];
+    start();
+    online(1, 0x0100a8c0u);
+    call(MESH_HELLO, 1,
+         "{\"name\":\"Desk\",\"kind\":\"desktop\",\"app\":\"13.0.0\",\"play\":{\"port\":19113,\"app_ws\":\"/api/play/app\"}}");
+    key_of(1, k);
+    CHECK(mesh_engine_info(k, &e) == 1);
+    CHECK(!strcmp(e.name, "Desk") && !strcmp(e.kind, "desktop") && e.ip == 0x0100a8c0u && e.online == 1);
+    CHECK(e.play_port == 19113 && !strcmp(e.app_ws, "/api/play/app"));
+    g_non = 0;
+    CHECK(mesh_engine_info(k, &e) == 1 && e.online == 0);
+    key_of(9, k);
+    CHECK(mesh_engine_info(k, &e) == 0 && e.name[0] == 0);
+    CHECK(mesh_engine_info(NULL, &e) == 0);
+}
+
 int main(void) {
     snprintf(g_dir, sizeof g_dir, "/tmp/mesh-selftest-XXXXXX");
     if (!mkdtemp(g_dir)) {
@@ -515,6 +665,9 @@ int main(void) {
     test_doc_json();
     test_persist_and_prune();
     test_events();
+    test_play_engines();
+    test_engine_info();
+    test_play_hello();
     {
         char cmd[300];
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir);

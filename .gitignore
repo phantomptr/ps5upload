@@ -56,6 +56,7 @@ client/dist/
 client/dist-console/
 client/dist-pad/
 client/dist-join/
+client/dist-rooms/
 client/.vite/
 client/out/
 client/.cache/
@@ -220,10 +221,15 @@ ps5upload.elf.gz.blake3.tmp
 # the dev experience for fresh clones is still clean.
 payload/ps5upload.elf
 payload/ps5upload.elf.gz
+# PS5Upload Play's release zip, handed on with the ELFs in CI (publish.yml) for the engine embed.
+payload/play/
 # The SMB daemon: built from payload/smb/ and embedded in the helper (never shipped on its own).
 payload/smb/ps5upload-smb.elf
 payload/smb/build/
 payload/vinput/ps5u-vinput.elf
+# The USB Ethernet adapter daemon: built from payload/usbnet/ and embedded in the helper.
+payload/usbnet/ps5u-usbnet.elf
+payload/usbnet/build/
 # A standalone hardware probe (payload/tools/mbus-probe/README.md), sent by hand.
 payload/tools/mbus-probe/ps5u-mbusprobe.elf
 

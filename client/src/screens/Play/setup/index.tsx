@@ -414,7 +414,7 @@ export default function PlaySetupScreen() {
                 {tr(
                   "play_setup_stock_body",
                   undefined,
-                  "On a PS5 signed in to PSN, turn on Settings › System › Remote Play › Enable Remote Play, then pair with the PIN it shows under Link Device. The steps below that need the helper can stay open. Play Together, starting a game from here and the console's own checks need a jailbroken PS5 with the helper.",
+                  "On a PS5 signed in to PSN, turn on Settings › System › Remote Play › Enable Remote Play, then pair with the PIN it shows under Link Device. The steps below that need the helper can stay open. Play Room, starting a game from here and the console's own checks need a jailbroken PS5 with the helper.",
                 )}
               </p>
               <Button

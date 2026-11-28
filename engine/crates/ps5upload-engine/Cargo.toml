@@ -79,6 +79,11 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 # Public roots for the Play Together relay's wss:// (already in the tree through ureq).
 webpki-roots = "1"
 sha2 = "0.11"
+# Play Rooms (room_seal.rs): the room password's hash and knocks sealed to the room key. The
+# RustCrypto versions str0m's dimpl already brings in (no new crates in the tree).
+p256 = { version = "0.14", default-features = false, features = ["ecdh"] }
+hkdf = "0.13"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 md-5 = "0.11"
 # Gzips the web UI and the guest pages (web_pages.rs). Already in the tree through russh.
 flate2 = "1"

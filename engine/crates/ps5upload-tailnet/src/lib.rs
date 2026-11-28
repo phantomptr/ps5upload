@@ -7,6 +7,11 @@
 //! console's tailnet address and port, so the rest of the engine keeps using ordinary
 //! sockets.
 //!
+//! It can also *serve*: [`Config::serve`] lists tailnet ports the core accepts and splices to
+//! ports on 127.0.0.1 (the engine serves its guest port this way, with a PROXY protocol v1 line
+//! first so the local server knows the peer). A node that serves accepts nothing else from the
+//! tailnet but the replies on its own mappings.
+//!
 //! One node per process (the core's lwIP keeps global state).
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -25,6 +30,21 @@ mod ffi {
         pub ip: u32,
         pub port: u16,
     }
+
+    /// `tn_serve`.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct Serve {
+        pub proto: u8,
+        pub port: u16,
+        pub local_port: u16,
+        pub flags: u8,
+    }
+
+    /// `TN_SERVE_PROXY_V1`.
+    pub const SERVE_PROXY_V1: u8 = 1;
+    /// `TN_SERVE_MAX`.
+    pub const SERVE_MAX: usize = 8;
 
     #[repr(C)]
     pub struct Event {
@@ -186,6 +206,26 @@ pub struct Config {
     pub no_direct: bool,
     /// TN_EV_LOG detail: 0 quiet, 1 info, 2 debug.
     pub verbose: i32,
+    /// Tailnet ports this node serves from 127.0.0.1 (at most 8). Empty: a client, which
+    /// accepts no new connection or flow from the tailnet. With any rule, the node accepts new
+    /// connections and flows only to these ports, and only what the tailnet's packet filter
+    /// allows; the replies on its own mappings still pass.
+    pub serve: Vec<Serve>,
+}
+
+/// One served tailnet port (`tn_serve`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Serve {
+    pub proto: Proto,
+    /// The port on this node's tailnet address.
+    pub port: u16,
+    /// The port on 127.0.0.1 it is spliced to (0: the same).
+    pub local_port: u16,
+    /// TCP: the local connection starts with `PROXY TCP4 <peer ip> <our ip> <peer port>
+    /// <port>\r\n` before any byte from the peer, so the local server can tell who is asking
+    /// (every connection comes from 127.0.0.1 otherwise). A server that gets this must refuse a
+    /// connection that does not start with one. Ignored for UDP.
+    pub proxy_v1: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,6 +367,26 @@ impl Node {
             Some(p) => Some(cs(&p.to_string_lossy())?),
             None => None,
         };
+        if cfg.serve.len() > ffi::SERVE_MAX {
+            return Err(Error {
+                code: -11,
+                text: format!("at most {} served ports", ffi::SERVE_MAX),
+            });
+        }
+        let serve: Vec<ffi::Serve> = cfg
+            .serve
+            .iter()
+            .map(|r| ffi::Serve {
+                proto: r.proto.num(),
+                port: r.port,
+                local_port: r.local_port,
+                flags: if r.proxy_v1 && r.proto == Proto::Tcp {
+                    ffi::SERVE_PROXY_V1
+                } else {
+                    0
+                },
+            })
+            .collect();
         let cb = Box::new(Callback {
             handler: Arc::new(on_event),
         });
@@ -366,13 +426,19 @@ impl Node {
             udp_port: cfg.udp_port,
             packet_cb: None,
             no_direct: cfg.no_direct as c_int,
-            serve: std::ptr::null(),
-            n_serve: 0,
+            // tn_create copies the rules.
+            serve: if serve.is_empty() {
+                std::ptr::null()
+            } else {
+                serve.as_ptr() as *const c_void
+            },
+            n_serve: serve.len() as u32,
             thread_cb: None,
             thread_stack: 0,
         };
         let mut ctx: *mut ffi::Ctx = std::ptr::null_mut();
-        // SAFETY: c and the strings it points to outlive the call; tn_create copies them.
+        // SAFETY: c and the strings and rules it points to outlive the call; tn_create copies
+        // them.
         let r = unsafe { ffi::tn_create(&c, &mut ctx) };
         if r != 0 {
             return Err(err(r));
@@ -493,6 +559,7 @@ pub fn check_abi() -> Result<(), Error> {
         std::mem::size_of::<ffi::Status>(),
         std::mem::size_of::<ffi::PeerStatus>(),
         std::mem::size_of::<ffi::Event>(),
+        std::mem::size_of::<ffi::Serve>(),
     ];
     for (i, w) in want.iter().enumerate() {
         // SAFETY: a pure function.
@@ -537,8 +604,12 @@ mod tests {
         check_abi().unwrap();
     }
 
+    /// One node per process (lwIP is global): the tests that start one take turns.
+    static ONE_NODE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn starts_retries_and_maps_without_a_control_server() {
+        let _turn = ONE_NODE.lock().unwrap_or_else(|p| p.into_inner());
         let dir = crate::test_tmp::temp_path(format!("tailnet-rs-test-{}", std::process::id()));
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
@@ -582,6 +653,58 @@ mod tests {
         node.unmap_all();
         drop(node);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_serving_node_starts_and_still_maps() {
+        let _turn = ONE_NODE.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = crate::test_tmp::temp_path(format!("tailnet-rs-serve-{}", std::process::id()));
+        let guest = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let node = Node::start(
+            &Config {
+                state_dir: dir.clone(),
+                control_url: "http://127.0.0.1:9".into(),
+                hostname: "rs-serve".into(),
+                os: os_name().into(),
+                serve: vec![Serve {
+                    proto: Proto::Tcp,
+                    port: 19113,
+                    local_port: guest.local_addr().unwrap().port(),
+                    proxy_v1: true,
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+        // The engine's maps (a console's helper and its Remote Play UDP) work beside the rule.
+        assert!(node
+            .map(Proto::Tcp, Ipv4Addr::new(100, 64, 0, 9), 9120, 0)
+            .is_ok());
+        assert!(node
+            .map(Proto::Udp, Ipv4Addr::new(100, 64, 0, 9), 9296, 0)
+            .is_ok());
+        drop(node);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn more_rules_than_the_core_holds_are_refused() {
+        let rule = Serve {
+            proto: Proto::Udp,
+            port: 1,
+            local_port: 0,
+            proxy_v1: false,
+        };
+        let r = Node::start(
+            &Config {
+                state_dir: crate::test_tmp::temp_path("tailnet-rs-toomany"),
+                serve: vec![rule; 9],
+                ..Default::default()
+            },
+            |_| {},
+        );
+        assert!(r.is_err_and(|e| e.text.contains("at most 8")));
     }
 }
 

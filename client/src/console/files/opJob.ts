@@ -8,6 +8,7 @@
  */
 import { ApiError, call } from "../api";
 import { cancelJob } from "../home/useJobs";
+import { toFreePlan, type FreePlan } from "../../lib/archiveName";
 
 export interface OpStatus {
   job: string;
@@ -173,6 +174,9 @@ export interface ExtractBody {
   list?: boolean;
   /** Top-level entries renamed or left out, as the extractor takes them ({@link skipTop}). */
   top?: string;
+  /** Delete the archive as it is unpacked (opt-in: it can't be used again). With `list`, only
+   *  how that would go ({@link TopListing.free}). */
+  free?: boolean;
 }
 
 /** "Choose items" (#969): the extractor's renames that leave these top-level entries out
@@ -187,6 +191,9 @@ export interface TopListing {
   dirs: string[];
   /** More names than the extractor could report. */
   more: boolean;
+  /** Listed with `free`: how the archive would be deleted as it unpacks (null: the helper is too
+   *  old to say). */
+  free?: FreePlan | null;
 }
 
 /** The listing an extract job with `list` ended with; null when the helper is too old to list. */
@@ -195,7 +202,12 @@ export function topListing(result: unknown): TopListing | null {
   const r = result as Record<string, unknown>;
   if (r.listed !== true) return null;
   const names = (v: unknown) => (typeof v === "string" ? v.split("/").filter((n) => n !== "") : []);
-  return { top: names(r.top), dirs: names(r.top_dirs), more: r.top_more === true };
+  return {
+    top: names(r.top),
+    dirs: names(r.top_dirs),
+    more: r.top_more === true,
+    ...(r.free !== undefined ? { free: toFreePlan(r.free) } : {}),
+  };
 }
 
 /** Read the top-level names of the archive at `path` (`dir`: its own folder). Throws the
@@ -210,6 +222,21 @@ export async function listArchiveTop(path: string, dir: string, password?: strin
   const listing = topListing(opResult<unknown>(end.status));
   if (!listing) throw new ApiError(500, "fs_extract_list_unsupported");
   return listing;
+}
+
+/** How the archive at `path` would be deleted as it unpacks into `dir` (a folder that is there; its
+ *  drive decides whether freeing makes room there). Null when the helper is too old to say. Throws
+ *  as {@link listArchiveTop} does. */
+export async function planArchiveFree(path: string, dir: string, password?: string, deps?: OpDeps): Promise<FreePlan | null> {
+  const job = await startOp("/api/fs/extract", { path, dest: dir, list: true, free: true, ...(password ? { password } : {}) });
+  const end = await watchOp(job, {}, deps);
+  if (end.end !== "done") {
+    const cause = end.end === "gone" ? "" : opCause(end.status);
+    throw new ApiError(500, cause || "fs_extract_list_failed");
+  }
+  const listing = topListing(opResult<unknown>(end.status));
+  if (!listing) throw new ApiError(500, "fs_extract_list_unsupported");
+  return listing.free ?? null;
 }
 
 /** /api/fs/extract/info: where an extract would go, before it starts. */

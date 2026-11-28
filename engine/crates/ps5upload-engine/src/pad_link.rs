@@ -1224,6 +1224,7 @@ async fn pad_session<S: crate::join::GuestSocket>(
                         NET_WATCH_QUEUE,
                         std::sync::Arc::new(AtomicU64::new(0)),
                         true,
+                        false,
                     )
                 })
                 .map(|f| (Some(f.other), Some(f.video)))

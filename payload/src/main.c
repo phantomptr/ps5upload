@@ -27,6 +27,8 @@
 #include "sigpipe_guard.h"
 #include "wake_watchdog.h"
 #include "tailnet_node.h"
+#include "usbnet.h"
+#include "app_api.h"
 #include "icon_keeper.h"
 #include "fakelib_overlay.h"
 #include "vinput.h"
@@ -44,6 +46,7 @@
 
 #include "proc_identity.h"
 #include "webui_api.h"
+#include "webui_queue.h"
 #include "webui_server.h"
 #include "webui_settings.h"
 #include "webui_tile.h"
@@ -935,6 +938,8 @@ int main(void) {
         if (plan.serve) (void)webui_api_server_start();
         else fprintf(stderr, "webui: PS5Upload Minion is off (%s enabled:false); the page is not served\n",
                      WEBUI_SETTINGS_PATH);
+        /* The page's queue (#982) goes on whether or not the page is served. */
+        webui_queue_start();
         startup_trace("WEBUI_STARTED");
         /* Every start with the tile on: the tile thread registers PSUP00001 again whenever app.db
          * does not list it, and logs "webui tile: ensure ok/FAILED"; a failure reaches the page and
@@ -949,6 +954,18 @@ int main(void) {
      * After AVA1 is up, since the tailnet serves its port. Failure is logged, never fatal. */
     if (tailnet_node_boot() != 0) fprintf(stderr, "[tailnet] not started\n");
     startup_trace("TAILNET_STARTED");
+
+    /* A USB Ethernet adapter, experimental (usbnet.h): the watcher runs whether or not one is plugged
+     * in, and starts the adapter daemon only while one is and the setting is on. After AVA1 and the
+     * page, whose ports the daemon serves on the adapter. Failure is logged, never fatal. */
+    if (usbnet_boot() != 0) fprintf(stderr, "[usbnet] not started\n");
+    startup_trace("USBNET_STARTED");
+
+    /* PS5Upload Play's loopback API (app_api.h): 127.0.0.1:9181, on whatever the Minion switch says.
+     * After AVA1 (its requests run inside the local-RPC gate). A bind failure is retried by its own
+     * thread (an old helper may still hold the port for a moment); a start failure is logged. */
+    if (app_api_start() != 0) fprintf(stderr, "[appapi] not started\n");
+    startup_trace("APPAPI_STARTED");
 
     /* The AVA1 server runs on its own threads; this thread has nothing left to serve. It waits for
      * node.shutdown or the takeover flag (runtime_request_shutdown), then tears down. */
@@ -968,6 +985,9 @@ int main(void) {
     /* Leave the tailnet first: the next instance wants the same UDP port (41641). */
     tailnet_node_shutdown();
     startup_trace("STOP_TAILNET_DONE");
+    /* The adapter daemon stops cleanly (its MAC stopped, the adapter put back) and is waited for. */
+    usbnet_shutdown();
+    startup_trace("STOP_USBNET_DONE");
 
     /* Persist tracked play time before we go. The watcher only saves every
      * 60s, so a payload swap in between would otherwise drop the current
@@ -989,6 +1009,7 @@ int main(void) {
      * (this does NOT return while one runs: only the exit watchdog armed above (8 s, or up to 60 s while a Sony call runs) can end the
      * process then), then stop the data layer so journals are closed and durable jobs resume. */
     webui_stop(); /* bounded: joins its workers within 2 s, detaches a stuck one */
+    app_api_stop(); /* never waits: its thread closes the listener within a slice */
     startup_trace("STOP_WEBUI_DONE");
 
     {

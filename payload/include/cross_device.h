@@ -55,11 +55,17 @@
  *   src/webui_tile.c      3  dir    tile folder files: tmp -> final; mount.lnk <-> ps5upload.lnk in
  *                                   /user/app/PSUP00001 (kept from ShadowMount+, #480)
  *   src/smb_client.c      1  dir    SMB daemon key: <key>.tmp -> key
+ *   src/usbnet.c          2  dir    USB adapter daemon key and settings: <file>.tmp -> file (usbnet dir)
  *   src/smb_shares.c      1  dir    saved shares: <file>.tmp -> file
  *   src/files_prefs.c     1  dir    files-prefs.json: tmp -> final
  *   src/fakelib_overlay.c 1  dir    the overlay record left for the next helper: <record>.tmp -> record
  *   src/console_convert.c 1  dir    the leftover-output record (pending.rec): <file>.<pid>.<n>.tmp -> file
  *   src/mesh.c            1  dir    device list, settings and shared documents: <file>.tmp -> file
+ *   src/play_app.c        1  guard  PS5Upload Play's install (same_dev_rename: st_dev of the source and of
+ *                                   the destination's folder compared first, refused when they differ):
+ *                                   <drive>/prosperostore/staging/FAKE99261 -> <location>/FAKE99261, each
+ *                                   staged file over its target (same drive by construction), and the
+ *                                   receipt / install.json <file>.tmp -> file
  *   src/profile.c         3  dir    PSN sign-in backup: <uid>.txt.tmp -> <uid>.txt (made, or a slot added) and
  *                                   <uid>.txt -> .restored;
  *                                   an NP file put back: <file>.ps5upload-tmp -> file

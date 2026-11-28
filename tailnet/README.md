@@ -22,7 +22,11 @@ Engine (M4): `tn_map()` is the reverse of `serve`: a 127.0.0.1 port (TCP listene
 socket) that reaches a peer's tailnet address. `engine/crates/ps5upload-tailnet` builds this
 core with cc-rs for every shipping target and wraps it; the engine's router
 (`ps5upload_core::route`) sends the helper, Remote Play and discovery through such mappings
-when a console's home address does not answer. Platforms: `src/os.{h,c}` (POSIX, Winsock);
+when a console's home address does not answer. The PS5 helper only serves and never dials out on
+the tailnet, with one narrow exception: PS5Upload Play's forward (one TCP `tn_map` from
+127.0.0.1:9182 to a peer the node knows, set through the helper's loopback app API; see
+`payload/src/tailnet_node.c`). A node that serves AND maps lets in only the replies on the
+connections it dialed itself (`tn_fwd_tcp_known`: an existing lwIP pcb's four-tuple). Platforms: `src/os.{h,c}` (POSIX, Winsock);
 `testbed/cross-check.sh` compiles macOS, iOS, Android, Linux (glibc, musl), Windows (MinGW
 headers + link) and the PS5; `testbed/m4-check.sh` runs the real engine against our PS5-config
 node, direct and DERP-only.

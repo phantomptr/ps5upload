@@ -66,6 +66,23 @@ typedef struct xjob {
     int created_dest; /* this run made the destination folder */
     char cause[XJ_CAUSE]; /* the first failure: a cause token, then detail */
 
+    /* Freeing the archive's space as it is unpacked (xfree.h). `free_req`: asked for. */
+    int free_req;
+    char free_mode[8]; /* "parts" (freed part by part), "end" (deleted when done), or "" */
+    int checking;      /* reading the archive through once before anything is deleted */
+    int durable;       /* every file is flushed and its folder noted for xs_barrier */
+    int count_written; /* xs_write counts bytes_done itself (the free mode's progress) */
+    int freed_any;     /* a part is gone: free space may lag behind it, so only the writes judge room */
+    int deleting;      /* a part may be gone: said in the status before the first delete */
+    unsigned parts, parts_freed, parts_left, free_not_removed;
+    uint64_t bytes_freed;
+    /* The plan: the archive's size (every part), what it unpacks to (0: not known), the most room
+     * the unpack takes at once on the archive's drive, and whether the destination is on it. */
+    uint64_t archive_bytes, unpacked, free_peak;
+    int same_drive, plan_known;
+    char left_first[XJ_NAME]; /* the first part left, renamed, when it stopped part way */
+    char free_why[XJ_CAUSE];  /* a listing: why this archive can't be freed (empty when it can) */
+
     /* Hooks. `cancelled` is asked often (it should be cheap); `progress` after each buffer and entry
      * (it throttles itself). Either may be NULL. */
     int (*cancelled)(struct xjob *j);
@@ -110,6 +127,13 @@ int xs_open_dest(xjob_t *j);
 /* Checks the room for `need` more bytes on the destination's drive. 0, or -1 with
  * fs_extract_no_space set. */
 int xs_check_space(xjob_t *j, uint64_t need);
+/* The destination drive's free bytes; *known 0 when it can't be read. */
+uint64_t xs_free_bytes(xjob_t *j, int *known);
+
+/* With j->durable: everything written so far is on the drive when this returns 0 (each file was
+ * flushed as it was finished; the folders whose entries changed are flushed here). -1 with the cause
+ * set (fs_extract_write_failed). */
+int xs_barrier(xjob_t *j);
 
 /* One entry. `name` is the archive's name for it (UTF-8, '/' or '\\' separated). For a file that
  * returns XS_WRITE, write its bytes with xs_write and finish with xs_end. A folder is made at once

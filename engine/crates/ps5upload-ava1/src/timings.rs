@@ -26,8 +26,9 @@ pub struct ConnectTiming {
     /// has none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// How the console was reached: `lan`, `tailnet_direct`, `tailnet_relayed` or
-    /// `tailnet_system` (set by the engine).
+    /// How the console was reached: `lan`, `usb` (on the home network, through the console's USB
+    /// Ethernet adapter), `tailnet_direct`, `tailnet_relayed` or `tailnet_system` (set by the
+    /// engine).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// A live session was already pooled, so nothing was opened. Absent when a remembered

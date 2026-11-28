@@ -329,6 +329,57 @@ pub struct ExtractRequest {
     /// Renames of top-level entries, encoded by [`encode_top_renames`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<String>,
+    /// Delete the archive as it is unpacked (the extractor's `src/xfree.h`): a set of parts is
+    /// freed part by part, anything else once everything is out. With `list`, only the plan
+    /// ([`ExtractResult::free`]). Never sent otherwise; a helper older than this ignores it and
+    /// deletes nothing.
+    #[serde(rename = "free", skip_serializing_if = "std::ops::Not::not")]
+    pub free_archive: bool,
+}
+
+/// How an archive would be freed as it is unpacked, from a listing with
+/// [`ExtractRequest::free_archive`] (nothing decoded).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreePlan {
+    /// `parts` (each part deleted once everything in it is out), `end` (deleted once the
+    /// unpack is done: no room saved while it runs), or empty when it can't be done
+    /// ([`Self::why`]).
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub parts: u64,
+    /// Every part's size together.
+    #[serde(default)]
+    pub archive_bytes: u64,
+    /// What it unpacks to (0 when the listing doesn't say: a solid or encrypted RAR).
+    #[serde(default)]
+    pub unpacked: u64,
+    /// The most room the unpack takes at once on the archive's drive beyond what is free at the
+    /// start, with the parts given back on the way (an estimate from the listing; the unpack
+    /// measures it before anything is deleted).
+    #[serde(default)]
+    pub peak: u64,
+    /// The archive and the folder are on one drive: only then does freeing make room there.
+    #[serde(default)]
+    pub same_drive: bool,
+    /// `unpacked` and `peak` are known.
+    #[serde(default)]
+    pub known: bool,
+    /// Why it can't be done (`fs_extract_free_refused: ...`), else empty.
+    #[serde(default)]
+    pub why: String,
+}
+
+impl FreePlan {
+    /// How much less free space the unpack needs than without freeing, on the folder's drive:
+    /// what it unpacks to, less the most it takes at once. 0 on another drive, when it isn't
+    /// known, or when the archive goes only at the end.
+    pub fn saves(&self) -> u64 {
+        if !self.known || !self.same_drive || self.mode != "parts" {
+            return 0;
+        }
+        self.unpacked.saturating_sub(self.peak)
+    }
 }
 
 /// The extractor's room for top-level renames and listed names (`XJ_TOP`, payload/extractor).
@@ -401,6 +452,17 @@ pub struct ExtractResult {
     /// The helper answered a listing (an older one never does).
     #[serde(default)]
     pub listed: bool,
+    /// A listing with [`ExtractRequest::free_archive`]: the plan (absent from an older helper).
+    #[serde(default)]
+    pub free: Option<FreePlan>,
+    /// An unpack with [`ExtractRequest::free_archive`]: parts of the archive deleted, their
+    /// bytes, and parts that could not be deleted at the end (still on the drive).
+    #[serde(default)]
+    pub parts_freed: u64,
+    #[serde(default)]
+    pub bytes_freed: u64,
+    #[serde(default)]
+    pub free_not_removed: u64,
 }
 
 fn split_names(s: &str) -> Vec<String> {
@@ -495,6 +557,59 @@ mod extract_top_tests {
         assert_eq!(r.top_dir_names(), vec!["Game"]);
         let old: ExtractResult = serde_json::from_str(r#"{"path":"/data/x","files":3}"#).unwrap();
         assert!(!old.listed && old.top_names().is_empty());
+    }
+
+    #[test]
+    fn freeing_is_sent_only_when_asked_and_its_plan_reads_back() {
+        let plain = ExtractRequest {
+            path: "/data/a.7z.001".into(),
+            dest: "/data/a".into(),
+            ..Default::default()
+        };
+        assert!(serde_json::to_value(&plain).unwrap().get("free").is_none());
+        let asked = ExtractRequest {
+            free_archive: true,
+            ..plain
+        };
+        assert_eq!(serde_json::to_value(&asked).unwrap()["free"], true);
+        let r: ExtractResult = serde_json::from_str(
+            r#"{"path":"/data/a","top":"Game","top_dirs":"Game","top_more":false,"listed":true,
+                "free":{"mode":"parts","parts":10,"archive_bytes":1000,"unpacked":1200,"peak":300,
+                        "same_drive":true,"known":true,"why":""}}"#,
+        )
+        .unwrap();
+        let plan = r.free.unwrap();
+        assert_eq!(
+            (plan.mode.as_str(), plan.parts, plan.saves()),
+            ("parts", 10, 900)
+        );
+        // Nothing saved while it runs on another drive, at the end, or when not known.
+        for other in [
+            FreePlan {
+                same_drive: false,
+                ..plan.clone()
+            },
+            FreePlan {
+                mode: "end".into(),
+                ..plan.clone()
+            },
+            FreePlan {
+                known: false,
+                ..plan.clone()
+            },
+        ] {
+            assert_eq!(other.saves(), 0, "{other:?}");
+        }
+        let done: ExtractResult = serde_json::from_str(
+            r#"{"path":"/data/a","files":3,"parts_freed":10,"bytes_freed":1000}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (done.parts_freed, done.bytes_freed, done.free_not_removed),
+            (10, 1000, 0)
+        );
+        let old: ExtractResult = serde_json::from_str(r#"{"path":"/data/a","files":3}"#).unwrap();
+        assert!(old.free.is_none() && old.parts_freed == 0);
     }
 
     #[test]

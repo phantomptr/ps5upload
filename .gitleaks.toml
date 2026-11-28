@@ -1,0 +1,13 @@
+# gitleaks settings for this repository (scripts/security-scan.sh). The default rules apply; these
+# allowlists only cover published test vectors, which are not secrets. Listed by path or exact
+# value (not by fingerprint) so they still match after a release PR is squash-merged.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored BearSSL's own test vectors (RFC and NIST test keys)"
+paths = ['''^third_party/bearssl/test/''']
+
+[[allowlists]]
+description = "RFC 6455 section 1.3 example Sec-WebSocket-Key (base64 of 'the sample nonce')"
+regexes = ['''dGhlIHNhbXBsZSBub25jZQ==''']

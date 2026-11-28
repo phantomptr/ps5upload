@@ -84,8 +84,10 @@ export function applyConsoleTasks(host: string, list: readonly ConsoleTaskInfo[]
     listed.add(info.id);
     const row = rows.find((t) => taskIdOf(t) === info.id);
     const running = info.state === "running";
+    const queued = info.state === "queued";
     if (row) {
       if (isTerminal(row.status)) continue;
+      if (queued) continue;
       if (running) {
         store.updateTask(row.id, {
           label: consoleTaskLabel(info),
@@ -98,7 +100,7 @@ export function applyConsoleTasks(host: string, list: readonly ConsoleTaskInfo[]
       continue;
     }
     if (seen.has(info.id)) continue;
-    if (!running && info.age_s > FRESH_END_S) continue;
+    if (!running && !queued && info.age_s > FRESH_END_S) continue;
     // Left the job table with nobody reading (no page open, no app running): nothing to say about it.
     if (info.state === "gone") continue;
     seen.add(info.id);
@@ -111,14 +113,23 @@ export function applyConsoleTasks(host: string, list: readonly ConsoleTaskInfo[]
       payload: { consoleTaskId: info.id },
       control: { owner: "console-task", host: key, taskId: info.id, cancellable: info.cancellable },
       progress: consoleTaskProgress(info),
+      // Waiting in the console's queue (#982): shown as queued until it starts there.
+      ...(queued ? { status: "queued" as const, detail: trStatic("console_task_queued_on_ps5", "In the PS5's queue") } : {}),
+      // Its elapsed time counts from when the console started it, not from when this app saw it.
+      ...(typeof info.elapsed_s === "number" && info.elapsed_s > 0 ? { startedAgoMs: info.elapsed_s * 1000 } : {}),
     });
-    if (!running) finish(id, info);
+    if (!running && !queued) finish(id, info);
   }
   // No longer listed while it ran: the helper restarted, or this app did not read for longer than
   // the console keeps a task's ending. It is over, and how is not known.
   for (const row of rows) {
     if (!isTerminal(row.status) && !listed.has(String(taskIdOf(row)))) {
-      store.finishTask(row.id, "unverified");
+      // A queued item that left the line started (its job is a row of its own) or was removed:
+      // its waiting row goes.
+      if (row.status === "queued") {
+        store.finishTask(row.id, "cancelled");
+        store.removeTask(row.id);
+      } else store.finishTask(row.id, "unverified");
     }
   }
 }

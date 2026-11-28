@@ -607,6 +607,46 @@ static void test_companion_bind(void) {
     close(fd);
     comp_end(c);
 
+    /* OWNERS: who each pad is seated in now, read only (nothing bound, nothing watched); a pad the
+     * bus does not know answers its code; odd requests are refused whole */
+    fm_reset();
+    write_token(tok);
+    c = comp_start(100000, 100000);
+    fd = dial();
+    CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK);
+    fm_set_owner(2, 0x4000);
+    pthread_mutex_lock(&f_mu);
+    fm_gone[6] = 1;
+    pthread_mutex_unlock(&f_mu);
+    {
+        uint8_t q[1 + 4 * VWIRE_OWNERS_MAX];
+        q[0] = 4;
+        vwire_put32(q + 1, 2);
+        vwire_put32(q + 5, 5);
+        vwire_put32(q + 9, 6);
+        vwire_put32(q + 13, 0); /* not a handle */
+        memset(out, 0, sizeof out);
+        CHECK(req(fd, VWIRE_OWNERS, q, 17, out) == VWIRE_RC_OK);
+        CHECK(vwire_get32(out) == 0 && vwire_get32(out + 4) == 0x4000);
+        CHECK(vwire_get32(out + 8) == 0 && vwire_get32(out + 12) == 0); /* nobody yet */
+        CHECK(vwire_get32(out + 16) == 0x809b0005u && vwire_get32(out + 20) == 0);
+        CHECK((int)vwire_get32(out + 24) == VWIRE_RC_BAD_REQUEST && vwire_get32(out + 28) == 0);
+        CHECK(fm_bind_count() == 0);
+        q[0] = 0;
+        CHECK(req(fd, VWIRE_OWNERS, q, 1, out) == VWIRE_RC_BAD_REQUEST);
+        q[0] = VWIRE_OWNERS_MAX + 1;
+        CHECK(req(fd, VWIRE_OWNERS, q, 1, out) == VWIRE_RC_BAD_REQUEST);
+        q[0] = 2; /* says two, carries one */
+        CHECK(req(fd, VWIRE_OWNERS, q, 5, out) == VWIRE_RC_BAD_REQUEST);
+        q[0] = VWIRE_OWNERS_MAX;
+        for (int i = 0; i < VWIRE_OWNERS_MAX; i++) vwire_put32(q + 1 + 4 * i, (uint32_t)(i + 1));
+        CHECK(req(fd, VWIRE_OWNERS, q, 1 + 4 * VWIRE_OWNERS_MAX, out) == VWIRE_RC_OK);
+        CHECK(vwire_get32(out + 8 + 4) == 0x4000); /* device 2, the second asked */
+    }
+    close(fd);
+    for (int i = 0; i < 100 && !DONE(c); i++) nap(10);
+    comp_end(c);
+
     /* a watched pad the bus no longer knows (removed without FORGET) is dropped: then it idles out */
     fm_reset();
     write_token(tok);
@@ -632,6 +672,10 @@ static void test_companion_bind(void) {
     fd = dial();
     CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK && out[8] == 0);
     CHECK(bind_req(fd, 4, 0x1000, 0, NULL, NULL, NULL) == VWIRE_RC_UNSUPPORTED && fm_bind_count() == 0);
+    {
+        uint8_t q[5] = {1, 4, 0, 0, 0};
+        CHECK(req(fd, VWIRE_OWNERS, q, sizeof q, out) == VWIRE_RC_UNSUPPORTED);
+    }
     close(fd);
     for (int i = 0; i < 100 && !DONE(c); i++) nap(10);
     comp_end(c);
@@ -961,6 +1005,16 @@ static void test_relay_bind(void) {
     CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VWIRE_RC_BAD_REQUEST); /* already seated */
     vinput_relay_forget(5);
     CHECK(vinput_relay_bind(5, 0x2000, 2, &b) == VWIRE_RC_OK && b.owner == 0x2000);
+    /* who is on each pad, through the relay */
+    {
+        uint32_t dev[3] = {5, 6, 9}, own[3];
+        int32_t sce[3];
+        fm_set_owner(9, 0x3000);
+        CHECK(vinput_relay_owners(dev, 3, sce, own) == VWIRE_RC_OK);
+        CHECK(sce[0] == 0 && own[0] == 0x2000 && sce[1] == 0 && own[1] == 0 && sce[2] == 0 && own[2] == 0x3000);
+        CHECK(vinput_relay_owners(dev, 0, sce, own) == VWIRE_RC_BAD_REQUEST);
+        CHECK(vinput_relay_owners(dev, VWIRE_OWNERS_MAX + 1, sce, own) == VWIRE_RC_BAD_REQUEST);
+    }
     /* held: the relay keeps it with no device open, heartbeats and all */
     nap(800);
     CHECK(hold_running() && launches() == 1 && kills() == 0);
@@ -976,6 +1030,11 @@ static void test_relay_bind(void) {
     }
     CHECK(ok);
     CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VWIRE_RC_UNSUPPORTED);
+    {
+        uint32_t dev[1] = {5}, own[1];
+        int32_t sce[1];
+        CHECK(vinput_relay_owners(dev, 1, sce, own) == VWIRE_RC_UNSUPPORTED && own[0] == 0);
+    }
     /* no loader: unavailable, and a bind is refused at once */
     relay_setup(1);
     (void)vinput_relay_hold(5000);
@@ -986,6 +1045,11 @@ static void test_relay_bind(void) {
     }
     CHECK(ok);
     CHECK(vinput_relay_bind(5, 0x1000, 2, &b) == VRELAY_BIND_NOT_RUNNING);
+    {
+        uint32_t dev[1] = {5}, own[1];
+        int32_t sce[1];
+        CHECK(vinput_relay_owners(dev, 1, sce, own) == VRELAY_BIND_NOT_RUNNING);
+    }
     relay_setup(0);
 }
 
