@@ -219,6 +219,7 @@ static void test_hello_and_state(void) {
     online(1, 0x0100a8c0u);
     r = call(MESH_HELLO, 1, "{\"name\":\"MacBook\",\"kind\":\"desktop\",\"os\":\"macOS 27\",\"app\":\"8.0.0\"}");
     CHECK(has(r, "\"helper\":\"8.0.0\"") && has(r, "\"new\":true") && has(r, "\"require_approval\":false"));
+    CHECK(has(r, "\"app_api\":true"));
     r = call(MESH_STATE, 1, "{}");
     CHECK(has(r, "\"name\":\"MacBook\"") && has(r, "\"kind\":\"desktop\"") && has(r, "\"online\":true"));
     CHECK(has(r, "\"ip\":\"192.168.0.1\"") && has(r, "\"kind\":\"joined\""));

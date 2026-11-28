@@ -918,6 +918,9 @@ static int do_hello(const uint8_t caller[32], const char *body, size_t n, char *
     putstr(&b, hex);
     puts_(&b, ",\"helper\":");
     putstr(&b, M.helper);
+    /* This helper serves PS5Upload Play's loopback app API (127.0.0.1:9181, app_api.h): the engine
+     * tells the app "an older helper" from "no helper" by it. */
+    puts_(&b, ",\"app_api\":true");
     putf(&b, ",\"rev\":%llu,\"new\":%s,\"settings\":", (unsigned long long)M.rev, isnew ? "true" : "false");
     put_settings(&b);
     puts_(&b, "}");
