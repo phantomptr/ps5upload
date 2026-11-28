@@ -69,7 +69,7 @@ int mesh_admit(const uint8_t key[32], const char *name, uint32_t ip);
 int mesh_refused(const uint8_t key[32]);
 
 enum {
-    MESH_HELLO = 1,    /* {name,kind,os,app,proto} -> {you,helper,rev,settings,new} */
+    MESH_HELLO = 1,    /* {name,kind,os,app,proto[,play]} -> {you,helper,rev,settings,new} */
     MESH_STATE = 2,    /* {since,ev} -> {rev,same} | the whole picture (devices, asks, locks, events) */
     MESH_ACTIVITY = 3, /* {items:[...]} -> {ok,rev} */
     MESH_LOCK = 4,     /* {op:take|release,name,ttl,force,label} -> {ok,got,...} */
@@ -88,11 +88,17 @@ int mesh_call(int which, const uint8_t caller[32], const char *body, size_t n, c
  *   {"engine": E | null, "online": [E, ...]}
  *   E = {"name","kind","version","addr":"a.b.c.d","tailnet":bool,"port":N|null,
  *        "join_ws":"/..."|null,"app_ws":"/..."|null}
- * An engine says where PS5Upload Play reaches it with one item in its presence (MESH_ACTIVITY):
- *   {"kind":"play_host","port":<its HTTP port>,"join_ws":"/api/join/ws","app_ws":"/api/play/app"}
- * "engine" is the online device carrying that item (the one heard from last when there are
- * several); "addr" is the address its AVA1 session comes from, never one the item names. Blocked
- * devices are left out. Returns the length, or -1. */
+ * An engine says where PS5Upload Play reaches it in its hello (MESH_HELLO, engines from 13):
+ *   "play":{"port":<its HTTP port>,"join_ws":"/api/join/ws","app_ws":"/api/play/app"}
+ * kept in memory only (never saved, never in MESH_STATE, so older apps see nothing new) and
+ * cleared by a hello without it; or with the same fields in one item of its presence
+ * (MESH_ACTIVITY), which wins when both are there:
+ *   {"kind":"play_host","port":...,"join_ws":...,"app_ws":...}
+ * (no engine sends that item: older apps list every presence item as something the device is
+ * doing). "engine" is the online device offering either (the one heard from last when there are
+ * several: its presence's time for the item, its last contact for the hello); a port or path that
+ * is missing or not valid is null. "addr" is the address its AVA1 session comes from, never one
+ * the engine names. Blocked devices are left out. Returns the length, or -1. */
 int mesh_engines_json(char *out, size_t cap);
 
 #endif

@@ -15,4 +15,11 @@ void rumble(std::uint8_t left, std::uint8_t right) noexcept;
 void light(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept;
 void light_reset() noexcept;
 unsigned sent() noexcept;
+// Rumble changes applied to the controller (scePadSetVibration calls), and the last one's result.
+struct Rumbles
+{
+    unsigned calls = 0, nonzero = 0;
+    int last_rc = 0;
+};
+Rumbles rumbles() noexcept;
 } // namespace play::ps5::padio

@@ -26,11 +26,39 @@ use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ps5upload_core::mesh::{self, Hello};
+use ps5upload_core::mesh::{self, Hello, PlayHost};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::json_err;
+
+/// The HTTP port this engine listens on for other devices; 0 until it is listening, or when it
+/// listens on its own computer only (the console could not reach it).
+static PLAY_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Called once the engine listens at `at`: the hello then tells each console's PS5Upload Play
+/// where to reach this engine (the next hello: one is said every few minutes).
+pub(crate) fn set_listening(at: std::net::SocketAddr) {
+    PLAY_PORT.store(play_port(at), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The port a console reaches an engine listening at `at` on; 0 for a loopback-only listener.
+fn play_port(at: std::net::SocketAddr) -> u16 {
+    if at.ip().is_loopback() {
+        0
+    } else {
+        at.port()
+    }
+}
+
+/// What the hello says about PS5Upload Play for an engine listening on `port` (0: not reachable).
+fn play_host(port: u16) -> Option<PlayHost> {
+    (port != 0).then(|| PlayHost {
+        port,
+        join_ws: "/api/join/ws".into(),
+        app_ws: "/api/play/app".into(),
+    })
+}
 
 /// Say hello again after this long, so the console's "last seen" and our name stay current.
 const HELLO_EVERY: Duration = Duration::from_secs(300);
@@ -216,6 +244,7 @@ fn hello_info() -> Hello {
         kind: kind().into(),
         os: os_label(),
         app: env!("CARGO_PKG_VERSION").into(),
+        play: play_host(PLAY_PORT.load(std::sync::atomic::Ordering::Relaxed)),
     }
 }
 
@@ -793,6 +822,31 @@ pub async fn announce(Json(req): Json<AnnounceReq>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hello_offers_play_only_on_a_port_a_console_can_reach() {
+        let at = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+        assert_eq!(play_port(at("0.0.0.0:19113")), 19113);
+        assert_eq!(play_port(at("192.168.1.20:19200")), 19200);
+        assert_eq!(play_port(at("127.0.0.1:19113")), 0);
+        assert_eq!(play_port(at("[::1]:19113")), 0);
+        assert_eq!(play_host(0), None);
+        let p = play_host(19113).expect("offered");
+        assert_eq!(
+            (p.port, p.join_ws.as_str(), p.app_ws.as_str()),
+            (19113, "/api/join/ws", "/api/play/app")
+        );
+        let body = mesh::hello_body(&Hello {
+            play: play_host(19113),
+            ..Hello::default()
+        });
+        assert_eq!(body["play"]["port"], 19113);
+        let body = mesh::hello_body(&Hello {
+            play: play_host(0),
+            ..Hello::default()
+        });
+        assert!(body.get("play").is_none(), "{body}");
+    }
 
     #[test]
     fn presence_is_the_union_of_live_windows_and_only_sent_when_it_changed() {

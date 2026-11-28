@@ -7,7 +7,11 @@
 //! `vpad.*`, `ps5upload_core::vpad`), the session's picture and sound, and their controller's
 //! rumble and light bar.
 //!
-//! **Guest socket** (`/api/join/ws`, the only Play Together route a LAN peer reaches):
+//! **Guest socket** (`/api/join/ws`, the only Play Together route a LAN peer reaches). A friend's
+//! PS5 running PS5Upload Play also reaches it over Tailscale when this computer is on the tailnet
+//! through PS5Upload itself (no Tailscale app here): the engine's own node serves the engine's port
+//! to a guest listener that holds only this socket and PS5Upload Play's (`crate::tailnet_guest`),
+//! and the handler sees the friend's 100.x address, as it would a LAN peer's:
 //! * first message `{"hello": {"invite"?: key, "code"?: short code, "resume"?: token, "name":
 //!   "…"}}` (`invite`: the link; `code`: typed, case and dashes ignored; neither: a "Playing
 //!   nearby" join from the mesh presence; every new guest asks the host); answers
@@ -5318,6 +5322,18 @@ pub(crate) mod link {
     #[cfg(test)]
     pub(crate) static TEST_PORTS: Mutex<Option<HashMap<String, Arc<dyn Port>>>> = Mutex::new(None);
 
+    /// A stand-in helper for a console that is not there: a recorded session played as a live
+    /// host (rp_dev_replay.rs, a test engine only). Set once, at start.
+    static DEV_PORTS: Mutex<Option<HashMap<String, Arc<dyn Port>>>> = Mutex::new(None);
+
+    pub(crate) fn set_dev_port(console: &str, port: Arc<dyn Port>) {
+        DEV_PORTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .insert(host_key(console), port);
+    }
+
     /// The helper port for `console` (a test may put a fake one in).
     pub(crate) fn port_for(console: &str) -> Arc<dyn Port> {
         #[cfg(test)]
@@ -5327,7 +5343,12 @@ pub(crate) mod link {
                 return p.clone();
             }
         }
-        let _ = console;
+        {
+            let g = DEV_PORTS.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = g.as_ref().and_then(|m| m.get(&host_key(console))) {
+                return p.clone();
+            }
+        }
         Arc::new(HelperPort)
     }
 

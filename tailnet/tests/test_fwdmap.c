@@ -16,7 +16,7 @@
 #define SELF 0x64400001u /* 100.64.0.1 */
 #define PEER 0x64400002u /* 100.64.0.2 */
 
-static const tn_serve SERVE[] = {{6, 9120, 0}};
+static const tn_serve SERVE[] = {{6, 9120, 0, 0}};
 
 static tn_ip_info tcp_seg(uint32_t src, uint16_t sport, uint32_t dst, uint16_t dport)
 {

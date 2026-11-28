@@ -2,8 +2,9 @@
 //! live, and acts on them from the couch.
 //!
 //! **The socket** (`GET /api/play/app`, a WebSocket the app dials; the app never listens). It is
-//! reachable from the LAN, like the guest socket, so everything past a minimal status needs the
-//! app's token:
+//! reachable from the LAN, like the guest socket, and over Tailscale through the engine's own node
+//! (its guest port, `crate::tailnet_guest`, which serves only these two sockets and gives the
+//! handler the peer's 100.x address), so everything past a minimal status needs the app's token:
 //! * app → engine, first: `{"hello": {"token"?: t, "v"?: version}}`.
 //! * without a valid token the app gets only `{"doc": {"engine": true, "version", "paired":
 //!   false}}` (no invite, no names), plus `{"auth": "invalid" | "other_console" | "revoked"}` when

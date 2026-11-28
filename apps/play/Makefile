@@ -13,7 +13,7 @@ HOST_FLAGS ?= -std=c++20 -O1 -g -Wall -Wextra -Werror
 SAN ?= -fsanitize=address,undefined
 T := build/host-tests
 
-CORE := src/core/json.cpp src/core/ws.cpp src/core/proto.cpp src/core/jitter.cpp src/core/settings.cpp
+CORE := src/core/json.cpp src/core/ws.cpp src/core/proto.cpp src/core/jitter.cpp src/core/settings.cpp src/core/hdr.cpp
 NET := src/net/net.cpp src/app/guest.cpp src/app/companion.cpp src/app/helper.cpp src/app/log.cpp
 UI := src/app/app.cpp src/ui/canvas.cpp src/ui/strings.cpp src/ui/i18n.cpp
 

@@ -87,7 +87,7 @@ class Sinks final : public GuestSinks
                       "\"decoder\":\"native\",\"codec\":\"%s\",\"snd\":\"native\",\"snd_decoded\":%u,"
                       "\"snd_concealed\":%u,\"snd_underruns\":%u,\"snd_dropped\":%u",
                       v.shown, v.dropped, v.skipped, static_cast<double>(v.decode_ms), v.key_waits,
-                      v.hevc ? "hevc" : "h264", s.decoded, s.concealed + s.recovered, s.underruns, s.dropped);
+                      v.hevc ? (v.ten_bit ? "hevc.main10" : "hevc") : "h264", s.decoded, s.concealed + s.recovered, s.underruns, s.dropped);
     }
 };
 Sinks sinks_instance;
@@ -325,13 +325,15 @@ int main()
             const auto v = ps5::video::stats();
             const auto s = ps5::sound::stats();
             const auto d = ps5::display::stats();
+            const auto r = ps5::padio::rumbles();
             if (v.decoded || s.decoded)
                 log("stats: pictures decoded %u shown %u skipped %u dropped %u errors %u key waits %u, decode %.2f ms, "
-                    "convert %.2f ms, flips %u (waits %u); sound decoded %u concealed %u recovered %u underruns %u "
-                    "dropped %u late %u; pad frames %u",
+                    "convert %.2f ms%s, flips %u (waits %u), gaps over 25 ms %u, worst %.1f ms; sound decoded %u "
+                    "concealed %u recovered %u underruns %u dropped %u late %u; pad frames %u; rumble set %u times (%u on, last %#x)",
                     v.decoded, v.shown, v.skipped, v.dropped, v.errors, v.key_waits, static_cast<double>(v.decode_ms),
-                    static_cast<double>(d.convert_ms), d.flips, d.waits, s.decoded, s.concealed, s.recovered,
-                    s.underruns, s.dropped, s.late, ps5::padio::sent());
+                    static_cast<double>(d.convert_ms), v.ten_bit ? " (10-bit HDR to SDR)" : "", d.flips, d.waits,
+                    d.slow, static_cast<double>(d.worst_ms), s.decoded, s.concealed, s.recovered, s.underruns,
+                    s.dropped, s.late, ps5::padio::sent(), r.calls, r.nonzero, static_cast<unsigned>(r.last_rc));
         }
         sceKernelUsleep(8000);
     }

@@ -238,7 +238,8 @@ int helper_cmd(int argc, char **argv)
     const int n = helper::mesh(e, 8);
     std::printf("mesh %d\n", n);
     for (int i = 0; i < n; ++i)
-        std::printf("engine %s %s:%u tailnet=%d kind=%s\n", e[i].name, e[i].addr, e[i].port, e[i].tailnet, e[i].kind);
+        std::printf("engine %s %s:%u tailnet=%d kind=%s preferred=%d\n", e[i].name, e[i].addr, e[i].port, e[i].tailnet,
+                    e[i].kind, e[i].preferred);
     helper::Rp rp;
     std::printf("rp %d ready=%d service_on=%d needs_user=%d\n", helper::rp(rp), rp.ready, rp.service_on,
                 rp.needs_user_permission);

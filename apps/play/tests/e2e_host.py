@@ -57,7 +57,7 @@ h = r["hellos"][0] if r["hellos"] else {}
 check(h.get("code") == "abc-def" and h.get("name") == "play-cli", "hello carries the code and name")
 caps = h.get("client", {}).get("caps", {})
 check(h.get("client", {}).get("kind") == "ps5" and h.get("client", {}).get("app") == "play", "hello says ps5/play")
-check(caps == {"hevc": True, "main10": False, "raw_pad": True, "timing": True}, "hello caps")
+check(caps == {"hevc": True, "main10": True, "raw_pad": True, "timing": True}, "hello caps (Main10 shown tone-mapped)")
 res = dict(kv.split("=") for kv in out.split("result ", 1)[1].split("\n")[0].split()) if "result " in out else {}
 check(int(res.get("pictures", 0)) > 100 and int(res.get("keyframes", 0)) >= 2, "pictures arrive (timed video)")
 check(int(res.get("sounds", 0)) > 200, "sound frames arrive")
@@ -128,8 +128,10 @@ check("phase unpaired  invalid" in out and "(cleared)" in out, "a token that sto
 p, port, rep = engine("helper", "--lifetime", "10")
 out = run("helper", str(port))
 r = finish(p, rep)
-check("mesh 2" in out and "engine Living room PC 192.168.1.20:19113 tailnet=0" in out
-      and "engine Laptop 100.101.102.103:0 tailnet=1" in out, "mesh: engines only, the console left out")
+check("mesh 2" in out and "engine Laptop 100.101.102.103:0 tailnet=1 kind=desktop preferred=0" in out,
+      "mesh: engines only, the console left out, the offered one once")
+check(out.split("mesh 2\n", 1)[-1].startswith("engine Living room PC 192.168.1.20:19200 tailnet=0 kind=desktop preferred=1"),
+      "mesh: the engine the helper offers comes first, on the port its hello gave")
 check("rp 1 ready=0 service_on=0 needs_user=1" in out and "enable 1 ready=1" in out, "Remote Play readiness, turned on")
 enable = [i["helper"] for i in r["intents"] if "helper" in i and i["helper"][1] == "/v1/rp/enable"]
 check(enable and enable[0][2] == {"confirm": True}, "turning Remote Play on says confirm")

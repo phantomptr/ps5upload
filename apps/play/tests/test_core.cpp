@@ -1,6 +1,7 @@
 // PS5Upload Play - host unit tests for the portable core (make -C apps/play test).
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "../src/core/chord.hpp"
+#include "../src/core/hdr.hpp"
 #include "../src/core/jitter.hpp"
 #include "../src/core/json.hpp"
 #include "../src/core/proto.hpp"
@@ -441,6 +442,64 @@ void test_i18n()
 }
 } // namespace
 
+void test_hdr()
+{
+    static hdr::Tables t;
+    hdr::build(t);
+    // PQ code 520 is 100 cd/m2 (ST 2084): linear 100/10000 of full scale, within 2%
+    const double want = 100.0 / 10000.0 * (1u << hdr::kLinBits);
+    CHECK(t.lin[520] > want * 0.98 && t.lin[519] < want * 1.02);
+    CHECK(t.lin[0] == 0 && t.lin[1023] == (1u << hdr::kLinBits));
+    const hdr::Chroma grey = hdr::chroma(512, 512);
+    auto rgb = [](std::uint32_t p, int i) { return static_cast<int>(p >> (8 * i) & 0xff); };
+    // black stays black, greys stay grey, brighter is never darker, the top is white
+    CHECK(hdr::pixel(t, 64, grey) == 0);
+    int last = -1;
+    bool neutral = true, rising = true;
+    for (int y = 64; y <= 940; ++y)
+    {
+        const std::uint32_t p = hdr::pixel(t, y, grey);
+        neutral = neutral && rgb(p, 0) == rgb(p, 1) && rgb(p, 1) == rgb(p, 2);
+        rising = rising && rgb(p, 1) >= last;
+        last = rgb(p, 1);
+    }
+    CHECK(neutral);
+    CHECK(rising);
+    CHECK(last == 255);
+    // 100 cd/m2 (Y' 509) is below the roll-off: (100/203)^(1/2.4) of 255, about 190
+    const int g100 = rgb(hdr::pixel(t, 509, grey), 1);
+    CHECK(g100 >= 187 && g100 <= 193);
+    // 1000 cd/m2 (the assumed peak, PQ 0.7518: Y' 64 + 769 * 876/1023 = 722) is white, 203 not quite
+    CHECK(rgb(hdr::pixel(t, 722, grey), 1) >= 253);
+    const int g203 = rgb(hdr::pixel(t, 64 + 593 * 876 / 1023, grey), 1);
+    CHECK(g203 > 225 && g203 < 245);
+    // a saturated BT.2020 red ends up red (out of BT.709's gamut, clipped, not tinted)
+    const std::uint32_t red = hdr::pixel(t, 400, hdr::chroma(400, 960));
+    CHECK(rgb(red, 0) > 200 && rgb(red, 1) < 40 && rgb(red, 2) < 40);
+    // a row of 16-bit samples, chroma shared by a pixel pair: the decoder's low-aligned 10 bits
+    // (shift 0) and P010's top-aligned (shift 6), each told apart by shift_of
+    for (int shift = 0; shift <= 6; shift += 6)
+    {
+        std::uint8_t y[16 * 8 * 2] = {}, uv[8];
+        const int ys[4] = {64, 509, 940, 509};
+        for (int i = 0; i < 4; ++i)
+        {
+            const int v = ys[i] << shift, c = 512 << shift;
+            for (int r = 0; r < 8; ++r) // every row the same, so shift_of reads real samples
+            {
+                y[r * 16 + 2 * i] = static_cast<std::uint8_t>(v & 0xff);
+                y[r * 16 + 2 * i + 1] = static_cast<std::uint8_t>(v >> 8);
+            }
+            uv[2 * i] = static_cast<std::uint8_t>(c & 0xff);
+            uv[2 * i + 1] = static_cast<std::uint8_t>(c >> 8);
+        }
+        CHECK(hdr::shift_of(y, 16, 4, 8) == shift);
+        std::uint32_t out[4];
+        hdr::row(t, y, uv, 4, shift, out);
+        CHECK(out[0] == 0xff000000u && rgb(out[1], 0) == g100 && out[2] == 0xffffffffu && out[3] == out[1]);
+    }
+}
+
 int main()
 {
     test_sha1_base64();
@@ -455,6 +514,7 @@ int main()
     test_chords();
     test_settings();
     test_i18n();
+    test_hdr();
     std::printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

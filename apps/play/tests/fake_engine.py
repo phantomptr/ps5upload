@@ -282,9 +282,12 @@ def helper_api(conn, method, path, hdr, rest):
         helper_state["pin"] = "idle"
         return answer(200, {"ok": True})
     if (method, path) == ("GET", "/v1/mesh"):
-        return answer(200, {"engine": None, "online": [
-            {"name": "Living room PC", "kind": "desktop", "version": "13.0.0", "addr": "192.168.1.20", "tailnet": False,
-             "port": 19113, "join_ws": "/api/join/ws", "app_ws": "/api/play/app"},
+        # As the helper answers: "engine" is the one whose hello said where Play reaches it (on
+        # a port of its own here), and it is in "online" too.
+        offered = {"name": "Living room PC", "kind": "desktop", "version": "13.0.0", "addr": "192.168.1.20",
+                   "tailnet": False, "port": 19200, "join_ws": "/api/join/ws", "app_ws": "/api/play/app"}
+        return answer(200, {"engine": offered, "online": [
+            offered,
             {"name": "Friend's PS5", "kind": "ps5", "version": "13.0.0", "addr": "192.168.1.30", "tailnet": False,
              "port": None, "join_ws": None, "app_ws": None},
             {"name": "Laptop", "kind": "desktop", "version": "13.0.0", "addr": "100.101.102.103", "tailnet": True,

@@ -70,6 +70,9 @@ proto::PadState to_state(const PadSample &s, std::uint32_t buttons) noexcept
     return p;
 }
 
+std::atomic<unsigned> rumble_calls{0}, rumble_nonzero{0};
+std::atomic<int> rumble_rc{0};
+
 void *thread_main(void *) noexcept
 {
     Chords chords;
@@ -110,6 +113,10 @@ void *thread_main(void *) noexcept
                 const std::uint32_t v = want_rumble.load();
                 const std::uint8_t m[2] = {static_cast<std::uint8_t>(v >> 8), static_cast<std::uint8_t>(v)};
                 const int rc = scePadSetVibration(handle, m);
+                rumble_calls.fetch_add(1);
+                if (m[0] || m[1])
+                    rumble_nonzero.fetch_add(1);
+                rumble_rc.store(rc);
                 static int logged;
                 if (logged++ < 5)
                     log("pad: rumble %u %u: %#x", m[0], m[1], rc);
@@ -250,5 +257,10 @@ void light_reset() noexcept
 unsigned sent() noexcept
 {
     return frames_sent.load();
+}
+
+Rumbles rumbles() noexcept
+{
+    return {rumble_calls.load(), rumble_nonzero.load(), rumble_rc.load()};
 }
 } // namespace play::ps5::padio

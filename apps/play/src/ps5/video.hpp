@@ -19,6 +19,7 @@ struct Stats
     unsigned decoded = 0, shown = 0, skipped = 0, dropped = 0, errors = 0, key_waits = 0;
     float decode_ms = 0;
     bool hevc = false;
+    bool ten_bit = false; // the last picture was 10-bit (HDR)
 };
 Stats stats() noexcept;
 } // namespace play::ps5::video

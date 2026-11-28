@@ -20,12 +20,13 @@
 #include "tailnet.h"
 #include "webui_codec.h"
 
-/* The allow-list. The core accepts nothing else from the tailnet. */
+/* The allow-list. The core accepts nothing else from the tailnet. Plain splices (flags 0): the
+ * helper and Remote Play take a tailnet peer as they take a LAN one. */
 static const tn_serve SERVE[] = {
-    {6, 9295, 0},  /* Remote Play session (TCP) */
-    {17, 9296, 0}, /* Remote Play stream (UDP) */
-    {17, 9302, 0}, /* Remote Play discovery / wake (UDP) */
-    {6, 9120, 0},  /* the helper (AVA1, TCP) */
+    {6, 9295, 0, 0},  /* Remote Play session (TCP) */
+    {17, 9296, 0, 0}, /* Remote Play stream (UDP) */
+    {17, 9302, 0, 0}, /* Remote Play discovery / wake (UDP) */
+    {6, 9120, 0, 0},  /* the helper (AVA1, TCP) */
 };
 
 #define ALLOW_MAX 32
