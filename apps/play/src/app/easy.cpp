@@ -455,6 +455,19 @@ void App::easy_frame(std::uint64_t now) noexcept
     // The host's engine gave a pass ("joined"): keep it for Play again. A pass that stopped
     // working is forgotten.
     const GuestView gv = guest_view();
+    // the round trip of this game, kept with the host (a card's "last time N ms"), once a join
+    if (gv.phase == GuestView::joined && gv.route_rtt_ms >= 0 && !rtt_saved_ && target_.addr[0] &&
+        net::now_us() - joined_at_ > 20000000)
+    {
+        rtt_saved_ = true;
+        if (Friend *f = friends_.find(target_.addr, target_.port))
+        {
+            f->add_rtt(gv.route_rtt_ms);
+            save_friends();
+        }
+    }
+    if (gv.phase != GuestView::joined && gv.phase != GuestView::reconnecting)
+        rtt_saved_ = false;
     if (gv.phase == GuestView::joined && gv.friend_pass[0] && !friend_saved_ && target_.addr[0])
     {
         friend_saved_ = true;

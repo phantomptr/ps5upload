@@ -300,10 +300,38 @@ void *App::discovery_main(void *self) noexcept
         app->disc_done_once_ = true;
         app->dirty_ = true;
         pthread_mutex_unlock(&app->disc_lock_);
+        // Thanks & Support: the engine's supporter list when it is newer than the app's (once a run)
+        for (int i = 0; i < n && !app->support_checked_; ++i)
+            if (!a[i].tailnet)
+            {
+                char ip[16];
+                net::ip_text(a[i].ip_be, ip);
+                app->refresh_support(ip, a[i].info.port);
+            }
         for (int i = 0; i < 30 && app->disc_run_.load(); ++i)
             net::sleep_ms(100);
     }
     return nullptr;
+}
+
+void App::refresh_support(const char *addr, std::uint16_t port) noexcept
+{
+    support_checked_ = true;
+    static char body[16384];
+    if (net::http_get(addr, port, "/api/support", body, sizeof body, 2000) != 200)
+        return; // an older engine: the app's own list stays
+    // the list itself is read when Thanks opens (load_supporters)
+    const std::size_t len = std::strlen(body);
+    if (len < 10 || std::strstr(body, "\"names\"") == nullptr)
+        return;
+    char path[160];
+    std::snprintf(path, sizeof path, "%s/supporters.json", platform::data_dir());
+    char old[64] = {};
+    const long ol = platform::read_file(path, old, sizeof old - 1);
+    if (ol > 0 && !std::strncmp(old, body, sizeof old - 1))
+        return;
+    if (platform::write_file(path, body, len))
+        log("app: the supporter list from PS5Upload at %s kept", addr);
 }
 
 void App::remember_current() noexcept

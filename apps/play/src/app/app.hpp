@@ -375,6 +375,7 @@ class App
     bool mic_on_ = false;
     voice::Ptt ptt_;
     bool password_asked_ = false;
+    bool rtt_saved_ = false;
     // many controllers on one PS5 (seats_app.cpp)
     seats::Seats seats_;
     Guest *seat_[3] = {};
@@ -407,6 +408,9 @@ class App
     // Host from this PS5: the right computer by itself (a helper grant, the engine streaming this
     // PS5, a paired one, the only one that knows it); false: the person picks.
     bool host_auto() noexcept;
+    // GET /api/support on a PS5Upload found nearby: its supporter list kept for Thanks (once a run).
+    void refresh_support(const char *addr, std::uint16_t port) noexcept;
+    std::atomic<bool> support_checked_{false};
     // Where Minion asked this app to open (helper /v1/intent), read once at start.
     void take_intent() noexcept; // the name a join uses ("" = the PS5 user's); "Pick another name" sets it
     // Thanks & Support: names from the bundled list (or the engine's newer one)
