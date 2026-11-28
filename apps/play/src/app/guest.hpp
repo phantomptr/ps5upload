@@ -3,7 +3,9 @@
 // thread sends pad frames through send_pad().
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "../core/chat.hpp"
 #include "../core/proto.hpp"
+#include "../core/rooms.hpp"
 #include "../net/net.hpp"
 #include "../net/route.hpp"
 
@@ -32,6 +34,11 @@ class GuestSinks
     virtual bool wants_keyframe() = 0;
     // The report for the host's panel: `{"frames":...}` members (without braces).
     virtual void stats(char *out, std::size_t cap) = 0;
+    // Room voice (docs/ROOMS.md): one speaker's 20 ms Opus frame, already the person's to hear.
+    virtual void voice(std::uint8_t speaker, std::uint16_t seq, const std::uint8_t *opus, std::size_t len)
+    {
+        (void)speaker, (void)seq, (void)opus, (void)len;
+    }
 };
 
 struct GuestView
@@ -47,6 +54,8 @@ struct GuestView
         refused,  // why
         ended,    // why: the engine's bye, "left", "lost"
         failed,   // why: could not reach the engine ("unreachable", "busy", "old_engine")
+        name_taken, // someone in the room has this name: `suggest` (join again with it or another)
+        password,   // the room wants its password (the knock's challenge came; none given yet)
     } phase = idle;
     char why[24] = {};
     char host[48] = {};    // the host's name, from status
@@ -77,6 +86,17 @@ struct GuestView
     std::uint64_t route_changed_us = 0;
     char route_why[12] = {};
     char bridge_at[64] = {}; // this home's PS5Upload (addr:port), when a join through it failed
+    // Play Rooms (docs/ROOMS.md)
+    char suggest[40] = {};   // name_taken: the name the host engine offers ("Sam (2)")
+    int tries_left = -1;     // refused "password": tries left
+    char lobby[24] = {};     // the host's lobby on the hub (joined), for Your friends' rooms
+    char token[80] = {};     // the resume token (kept on disk: back after the host restarts)
+    rooms::RoomState room;   // the room push
+    std::uint32_t chat_rev = 0; // bumps on every chat line (Guest::chat_log() has them)
+    int chat_unread = 0;
+    char chat_note[12] = {};   // the engine's last chat note ("slow", "off", "muted")
+    std::uint64_t chat_note_us = 0;
+    unsigned voice_in = 0, voice_out = 0; // frames heard / sent
 };
 
 // How a join goes beyond the code (docs/EASY_JOIN.md): an invite link's key, a friend pass, asking
@@ -94,6 +114,19 @@ struct JoinExtras
     // through this home's PS5Upload asks with the host's last internet invite, because an engine
     // takes no friend pass from an internet room. Unused when `invite` is set.
     char bridge_invite[132] = {};
+    // Play Rooms (docs/ROOMS.md): this PS5's device id (base64url), how the join was found
+    // ("rooms", "friends", "nearby", "again"; "" = an invite or a code), and the room's password
+    // and key for a sealed knock (the challenge comes from the engine).
+    char device[32] = {};
+    char via[12] = {};
+    char password[260] = {};
+    char pk[100] = {};
+    // Many controllers (integration design (d)): a seat without picture or sound in the group of
+    // the player already in (its resume token).
+    bool no_media = false;
+    char group[80] = {};
+    // Coming back to a game after this app was closed (a host restart, a crash): the resume token.
+    char resume[80] = {};
 };
 
 class Guest
@@ -132,6 +165,17 @@ class Guest
     {
         ws_.close();
     }
+
+    // Play Rooms (any thread): chat, the mic, voice frames, the ready answer. False when not joined.
+    bool send_quick(int id) noexcept;
+    bool send_text(const char *text) noexcept; // cleaned here (chat.hpp); false when rate-limited
+    bool send_mic(const char *state) noexcept;  // "on", "off", "ptt_down", "ptt_up"
+    bool send_voice(std::uint16_t seq, std::uint8_t level, const std::uint8_t *opus, std::size_t len) noexcept;
+    // The password for a room that asked for it (phase password): sealed and sent.
+    bool send_password(const char *pw) noexcept;
+    // A copy of the chat (the guest thread adds to it).
+    void chat_copy(chat::Log &out) noexcept;
+    void chat_read() noexcept;
 
   private:
     static void *entry(void *self) noexcept;
@@ -194,5 +238,13 @@ class Guest
     // "old" (no /api/join/bridge there: older than 13.0.0) or "unreachable"
     char bridge_why_[16] = {};
     char bridge_at_[64] = {};
+    // Play Rooms
+    chat::Log chat_;
+    chat::Rate chat_rate_;
+    char challenge_[48] = {};
+    char room_pk_[100] = {};
+    bool host_restarting_ = false; // the engine said "waiting": its session restarts (a longer window)
+    void handle_room_text(const char *t, std::size_t n) noexcept;
+    bool seal_and_send(const char *pw) noexcept;
 };
 } // namespace play
