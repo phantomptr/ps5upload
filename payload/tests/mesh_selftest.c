@@ -497,6 +497,43 @@ static void test_events(void) {
     CHECK(has(call(99, 1, "{}"), "bad_method"));
 }
 
+/* mesh_engines_json (PS5Upload Play's GET /v1/mesh): the engine that says where the app reaches it. */
+static void test_play_engines(void) {
+    char out[4096];
+    start();
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(!strcmp(out, "{\"engine\":null,\"online\":[]}"));
+    online(1, 0x0100a8c0u); /* 192.168.0.1 */
+    online(2, 0x050a4064u); /* 100.64.10.5 (a tailnet address) */
+    call(MESH_HELLO, 1, "{\"name\":\"Desk\",\"kind\":\"desktop\",\"os\":\"macOS\",\"app\":\"13.0.0\"}");
+    call(MESH_HELLO, 2, "{\"name\":\"Phone\",\"kind\":\"android\",\"os\":\"Android\",\"app\":\"13.0.0\"}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":null,\"online\":[{\"name\":\"Desk\""));
+    CHECK(has(out, "\"addr\":\"192.168.0.1\",\"tailnet\":false,\"port\":null"));
+    CHECK(has(out, "\"addr\":\"100.64.10.5\",\"tailnet\":true"));
+    g_now += 1000;
+    call(MESH_ACTIVITY, 1,
+         "{\"items\":[{\"kind\":\"upload\",\"pct\":3},{\"kind\":\"play_host\",\"port\":19113,"
+         "\"join_ws\":\"/api/join/ws\",\"app_ws\":\"/api/play/app\",\"addr\":\"6.6.6.6\"}]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"name\":\"Desk\",\"kind\":\"desktop\",\"version\":\"13.0.0\",\"addr\":\"192.168.0.1\","
+                   "\"tailnet\":false,\"port\":19113,\"join_ws\":\"/api/join/ws\",\"app_ws\":\"/api/play/app\"}"));
+    CHECK(!has(out, "6.6.6.6")); /* the address is the session's, never the item's */
+    /* A second engine heard from later wins; bad ports and paths read as null. */
+    g_now += 1000;
+    call(MESH_ACTIVITY, 2, "{\"items\":[{\"kind\":\"play_host\",\"port\":70000,\"join_ws\":\"ws://x\",\"app_ws\":\"/a b\"}]}");
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"name\":\"Phone\""));
+    CHECK(has(out, "\"tailnet\":true,\"port\":null,\"join_ws\":null,\"app_ws\":null}"));
+    /* Gone offline: not offered. */
+    g_non = 1;
+    CHECK(mesh_engines_json(out, sizeof out) > 0);
+    CHECK(has(out, "{\"engine\":{\"name\":\"Desk\"") && !has(out, "Phone"));
+    /* Too small a buffer: a refusal, never a cut answer. */
+    CHECK(mesh_engines_json(out, 80) > 0 && has(out, "reply_too_large"));
+    CHECK(mesh_engines_json(out, 10) == -1);
+}
+
 int main(void) {
     snprintf(g_dir, sizeof g_dir, "/tmp/mesh-selftest-XXXXXX");
     if (!mkdtemp(g_dir)) {
@@ -515,6 +552,7 @@ int main(void) {
     test_doc_json();
     test_persist_and_prune();
     test_events();
+    test_play_engines();
     {
         char cmd[300];
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir);

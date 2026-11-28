@@ -1200,6 +1200,14 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-mesh-selftest
 	@echo "✓ devices connect (or ask, and are allowed or declined), are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
+	@echo "Running PS5Upload Play's loopback app API self-test (host build, ASan + UBSan)..."
+	@cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror \
+		-I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-app-api-selftest \
+		$(PAYLOAD_DIR)/tests/app_api_selftest.c $(PAYLOAD_DIR)/src/app_api.c $(PAYLOAD_DIR)/src/webui_http.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-app-api-selftest
+	@echo "✓ the app API answers only 127.0.0.1/localhost Hosts with no Origin, within its size limit; Remote Play turns on only when confirmed"
 	@echo "Running the tailnet core's unit tests (host build, ASan + UBSan)..."
 	@$(MAKE) -j$(JOBS) -s -C tailnet test
 	@$(MAKE) -j$(JOBS) -s -C tailnet SAN=1 lib

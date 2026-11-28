@@ -38,4 +38,9 @@
 /* The home-screen tile that opens the browser on the web UI (webui_tile.c). */
 #define WEBUI_TILE_TITLE_ID "PSUP00001"
 
+/* PS5Upload Play, the native app that ships with PS5Upload (title id, install folder). */
+#define PLAY_APP_TITLE_ID "FAKE99261"
+/* Its loopback API (app_api.h): 127.0.0.1 only, always on while the helper runs, Minion or not. */
+#define PLAY_APP_API_PORT 9181
+
 #endif
