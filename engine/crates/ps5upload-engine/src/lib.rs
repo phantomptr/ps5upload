@@ -159,6 +159,8 @@ mod title_restore_api;
 mod trophy_fix_routes;
 mod uninstall_source;
 mod unpack_packs;
+mod usbnet_api;
+pub(crate) mod usbnet_engine;
 mod vinput_api;
 mod wake_login_api;
 mod web_pages;
@@ -1665,7 +1667,9 @@ fn attach_live_notes(cfg: &mut TransferConfig, job_id: Uuid) {
 
 /// Adds a running job's live notes to its snapshot JSON: `phase` (`"skipping"` with
 /// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word), `settling`,
-/// `verifying` (the console reads its last large files back, #783) and, once the console has
+/// `verifying` (the console reads its last large files back, #783), `link` (`usb` with
+/// `link_mbps`, or `console`: which of the console's links the job's session went through, only
+/// for a console that has reported a USB Ethernet adapter) and, once the console has
 /// every byte, `all_sent_ms` / `console_quiet_ms` (#873). Fields
 /// that do not apply are absent, so the client shows nothing for them. A snapshot that is not
 /// `running` is returned as it is.
@@ -1738,6 +1742,18 @@ pub(crate) fn merge_live_notes(
             {
                 o.insert("route_reason".into(), why.into());
             }
+        }
+        _ => {}
+    }
+    // Which of the console's links the job's session went through, only for a console that
+    // has reported a USB Ethernet adapter: `usb` with its speed, or `console` (its own address).
+    match n.link.load(Relaxed) {
+        ps5upload_core::transfer::LIVE_LINK_USB => {
+            o.insert("link".into(), "usb".into());
+            o.insert("link_mbps".into(), n.link_mbps.load(Relaxed).into());
+        }
+        ps5upload_core::transfer::LIVE_LINK_CONSOLE => {
+            o.insert("link".into(), "console".into());
         }
         _ => {}
     }
@@ -7356,8 +7372,19 @@ async fn ps5_status(
         Ok::<_, anyhow::Error>(json)
     })
     .await;
-    // The path the check took, for its connect timings.
-    let path = connect_path(&ps5upload_core::route::via(&console));
+    // The path the check took, for its connect timings: what its session's handshake dialled
+    // tells the console's USB adapter from its own address.
+    let usb = match ps5upload_ava1::pool::pool().session_dialed(&console).await {
+        Some(dialed) => matches!(
+            ps5upload_core::route::link_of(
+                &ps5upload_core::events::console_host(&console),
+                &dialed
+            ),
+            Some(ps5upload_core::route::Link::Usb { .. })
+        ),
+        None => false,
+    };
+    let path = connect_path(&ps5upload_core::route::via(&console), usb);
     ps5upload_ava1::timings::update(&console, |t| t.path = Some(path.to_string()));
 
     use ps5upload_core::events::{emit, Cat, Level};
@@ -7379,6 +7406,9 @@ async fn ps5_status(
             helper_send::after_status_ok(&console, &json);
             // A helper with the converter gets the zstd runtime it needs (background, once).
             convert_runtime::after_status(console_addr(&console), &json);
+            // The console's USB adapter (experimental): what the helper says of it, so
+            // transfers can use it (usbnet_engine.rs; in the background when it asks).
+            usbnet_engine::after_status(&console, &json);
             spawn_console_upgrade_cleanup(console);
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -7403,10 +7433,12 @@ async fn ps5_status(
     }
 }
 
-/// The connect timings' name for how a console is reached.
-fn connect_path(via: &ps5upload_core::route::Via) -> &'static str {
+/// The connect timings' name for how a console is reached (`usb`: its session went through the
+/// console's USB Ethernet adapter, which is the home network too).
+fn connect_path(via: &ps5upload_core::route::Via, usb: bool) -> &'static str {
     use ps5upload_core::route::Via;
     match via {
+        Via::Lan if usb => "usb",
         Via::Lan => "lan",
         Via::TailnetDirect { .. } => "tailnet_direct",
         Via::TailnetRelayed => "tailnet_relayed",
@@ -7592,15 +7624,22 @@ mod connect_timings_tests {
 
     #[test]
     fn each_way_to_a_console_has_its_name() {
-        assert_eq!(connect_path(&Via::Lan), "lan");
+        assert_eq!(connect_path(&Via::Lan, false), "lan");
+        // At home through the console's USB adapter.
+        assert_eq!(connect_path(&Via::Lan, true), "usb");
         assert_eq!(
-            connect_path(&Via::TailnetDirect {
-                latency_ms: Some(3.0)
-            }),
+            connect_path(
+                &Via::TailnetDirect {
+                    latency_ms: Some(3.0)
+                },
+                false
+            ),
             "tailnet_direct"
         );
-        assert_eq!(connect_path(&Via::TailnetRelayed), "tailnet_relayed");
-        assert_eq!(connect_path(&Via::System), "tailnet_system");
+        assert_eq!(connect_path(&Via::TailnetRelayed, false), "tailnet_relayed");
+        assert_eq!(connect_path(&Via::System, false), "tailnet_system");
+        // The adapter is never in place of a tailnet route.
+        assert_eq!(connect_path(&Via::System, true), "tailnet_system");
     }
 
     #[tokio::test]
@@ -13513,6 +13552,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     let _guest = tailnet_guest::boot(listener.local_addr().map_or(0, |a| a.port())).await;
     // The engine's own tailnet node (when turned on) and the away routing (tailnet_engine.rs).
     tailnet_engine::boot();
+    // The consoles' USB Ethernet adapters (experimental): probes them and settles which link
+    // transfers use (usbnet_engine.rs). The router it answers through is installed above.
+    usbnet_engine::boot();
     // Every new session says who this engine is, whatever opened it (Devices showed a phone
     // that had only checked the console's status as an app from before 8.0.0).
     ps5upload_ava1::pool::on_new_session(mesh_api::greet);
@@ -13829,6 +13871,10 @@ fn build_app_and_mcp(
         .route(
             "/api/tailnet",
             get(tailnet_api::engine_status).post(tailnet_api::engine_op),
+        )
+        .route(
+            "/api/ps5/usbnet",
+            get(usbnet_api::status).post(usbnet_api::op),
         )
         .route("/api/tailnet/route", get(tailnet_api::route))
         .route("/api/tailnet/check", get(tailnet_api::check))
@@ -16335,6 +16381,29 @@ mod helpers_tests {
             external_pkg_header(&head),
             (String::new(), String::new(), String::new())
         );
+    }
+
+    #[test]
+    fn a_running_job_says_which_link_only_for_a_console_with_a_usb_adapter() {
+        use ps5upload_core::route::Link;
+        use ps5upload_core::transfer::LiveNotes;
+        let n = LiveNotes::default();
+        let running = serde_json::json!({"status": "running", "bytes_sent": 1});
+        // No adapter ever reported: nothing new.
+        n.note_link(None);
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert!(v.get("link").is_none() && v.get("link_mbps").is_none());
+        n.note_link(Some(Link::Usb { mbps: 2500 }));
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(
+            (v["link"].as_str(), v["link_mbps"].as_u64()),
+            (Some("usb"), Some(2500))
+        );
+        // Fell back to the console's own address: no speed.
+        n.note_link(Some(Link::Console));
+        let v = merge_live_notes(Some(&n), running.clone());
+        assert_eq!(v["link"], "console");
+        assert!(v.get("link_mbps").is_none());
     }
 
     #[test]

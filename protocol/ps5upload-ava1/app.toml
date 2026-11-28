@@ -740,7 +740,10 @@ fields = [
   { name = "fan_threshold", ty = "u16" },
   { name = "fan_reapply_sec", ty = "u16" },
 ]
-ext = [{ tag = 1, name = "prior_instance", ty = "str" }]   # "clean" | "killed_externally" | "wedged" | "stale" | "replaced"
+ext = [
+  { tag = 1, name = "prior_instance", ty = "str" },   # "clean" | "killed_externally" | "wedged" | "stale" | "replaced"
+  { tag = 2, name = "usbnet", ty = "str" },           # the USB adapter while it serves: {"ip","port","mbps","chip"} as JSON text (usbnet.h)
+]
 
 [[struct]]
 name = "FsList"

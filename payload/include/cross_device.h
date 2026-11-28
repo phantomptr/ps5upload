@@ -55,6 +55,7 @@
  *   src/webui_tile.c      3  dir    tile folder files: tmp -> final; mount.lnk <-> ps5upload.lnk in
  *                                   /user/app/PSUP00001 (kept from ShadowMount+, #480)
  *   src/smb_client.c      1  dir    SMB daemon key: <key>.tmp -> key
+ *   src/usbnet.c          2  dir    USB adapter daemon key and settings: <file>.tmp -> file (usbnet dir)
  *   src/smb_shares.c      1  dir    saved shares: <file>.tmp -> file
  *   src/files_prefs.c     1  dir    files-prefs.json: tmp -> final
  *   src/fakelib_overlay.c 1  dir    the overlay record left for the next helper: <record>.tmp -> record

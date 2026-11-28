@@ -581,7 +581,7 @@ int mgmt_call_node_status(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_l
     mgmt_reply_t rep;
     ava1_node_status_t st;
     ava1_w_t w;
-    char version[96], kernel[320], prior[40];
+    char version[96], kernel[320], prior[40], usbnet[192];
     uint64_t v;
     int rc;
     (void)req;
@@ -612,6 +612,20 @@ int mgmt_call_node_status(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_l
         st.has_prior_instance = 1;
         st.prior_instance = (const uint8_t *)prior;
         st.prior_instance_len = (uint16_t)strlen(prior);
+    }
+    /* The USB adapter's brief (usbnet.h), a flat object, carried as its JSON text; absent when null. */
+    {
+        const char *u = strstr((const char *)rep.body, "\"usbnet\":{");
+        if (u) {
+            const char *start = u + 9, *end = strchr(start, '}');
+            if (end && (size_t)(end - start + 1) < sizeof usbnet) {
+                memcpy(usbnet, start, (size_t)(end - start + 1));
+                usbnet[end - start + 1] = '\0';
+                st.has_usbnet = 1;
+                st.usbnet = (const uint8_t *)usbnet;
+                st.usbnet_len = (uint16_t)strlen(usbnet);
+            }
+        }
     }
     mgmt_reply_free(&rep);
     ava1_w_init(&w, cx->out, cx->cap);

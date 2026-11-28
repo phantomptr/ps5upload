@@ -247,6 +247,11 @@ pub struct LiveNotes {
     /// went through this computer when it did.
     pub route: std::sync::atomic::AtomicU8,
     pub route_reason: std::sync::Mutex<Option<String>>,
+    /// Which of the console's links the job's session went through (`LIVE_LINK_*`; 0 = nothing
+    /// to say: the console never reported a USB adapter), and the adapter link's speed (Mb/s,
+    /// with `LIVE_LINK_USB` only). Written each time the job gets a session.
+    pub link: std::sync::atomic::AtomicU8,
+    pub link_mbps: std::sync::atomic::AtomicU32,
     /// The job's telemetry (where its time went, the console's own end-of-job line), as the
     /// transport last reported it. The engine writes it into the per-job record when the job
     /// ends (review 009 #4).
@@ -261,6 +266,25 @@ pub const LIVE_PHASE_MEASURING: u8 = 2;
 pub const LIVE_PHASE_LISTING: u8 = 3;
 pub const LIVE_ROUTE_DIRECT: u8 = 1;
 pub const LIVE_ROUTE_RELAY: u8 = 2;
+/// The console's own network address.
+pub const LIVE_LINK_CONSOLE: u8 = 1;
+/// The console's USB Ethernet adapter (`crate::usbnet`).
+pub const LIVE_LINK_USB: u8 = 2;
+
+impl LiveNotes {
+    /// The link a session went through (`crate::route::link_of`; None leaves nothing to say).
+    pub fn note_link(&self, link: Option<crate::route::Link>) {
+        use crate::route::Link;
+        use std::sync::atomic::Ordering::Relaxed;
+        let (code, mbps) = match link {
+            None => (0, 0),
+            Some(Link::Console) => (LIVE_LINK_CONSOLE, 0),
+            Some(Link::Usb { mbps }) => (LIVE_LINK_USB, mbps),
+        };
+        self.link_mbps.store(mbps, Relaxed);
+        self.link.store(code, Relaxed);
+    }
+}
 
 /// [`zip_entry_name`] from the raw bytes alone: UTF-8 when they are, else CP437 (the
 /// `zip` crate's own fallback), so the central-directory parser, the inspector and the

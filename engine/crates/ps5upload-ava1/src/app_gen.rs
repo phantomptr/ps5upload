@@ -196,6 +196,7 @@ pub struct NodeStatus {
     pub fan_threshold: u16,
     pub fan_reapply_sec: u16,
     pub prior_instance: Option<String>,
+    pub usbnet: Option<String>,
 }
 
 impl Message for NodeStatus {
@@ -214,8 +215,10 @@ impl Message for NodeStatus {
         w.u16(self.fan_reapply_sec);
         let mut ext_n: u16 = 0;
         if self.prior_instance.is_some() { ext_n += 1; }
+        if self.usbnet.is_some() { ext_n += 1; }
         w.u16(ext_n);
         if let Some(v) = &self.prior_instance { w.ext(1, |w| { w.str(v) })?; }
+        if let Some(v) = &self.usbnet { w.ext(2, |w| { w.str(v) })?; }
         Ok(())
     }
 
@@ -242,6 +245,12 @@ impl Message for NodeStatus {
                     if m.prior_instance.is_some() { return Err(DecodeError::DupExt(1)); }
                     let mut vr = Reader::new(v);
                     m.prior_instance = Some(vr.str()?);
+                    vr.finish()?;
+                }
+                2 => {
+                    if m.usbnet.is_some() { return Err(DecodeError::DupExt(2)); }
+                    let mut vr = Reader::new(v);
+                    m.usbnet = Some(vr.str()?);
                     vr.finish()?;
                 }
                 _ => {}
@@ -732,7 +741,7 @@ pub const ALL: &[&str] = &["NodeStatus", "FsList", "FsEntry", "FsListResult", "F
 #[doc(hidden)]
 pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
     match name {
-        "NodeStatus" => NodeStatus { version: rng.ascii(20), ps5_kernel: rng.ascii(20), instance_id: rng.next_u64(), started_at_unix: rng.next_u64(), command_count: rng.next_u64(), startup_reason: rng.next_u64() as u16, ucred_elevated: rng.next_u64() as u8, max_transfer_streams: rng.next_u64() as u8, fan_threshold: rng.next_u64() as u16, fan_reapply_sec: rng.next_u64() as u16, prior_instance: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
+        "NodeStatus" => NodeStatus { version: rng.ascii(20), ps5_kernel: rng.ascii(20), instance_id: rng.next_u64(), started_at_unix: rng.next_u64(), command_count: rng.next_u64(), startup_reason: rng.next_u64() as u16, ucred_elevated: rng.next_u64() as u8, max_transfer_streams: rng.next_u64() as u8, fan_threshold: rng.next_u64() as u16, fan_reapply_sec: rng.next_u64() as u16, prior_instance: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, usbnet: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
         "FsList" => FsList { path: rng.ascii(20), offset: rng.next_u64() as u32, limit: rng.next_u64() as u16, }.to_bytes().ok(),
         "FsEntry" => FsEntry { name: rng.ascii(20), kind: rng.next_u64() as u8, size: rng.next_u64(), mtime: if rng.below(2) == 1 { Some(rng.next_u64()) } else { None }, mode: if rng.below(2) == 1 { Some(rng.next_u64() as u32) } else { None }, }.to_bytes().ok(),
         "FsListResult" => FsListResult { entries: vec![FsEntry::default(); rng.below(3) as usize], total_scanned: rng.next_u64() as u32, more: rng.next_u64() as u8, }.to_bytes().ok(),

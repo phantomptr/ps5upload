@@ -202,6 +202,9 @@ typedef struct {
     int has_prior_instance;
     const uint8_t *prior_instance;
     uint16_t prior_instance_len;
+    int has_usbnet;
+    const uint8_t *usbnet;
+    uint16_t usbnet_len;
 } ava1_node_status_t;
 
 int ava1_node_status_encode(const ava1_node_status_t *m, ava1_w_t *w);

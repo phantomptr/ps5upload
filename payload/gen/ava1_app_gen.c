@@ -17,10 +17,16 @@ int ava1_node_status_encode(const ava1_node_status_t *m, ava1_w_t *w) {
     ava1_w_u16(w, m->fan_threshold);
     ava1_w_u16(w, m->fan_reapply_sec);
     if (m->has_prior_instance) ext_n++;
+    if (m->has_usbnet) ext_n++;
     ava1_w_u16(w, ext_n);
     if (m->has_prior_instance) {
         size_t at = ava1_w_ext_begin(w, 1);
         ava1_w_str(w, m->prior_instance, m->prior_instance_len);
+        ava1_w_ext_end(w, at);
+    }
+    if (m->has_usbnet) {
+        size_t at = ava1_w_ext_begin(w, 2);
+        ava1_w_str(w, m->usbnet, m->usbnet_len);
         ava1_w_ext_end(w, at);
     }
     return w->err;
@@ -55,6 +61,11 @@ int ava1_node_status_decode(const uint8_t *buf, size_t len, ava1_node_status_t *
             if (m->has_prior_instance) return AVA1_E_DUP_EXT;
             m->has_prior_instance = 1;
             m->prior_instance = ava1_r_str(&vr, &m->prior_instance_len);
+            break;
+        case 2:
+            if (m->has_usbnet) return AVA1_E_DUP_EXT;
+            m->has_usbnet = 1;
+            m->usbnet = ava1_r_str(&vr, &m->usbnet_len);
             break;
         default:
             continue;

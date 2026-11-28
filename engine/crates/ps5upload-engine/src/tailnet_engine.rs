@@ -912,7 +912,9 @@ impl TailnetEngine {
         }
     }
 
-    fn decision(&self, host: &str) -> Decision {
+    /// Where `host` goes now (the USB adapter, `usbnet_engine.rs`, is asked only when this is
+    /// the LAN).
+    pub(crate) fn decision(&self, host: &str) -> Decision {
         let backend = self.backend();
         if backend == Backend::None {
             return Decision::Lan;
@@ -1043,7 +1045,9 @@ impl Router for TailnetEngine {
             return None;
         }
         let ip = match self.decision(host) {
-            Decision::Lan => return None,
+            // At home: the console's USB adapter for the helper's AVA1 port while this computer
+            // reaches it (usbnet_engine.rs), else its own address.
+            Decision::Lan => return crate::usbnet_engine::dial(host, port, udp),
             Decision::System(ip) => return Some(SocketAddr::from((ip, port))),
             Decision::Builtin(ip) => ip,
         };
@@ -1072,6 +1076,17 @@ impl Router for TailnetEngine {
         Some(SocketAddr::from(([127, 0, 0, 1], local)))
     }
 
+    fn dialed(&self, host: &str, _port: u16, to: SocketAddr, ok: bool) {
+        // Only the USB adapter's address counts; a tailnet path is the prober's to judge.
+        crate::usbnet_engine::table().dialed(host, to, ok, Instant::now());
+    }
+
+    fn usb(&self, host: &str) -> Option<ps5upload_core::route::UsbLink> {
+        crate::usbnet_engine::table().usb(host)
+    }
+
+    /// The USB adapter is the home network too: `Lan` (`connect_path` and the jobs' `link` say
+    /// which link).
     fn via(&self, host: &str) -> Via {
         let host = ps5upload_core::events::console_host(host);
         match self.decision(&host) {

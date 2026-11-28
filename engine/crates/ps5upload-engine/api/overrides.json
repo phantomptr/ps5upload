@@ -1202,6 +1202,12 @@
   "POST /api/ps5/tailnet": {
    "summary": "Put the console on Tailscale, pause, sign out, rename it or change who may reach it"
   },
+  "GET /api/ps5/usbnet": {
+   "summary": "The console's USB network adapter (experimental): its state and address, and whether transfers use it"
+  },
+  "POST /api/ps5/usbnet": {
+   "summary": "Turn the console's USB network adapter on or off, or set its address (experimental)"
+  },
   "GET /api/tailnet": {
    "summary": "This engine's own Tailscale node and the consoles it reaches through it"
   },
