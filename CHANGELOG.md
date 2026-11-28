@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**USB Ethernet adapter on the PS5 (experimental, #986)**
+- **Faster transfers with a USB 2.5G, 5G or 10G network adapter.** Plug one with a Realtek RTL8156B (2.5G), RTL8157 (5G) or RTL8159 (10G) chip into the PS5 and connect it to your network. PS5Upload starts it by itself and gives it its own address; transfers from your computer go through it whenever your computer can reach it, and through the PS5's own network otherwise, without you doing anything. The PS5's own network setting is never changed.
+- **See whether it's working** in Settings › This PS5 › USB Ethernet adapter (and in Minion's Settings): the chip, the link speed, its address, the data it carried, and whether this computer uses it. A transfer says "Via USB 2.5G adapter" or "Via console network". You can turn it off there, or give it a fixed address for a network without a router handing out addresses.
+- Experimental: not yet tried with an adapter on a PS5. If it stops working, unplug the adapter and plug it back in. It pauses while the PS5 rests and starts again after.
+
 **Minion queue (#982)**
 - **Queue game copies and installs on the PS5.** In Minion, Install and Copy to the PS5 in the Library, and Add to queue in Files (a package, or anything on a network share), add to a queue that runs one item after another, with Minion closed too. Home shows the queue: what runs now with its speed and time left, then what waits in order, with Remove, Move to top, Pause and Clear finished. A failure doesn't stop the rest; it stays listed with the reason. An install waits while the PS5 installs something else. The queue is kept on the PS5: if the helper restarts during an install, the queue pauses and says so.
 - A game's page shows only its own copy or install, and other games can be copied or installed while one runs. The app lists what waits in the PS5's queue too.
