@@ -29,6 +29,7 @@
 #include "7zip/PropID.h"
 #include "7zip/Common/RegisterArc.h"
 
+#include "xfree.h"
 #include "xjob.h"
 
 #ifdef __PROSPERO__
@@ -52,6 +53,17 @@ static const CArcInfo *FindArc(const char *name) {
 
 // ---- streams ----
 
+// Where the archive is read, while it is freed as it goes (xfree.h): the lowest offset of the set
+// (its parts read as one stream) read since the last Reset, and whether a deleted part was asked for.
+struct CReadTrack {
+  const uint64_t *VStart; // each part's first byte in the set; NULL: nothing is tracked
+  uint64_t Lo;
+  bool Any;
+  bool BadRead;
+  void Reset() { Lo = 0; Any = false; }
+};
+static CReadTrack g_track;
+
 // An archive file (or one volume), read through its descriptor.
 class CFdInStream Z7_final:
   public IInStream,
@@ -63,22 +75,42 @@ class CFdInStream Z7_final:
   Z7_IFACE_COM7_IMP(IInStream)
   Z7_IFACE_COM7_IMP(IStreamGetSize)
   int _fd;
+  bool _dropped;
 public:
-  CFdInStream(): _fd(-1) {}
+  int Vol; // which part of the archive this is (-1: not one of its parts)
+  CFdInStream(): _fd(-1), _dropped(false), Vol(-1) {}
   ~CFdInStream() { if (_fd >= 0) close(_fd); }
   bool Open(const char *path) {
     _fd = open(path, O_RDONLY);
     return _fd >= 0;
   }
+  // The part is about to be deleted: its descriptor goes (an open file keeps its space), and a
+  // read of it after this is a failure, never a silent short read.
+  void Drop() {
+    if (_fd >= 0) close(_fd);
+    _fd = -1;
+    _dropped = true;
+  }
 };
 
 Z7_COM7F_IMF(CFdInStream::Read(void *data, UInt32 size, UInt32 *processedSize)) {
   if (processedSize) *processedSize = 0;
+  if (_fd < 0) {
+    if (_dropped) g_track.BadRead = true;
+    return E_FAIL;
+  }
+  off_t at = -1;
+  if (g_track.VStart && Vol >= 0 && size) at = lseek(_fd, 0, SEEK_CUR);
   for (;;) {
     ssize_t n = read(_fd, data, size);
     if (n < 0 && errno == EINTR) continue;
     if (n < 0) return HRESULT_FROM_WIN32(errno);
     if (processedSize) *processedSize = (UInt32)n;
+    if (n > 0 && at >= 0) {
+      uint64_t v = g_track.VStart[Vol] + (uint64_t)at;
+      if (!g_track.Any || v < g_track.Lo) g_track.Lo = v;
+      g_track.Any = true;
+    }
     return S_OK;
   }
 }
@@ -116,6 +148,22 @@ Z7_COM7F_IMF(CSinkOutStream::Write(const void *data, UInt32 size, UInt32 *proces
   }
   if (processedSize) *processedSize = size;
   return S_OK;
+}
+
+// Bytes decoded only to be counted: the check before freeing (every unit read through once), and
+// an entry the sink does not write while freeing (it is still decoded, so the archive is read
+// exactly as the check read it).
+Z7_CLASS_IMP_COM_1(CDiscardOutStream, ISequentialOutStream)
+public:
+  xjob_t *J;
+  CDiscardOutStream(): J(NULL) {}
+};
+
+Z7_COM7F_IMF(CDiscardOutStream::Write(const void *, UInt32 size, UInt32 *processedSize)) {
+  if (processedSize) *processedSize = size;
+  J->bytes_done += size;
+  if (J->progress) J->progress(J, 0);
+  return xj_cancelled(J) ? E_ABORT : S_OK;
 }
 
 // A bounded pipe between the thread decoding the outer stream of a .tar.gz (and the like) and the
@@ -245,7 +293,20 @@ public:
   UString FirstName; // the first volume's own name
   bool VolumeMissing;
   AString MissingName;
+  // Every file of the archive opened, in the order opened: the first, then the volumes a split set
+  // asked for. Held for the length of the job (each can be dropped before it is deleted).
+  CRecordVector<CFdInStream *> Vols;
+  CObjectVector<AString> VolPaths;
   COpenCallback(): J(NULL), Pw(NULL), VolumeMissing(false) {}
+  ~COpenCallback() {
+    for (unsigned i = 0; i < Vols.Size(); i++) static_cast<IInStream *>(Vols[i])->Release();
+  }
+  void AddVol(CFdInStream *s, const AString &path) {
+    static_cast<IInStream *>(s)->AddRef();
+    s->Vol = (int)Vols.Size();
+    Vols.Add(s);
+    VolPaths.Add(path);
+  }
 };
 
 Z7_COM7F_IMF(COpenCallback::SetTotal(const UInt64 *, const UInt64 *)) { return S_OK; }
@@ -279,6 +340,7 @@ Z7_COM7F_IMF(COpenCallback::GetStream(const wchar_t *name, IInStream **inStream)
     }
     return S_FALSE;
   }
+  AddVol(spec, path);
   *inStream = s.Detach();
   return S_OK;
 }
@@ -449,10 +511,19 @@ public:
   bool AnyEncrypted; // some item is (a wrong key shows as bad data in the items decoded with it)
   bool HaveEntry;
   bool Progress;  // SetTotal/SetCompleted are the job's byte progress
+  bool Discard;   // nothing is written: every entry is decoded and counted (the check before freeing)
+  bool ReadAll;   // an entry the sink does not write is still decoded (freeing: read as the check did)
   xentry_t E;
   CSinkOutStream *SinkSpec;
   CMyComPtr<ISequentialOutStream> Sink;
-  CExtractCallback(): J(NULL), Pw(NULL), Arc(NULL), Archive(NULL), Encrypted(false), AnyEncrypted(false), HaveEntry(false), Progress(true), SinkSpec(NULL) {}
+  CExtractCallback(): J(NULL), Pw(NULL), Arc(NULL), Archive(NULL), Encrypted(false), AnyEncrypted(false), HaveEntry(false), Progress(true), Discard(false), ReadAll(false), SinkSpec(NULL) {}
+  HRESULT DiscardStream(ISequentialOutStream **outStream) {
+    CDiscardOutStream *d = new CDiscardOutStream;
+    CMyComPtr<ISequentialOutStream> keep = d;
+    d->J = J;
+    *outStream = keep.Detach();
+    return S_OK;
+  }
 };
 
 Z7_COM7F_IMF(CExtractCallback::SetTotal(UInt64 total)) {
@@ -470,15 +541,16 @@ Z7_COM7F_IMF(CExtractCallback::GetStream(UInt32 index, ISequentialOutStream **ou
   *outStream = NULL;
   HaveEntry = false;
   if (askMode != NArchive::NExtract::NAskMode::kExtract) return S_OK;
+  Encrypted = GetBool(Arc, index, kpidEncrypted);
+  if (Discard) return xj_cancelled(J) ? E_ABORT : DiscardStream(outStream);
   AString name;
   if (!GetStr(Arc, index, kpidPath, name) || name.IsEmpty()) DefaultItemName(Archive, name);
   int kind = ItemKind(Arc, index);
   UInt64 size = 0;
   GetU64(Arc, index, kpidSize, size);
-  Encrypted = GetBool(Arc, index, kpidEncrypted);
   int b = xs_begin(J, &E, name.Ptr(), kind, size, ItemMTime(Arc, index));
   if (b == XS_FAIL) return E_ABORT;
-  if (b == XS_SKIP) return S_OK;
+  if (b == XS_SKIP) return ReadAll ? DiscardStream(outStream) : S_OK;
   HaveEntry = true;
   SinkSpec = new CSinkOutStream;
   Sink = SinkSpec;
@@ -608,8 +680,8 @@ static bool IsTarName(const AString &name, const char *archive) {
   return false;
 }
 
-// Totals, the password check and the space check, before anything is written. Then the folder.
-static int Prepare(xjob_t *j, IInArchive *arc, bool sizesKnown, bool *anyEncrypted) {
+// Totals and the password check, before anything is written.
+static int Totals(xjob_t *j, IInArchive *arc, bool sizesKnown, bool *anyEncrypted, UInt64 *totalOut) {
   UInt32 n = 0;
   if (arc->GetNumberOfItems(&n) != S_OK) return xj_fail(j, "fs_extract_corrupt: items");
   UInt64 total = 0, files = 0;
@@ -625,8 +697,17 @@ static int Prepare(xjob_t *j, IInArchive *arc, bool sizesKnown, bool *anyEncrypt
   *anyEncrypted = encrypted;
   if (encrypted && !j->has_password) return xj_fail(j, "fs_extract_password_required");
   j->files_total = files;
+  if (sizesKnown) j->unpacked = total;
+  if (sizesKnown) j->bytes_total = total;
+  *totalOut = total;
+  return 0;
+}
+
+// Totals, the password check and the space check, before anything is written. Then the folder.
+static int Prepare(xjob_t *j, IInArchive *arc, bool sizesKnown, bool *anyEncrypted) {
+  UInt64 total = 0;
+  if (Totals(j, arc, sizesKnown, anyEncrypted, &total) != 0) return -1;
   if (sizesKnown) {
-    j->bytes_total = total;
     // A merge may skip files it already has, so it keeps the per-file check only (as xrar.c does):
     // checked for the whole, a second run over a mostly extracted folder was refused for room it
     // would not use.
@@ -712,7 +793,271 @@ static int ExtractTarIn(xjob_t *j, IInArchive *outer, CPasswordState &pw) {
   return rc;
 }
 
+// ---- freeing the archive as it is unpacked (xfree.h) ----
+
+static COpenCallback *g_ocb; // the job's open callback: the archive's parts
+static UInt64 g_setSize;     // a split set read as one stream: its size (0: not a split set)
+
+static void DropVol(void *ctx, unsigned vol) {
+  COpenCallback *o = (COpenCallback *)ctx;
+  if (vol < o->Vols.Size()) o->Vols[vol]->Drop();
+}
+
+// The archive's parts as xfree takes them. 0, or -1 (cause set).
+static int LoadParts(xjob_t *j, xfvols_t *v) {
+  unsigned n = g_ocb->VolPaths.Size();
+  char **paths = (char **)calloc(n ? n : 1, sizeof *paths);
+  if (!paths) return xj_fail(j, "fs_extract_no_memory");
+  for (unsigned i = 0; i < n; i++) paths[i] = (char *)g_ocb->VolPaths[i].Ptr();
+  int rc = xf_load(j, v, paths, n);
+  free(paths);
+  if (rc == 0) {
+    v->drop = DropVol;
+    v->drop_ctx = g_ocb;
+  }
+  return rc;
+}
+
+// The units an archive decodes in, each on its own: a 7z's blocks (the items with no data first),
+// else every item. Unit u is order[ustart[u] .. ustart[u+1]); ubytes[u] is what its files hold,
+// upack[u] its packed size where the listing gives one.
+struct CUnits {
+  UInt32 *order;
+  size_t *ustart;
+  uint64_t *ubytes, *upack;
+  size_t n, nu;
+  CUnits(): order(NULL), ustart(NULL), ubytes(NULL), upack(NULL), n(0), nu(0) {}
+  ~CUnits() {
+    free(order);
+    free(ustart);
+    free(ubytes);
+    free(upack);
+  }
+};
+
+static int BuildUnits(xjob_t *j, IInArchive *arc, bool sevenZ, CUnits &u) {
+  UInt32 n = 0;
+  if (arc->GetNumberOfItems(&n) != S_OK) return xj_fail(j, "fs_extract_corrupt: items");
+  u.n = n;
+  u.order = (UInt32 *)malloc((n + 1) * sizeof *u.order);
+  u.ustart = (size_t *)malloc((n + 2) * sizeof *u.ustart);
+  u.ubytes = (uint64_t *)calloc(n + 1, sizeof *u.ubytes);
+  u.upack = (uint64_t *)calloc(n + 1, sizeof *u.upack);
+  UInt32 *blk = (UInt32 *)calloc(n + 1, sizeof *blk);
+  if (!u.order || !u.ustart || !u.ubytes || !u.upack || !blk) {
+    free(blk);
+    return xj_fail(j, "fs_extract_no_memory");
+  }
+  UInt32 maxb = 0;
+  for (UInt32 i = 0; i < n; i++) {
+    NWindows::NCOM::CPropVariant p;
+    blk[i] = sevenZ ? 0 : i + 1;
+    if (sevenZ && arc->GetProperty(i, kpidBlock, &p) == S_OK && p.vt == VT_UI4 && p.ulVal < n) blk[i] = p.ulVal + 1;
+    if (blk[i] > maxb) maxb = blk[i];
+  }
+  // Items by unit (a counting sort: each unit's items stay in index order, as 7-Zip wants them).
+  size_t *count = (size_t *)calloc((size_t)maxb + 2, sizeof *count);
+  if (!count) {
+    free(blk);
+    return xj_fail(j, "fs_extract_no_memory");
+  }
+  for (UInt32 i = 0; i < n; i++) count[blk[i] + 1]++;
+  for (UInt32 b = 1; b <= maxb + 1; b++) count[b] += count[b - 1];
+  for (UInt32 i = 0; i < n; i++) u.order[count[blk[i]]++] = i;
+  u.nu = 0;
+  for (size_t k = 0; k < n; k++) {
+    UInt32 i = u.order[k];
+    if (k == 0 || blk[u.order[k - 1]] != blk[i]) u.ustart[u.nu++] = k;
+    UInt64 v = 0;
+    if (ItemKind(arc, i) == XE_FILE && GetU64(arc, i, kpidSize, v)) u.ubytes[u.nu - 1] += v;
+    v = 0;
+    if (GetU64(arc, i, kpidPackSize, v)) u.upack[u.nu - 1] += v;
+  }
+  u.ustart[u.nu] = n;
+  free(count);
+  free(blk);
+  return 0;
+}
+
+// One unit, decoded: written through the sink, or (`discard`) only counted. Every entry is decoded
+// either way, so the archive is read the same both times.
+static int RunUnit(xjob_t *j, IInArchive *arc, CPasswordState &pw, bool anyEncrypted, const UInt32 *idx, UInt32 cnt,
+                   bool discard) {
+  CExtractCallback *spec = new CExtractCallback;
+  CMyComPtr<IArchiveExtractCallback> cb = spec;
+  spec->J = j;
+  spec->Pw = &pw;
+  spec->Arc = arc;
+  spec->Archive = j->archive;
+  spec->AnyEncrypted = anyEncrypted || pw.Asked;
+  spec->Progress = false; // the job counts its own bytes: the check, then the writes
+  spec->Discard = discard;
+  spec->ReadAll = true;
+  HRESULT r = arc->Extract(idx, cnt, 0, cb);
+  if (spec->HaveEntry) xs_end(j, &spec->E, 0);
+  if (g_track.BadRead && !xj_failed(j)) xj_fail(j, "fs_extract_corrupt: a deleted part was read");
+  if (r != S_OK || xj_failed(j)) return Fail(j, r == S_OK ? E_FAIL : r, pw, NULL);
+  return 0;
+}
+
+// Extract with the archive's space given back as it goes. A split set of a 7z, zip or tar in more
+// than one unit is freed part by part (the check first); anything else is deleted at the end.
+static int ExtractFreeing(xjob_t *j, IInArchive *arc, const CArcInfo *info, CPasswordState &pw) {
+  xfvols_t v;
+  CUnits units;
+  uint64_t *lo = NULL, *need = NULL;
+  UInt64 total = 0;
+  bool anyEncrypted = false, parts;
+  int rc = -1;
+  if (LoadParts(j, &v) != 0) return -1;
+  j->same_drive = xf_same_drive(j->archive, j->dest);
+  parts = g_setSize && v.count >= 2 && g_setSize == v.total;
+  if (parts && BuildUnits(j, arc, strcasecmp(info->Name, "7z") == 0, units) != 0) goto out;
+  if (parts && units.nu < 2) parts = false;
+  if (!parts) {
+    snprintf(j->free_mode, sizeof j->free_mode, "end");
+    j->durable = 1;
+    if (Prepare(j, arc, true, &anyEncrypted) != 0) goto out;
+    j->free_peak = j->unpacked;
+    j->plan_known = 1;
+    rc = ExtractAll(j, arc, pw, anyEncrypted);
+    if (rc == 0) rc = xf_finish(j, &v);
+    goto out;
+  }
+  snprintf(j->free_mode, sizeof j->free_mode, "parts");
+  if (Totals(j, arc, true, &anyEncrypted, &total) != 0) goto out;
+  // Certainly too little room, even with every part given back: said before the long read.
+  if (!j->merge && (j->same_drive ? (total > v.total && xs_check_space(j, total - v.total) != 0)
+                                  : xs_check_space(j, total) != 0))
+    goto out;
+  lo = (uint64_t *)malloc(units.nu * sizeof *lo);
+  need = (uint64_t *)malloc(units.nu * sizeof *need);
+  if (!lo || !need) {
+    xj_fail(j, "fs_extract_no_memory");
+    goto out;
+  }
+  // The check: every unit read through once with the archive whole, nothing written, noting where
+  // each one starts reading. Damage anywhere is found here, before a part is deleted.
+  j->checking = 1;
+  j->bytes_total = total * 2;
+  j->bytes_done = 0;
+  g_track.VStart = v.start;
+  g_track.BadRead = false;
+  if (j->progress) j->progress(j, 1);
+  for (size_t u = 0; u < units.nu; u++) {
+    g_track.Reset();
+    if (RunUnit(j, arc, pw, anyEncrypted, units.order + units.ustart[u], (UInt32)(units.ustart[u + 1] - units.ustart[u]),
+                true) != 0)
+      goto out;
+    lo[u] = g_track.Any ? g_track.Lo : XF_NO_READ;
+  }
+  j->checking = 0;
+  xf_need(lo, units.nu, need);
+  j->free_peak = j->same_drive ? xf_peak(&v, need, units.ubytes, units.nu) : total;
+  j->plan_known = 1;
+  // Exact now: the room the unpack takes at its largest, with the parts given back on the way.
+  if (!j->merge && xs_check_space(j, j->free_peak) != 0) goto out;
+  if (xs_open_dest(j) != 0) goto out;
+  j->durable = 1;
+  j->count_written = 1;
+  j->bytes_done = total;
+  for (size_t u = 0; u < units.nu; u++) {
+    if (xf_release(j, &v, xf_before(&v, need[u])) != 0) goto stopped;
+    g_track.Reset();
+    if (RunUnit(j, arc, pw, anyEncrypted, units.order + units.ustart[u], (UInt32)(units.ustart[u + 1] - units.ustart[u]),
+                false) != 0)
+      goto stopped;
+  }
+  rc = xf_finish(j, &v);
+  if (rc == 0) goto out;
+stopped:
+  rc = -1;
+  xf_abandon(j, &v);
+out:
+  j->checking = 0;
+  g_track.VStart = NULL;
+  free(lo);
+  free(need);
+  xf_free_vols(&v);
+  return rc;
+}
+
+
+// A single compressed stream (x.gz, x.tar.gz): nothing comes back until the end.
+static int ExtractFreeingStream(xjob_t *j, IInArchive *arc, CPasswordState &pw, bool tarIn) {
+  xfvols_t v;
+  int rc;
+  if (LoadParts(j, &v) != 0) return -1;
+  j->same_drive = xf_same_drive(j->archive, j->dest);
+  snprintf(j->free_mode, sizeof j->free_mode, "end");
+  j->durable = 1;
+  if (tarIn) {
+    rc = ExtractTarIn(j, arc, pw);
+  } else {
+    bool anyEncrypted = false;
+    rc = Prepare(j, arc, false, &anyEncrypted);
+    if (rc == 0) rc = ExtractAll(j, arc, pw, anyEncrypted);
+  }
+  if (rc == 0) rc = xf_finish(j, &v);
+  xf_free_vols(&v);
+  return rc;
+}
+
+// A listing that asked about freeing: how this archive would be freed and the room it would take,
+// from the listing alone (nothing is decoded). Never fails the listing: an archive that can't be
+// freed says why in free_why.
+static void PlanFromListing(xjob_t *j, IInArchive *arc, const CArcInfo *info, bool stream) {
+  xjob_t *probe = (xjob_t *)calloc(1, sizeof *probe);
+  xfvols_t v;
+  CUnits units;
+  if (!probe) return;
+  if (LoadParts(probe, &v) != 0) {
+    snprintf(j->free_why, sizeof j->free_why, "%s", probe->cause);
+    free(probe);
+    return;
+  }
+  j->parts = v.count;
+  j->archive_bytes = v.total;
+  j->same_drive = xf_same_drive(j->archive, j->dest);
+  bool sevenZ = strcasecmp(info->Name, "7z") == 0, zip = strcasecmp(info->Name, "zip") == 0;
+  bool listed = !stream && BuildUnits(probe, arc, sevenZ, units) == 0;
+  UInt64 total = 0;
+  for (size_t u = 0; listed && u < units.nu; u++) total += units.ubytes[u];
+  j->unpacked = listed ? total : 0;
+  if (!listed || !g_setSize || v.count < 2 || g_setSize != v.total || units.nu < 2) {
+    snprintf(j->free_mode, sizeof j->free_mode, "end");
+    j->free_peak = j->unpacked;
+    j->plan_known = listed;
+  } else {
+    // Where each unit starts: a zip's own offsets, a 7z's blocks packed one after another behind
+    // its 32-byte start header, a tar's items one after another. An estimate for the plan shown
+    // before it starts (the unpack measures it while the archive is still whole).
+    uint64_t *lo = (uint64_t *)malloc(units.nu * sizeof *lo), *need = (uint64_t *)malloc(units.nu * sizeof *need);
+    if (lo && need) {
+      uint64_t at = sevenZ ? 32 : 0;
+      for (size_t u = 0; u < units.nu; u++) {
+        UInt32 first = units.order[units.ustart[u]];
+        UInt64 off = 0;
+        if (zip) lo[u] = GetU64(arc, first, kpidOffset, off) ? off : at;
+        else if (sevenZ && !units.upack[u]) lo[u] = XF_NO_READ; // folders and empty files
+        else lo[u] = at;
+        at += units.upack[u] + (sevenZ || zip ? 0 : 512);
+        if (!sevenZ && !zip) at = (at + 511) & ~(uint64_t)511;
+      }
+      xf_need(lo, units.nu, need);
+      snprintf(j->free_mode, sizeof j->free_mode, "parts");
+      j->free_peak = j->same_drive ? xf_peak(&v, need, units.ubytes, units.nu) : total;
+      j->plan_known = 1;
+    }
+    free(lo);
+    free(need);
+  }
+  xf_free_vols(&v);
+  free(probe);
+}
+
 static const char *const kStreamFormats[] = {"gzip", "bzip2", "xz", "zstd", "lzma"};
+
 
 static int ExtractOpened(xjob_t *j, IInArchive *arc, const CArcInfo *info, CPasswordState &pw, COpenCallback *ocb,
                          int depth);
@@ -727,6 +1072,13 @@ static int ExtractSplit(xjob_t *j, IInArchive *split, CPasswordState &pw, COpenC
   CMyComPtr<IInStream> joined;
   seq.QueryInterface(IID_IInStream, &joined);
   if (!joined) return xj_fail(j, "fs_extract_not_archive");
+  {
+    // The set's size, read as one stream: its parts are where xfree expects them only when it is
+    // the sum of the files opened.
+    UInt64 size = 0;
+    if (joined->Seek(0, STREAM_SEEK_END, &size) == S_OK) g_setSize = size;
+    if (joined->Seek(0, STREAM_SEEK_SET, NULL) != S_OK) return Fail(j, E_FAIL, pw, ocb);
+  }
   AString inner;
   if (!GetStr(split, 0, kpidPath, inner) || inner.IsEmpty()) DefaultItemName(j->archive, inner);
   if (inner.Len() > 4 && strcasecmp(inner.Ptr() + inner.Len() - 4, ".rar") == 0)
@@ -752,7 +1104,15 @@ static int ExtractOpened(xjob_t *j, IInArchive *arc, const CArcInfo *info, CPass
   if (stream) {
     AString inner;
     if (!GetStr(arc, 0, kpidPath, inner) || inner.IsEmpty()) DefaultItemName(j->archive, inner);
-    if (IsTarName(inner, j->archive)) return ExtractTarIn(j, arc, pw);
+    if (IsTarName(inner, j->archive)) {
+      if (j->list) {
+        int rc = ExtractTarIn(j, arc, pw);
+        if (rc == 0 && j->free_req) PlanFromListing(j, arc, info, true);
+        return rc;
+      }
+      if (j->free_req) return ExtractFreeingStream(j, arc, pw, true);
+      return ExtractTarIn(j, arc, pw);
+    }
   }
   if (j->list) {
     // Names only: the items' headers, nothing decoded (a solid archive would decode everything).
@@ -765,8 +1125,10 @@ static int ExtractOpened(xjob_t *j, IInArchive *arc, const CArcInfo *info, CPass
       xentry_t e;
       if (xs_begin(j, &e, name.Ptr(), ItemKind(arc, i), 0, -1) == XS_FAIL) return -1;
     }
+    if (j->free_req) PlanFromListing(j, arc, info, stream);
     return 0;
   }
+  if (j->free_req) return stream ? ExtractFreeingStream(j, arc, pw, false) : ExtractFreeing(j, arc, info, pw);
   // A stream format's one item has no reliable size (gzip keeps it modulo 4 GiB): checked per write.
   bool anyEncrypted = false;
   if (Prepare(j, arc, !stream, &anyEncrypted) != 0) return -1;
@@ -783,6 +1145,9 @@ extern "C" int x7z_extract(xjob_t *j) {
     CMyComPtr<IArchiveOpenCallback> ocb = ocbSpec;
     ocbSpec->J = j;
     ocbSpec->Pw = &pw;
+    ocbSpec->AddVol(spec, AString(j->archive));
+    g_ocb = ocbSpec;
+    g_setSize = 0;
     const char *slash = strrchr(j->archive, '/');
     ocbSpec->Dir.SetFrom(j->archive, (unsigned)(slash - j->archive + 1));
     Utf8ToU(slash + 1, ocbSpec->FirstName);
@@ -793,8 +1158,11 @@ extern "C" int x7z_extract(xjob_t *j) {
     if (r != S_OK || !arc) return Fail(j, r, pw, ocbSpec);
     int rc = ExtractOpened(j, arc, used, pw, ocbSpec, 0);
     arc->Close();
+    g_ocb = NULL;
     return rc;
   } catch (...) {
+    g_ocb = NULL;
+    g_track.VStart = NULL;
     return xj_fail(j, "fs_extract_no_memory");
   }
 }

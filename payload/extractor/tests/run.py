@@ -36,8 +36,11 @@ skipped = []
 passed = 0
 
 
-def run(root, archive, dest, password=None, merge=False, replace=False, env=None, cancel=False, wait=True, list_only=False, top=None):
+def run(root, archive, dest, password=None, merge=False, replace=False, env=None, cancel=False, wait=True, list_only=False, top=None,
+        free=False):
     req = {"id": "t1", "archive": archive, "dest": dest, "merge": merge, "replace": replace}
+    if free:
+        req["free"] = True
     if password is not None:
         req["password"] = password
     if list_only:
@@ -808,6 +811,331 @@ def test_no_status_no_extraction(root):
     check("no status", p.returncode != 0, p.returncode)
     check("no status", not os.path.exists(dest), "extracted without a status")
     check("no status", not os.path.exists(os.path.join(root, "request.json")), "the request was left behind")
+
+
+# ---- freeing the archive as it is unpacked ("free": true, src/xfree.h) ----
+
+
+def free_src(root, n=8, size=150000):
+    """Files of random bytes (so stored ones can be found in the archive by their content)."""
+    src = tempfile.mkdtemp(prefix="fsrc-", dir=root)
+    os.makedirs(os.path.join(src, "sub"))
+    files = {}
+    for i in range(n):
+        rel = f"f{i}.bin" if i % 2 else os.path.join("sub", f"f{i}.bin")
+        data = os.urandom(size)
+        with open(os.path.join(src, rel), "wb") as f:
+            f.write(data)
+        files[rel] = data
+    return src, files
+
+
+def set_parts(folder, prefix):
+    return [os.path.join(folder, n) for n in sorted(os.listdir(folder)) if n.startswith(prefix)]
+
+
+def read_trace(path):
+    if not os.path.exists(path):
+        return []
+    return [tuple(line.split(" ", 1)) for line in open(path).read().splitlines()]
+
+
+def check_freed_when_safe(name, parts, files, trace, groups=None):
+    """Every part was deleted only once every file with a byte in it, or in a part before it, was out
+    (and, for a solid block, every file of each such block); and at least one before the last file
+    came out (the space really came back on the way)."""
+    sizes = [os.path.getsize(p) for p in parts]
+    blob = b"".join(open(p, "rb").read() for p in parts)
+    ends, at = {}, 0
+    for p, n in zip(parts, sizes):
+        at += n
+        ends[os.path.basename(p)] = at
+    # Where each file starts: its first bytes (a solid LZMA2 block stores random data in chunks of its
+    # own, so only a file's start is sure to be in one piece).
+    off = {rel: blob.find(data[:200]) for rel, data in files.items()}
+    if not check(name, all(o >= 0 for o in off.values()), "a file's bytes are not stored as they are"):
+        return
+    groups = {rel: g for rel, g in (groups or {rel: rel for rel in files}).items() if rel in files}
+    done = set()
+    freed_before_last = False
+    for what, arg in trace:
+        if what == "file":
+            done.add(arg)
+            continue
+        end = ends[arg]
+        early = [g for rel, g in groups.items() if off[rel] < end]
+        needed = {rel for rel, g in groups.items() if g in early}
+        missing = sorted(needed - done)
+        check(name, not missing, f"{arg} deleted before {missing} were out")
+        if len(done) < len(files):
+            freed_before_last = True
+    check(name, freed_before_last, f"no part was deleted before the end: {trace}")
+
+
+def free_case(root, name, archive_args, prefix, groups_fn=None):
+    src, files = free_src(root)
+    vol = os.path.join(root, "vol-" + name)
+    os.makedirs(vol)
+    sevenzip("a", *archive_args, os.path.join(vol, prefix), ".", cwd=src)
+    parts = set_parts(vol, prefix + ".")
+    check(name, len(parts) >= 4, parts)
+    keep = {os.path.basename(p): open(p, "rb").read() for p in parts}
+    groups = groups_fn(parts[0]) if groups_fn else None
+    tr = os.path.join(root, "trace-" + name)
+    dest = os.path.join(root, "out-" + name)
+    s = run(root, parts[0], dest, free=True, env={"XTEST_FREE_TRACE": tr})
+    check(name, s["state"] == "done" and tree(dest) == tree(src), s)
+    check(name, s["free_mode"] == "parts" and s["parts"] == len(parts) and s["parts_freed"] == len(parts), s)
+    check(name, s["bytes_freed"] == sum(len(b) for b in keep.values()), s)
+    check(name, not any(os.path.exists(p) for p in parts) and not os.listdir(vol), os.listdir(vol))
+    check(name, s["plan_known"] and s["same_drive"] and s["free_peak"] < s["unpacked"], s)
+    # The trace holds the archive's own names; put the parts back to read where the files were.
+    for n, b in keep.items():
+        with open(os.path.join(vol, n), "wb") as f:
+            f.write(b)
+    rel_trace = [(w, a if w == "freed" else os.path.normpath(a)) for w, a in read_trace(tr)]
+    check_freed_when_safe(name, parts, files, rel_trace, groups)
+    return parts, files
+
+
+def test_free_7z_split_each_file_a_block(root):
+    if not SEVENZIP:
+        return "skip"
+    free_case(root, "7z non-solid", ["-mx=0", "-ms=off", "-v200k"], "s.7z")
+
+
+def seven_blocks(first):
+    out = subprocess.run([SEVENZIP, "l", "-slt", first], check=True, capture_output=True, text=True).stdout
+    groups, path = {}, None
+    for line in out.splitlines():
+        if line.startswith("Path = "):
+            path = line[7:]
+        elif line.startswith("Block = ") and path:
+            groups[os.path.normpath(path)] = line[8:]
+    return groups
+
+
+def test_free_7z_split_solid_blocks(root):
+    if not SEVENZIP:
+        return "skip"
+    # Three files to a solid block: a part goes only when every block with a byte in it is out.
+    free_case(root, "7z solid blocks", ["-m0=lzma2", "-mx=1", "-mmt=1", "-ms=3f", "-v200k"], "b.7z", seven_blocks)
+
+
+def test_free_zip_and_tar_split(root):
+    if not SEVENZIP:
+        return "skip"
+    free_case(root, "zip split", ["-tzip", "-mx=0", "-v200k"], "z.zip")
+    free_case(root, "tar split", ["-ttar", "-v200k"], "t.tar")
+
+
+def test_free_one_solid_block_goes_at_the_end(root):
+    if not SEVENZIP:
+        return "skip"
+    src, files = free_src(root)
+    vol = os.path.join(root, "vol")
+    os.makedirs(vol)
+    sevenzip("a", "-m0=lzma2", "-mx=1", "-mmt=1", "-ms=on", "-v200k", os.path.join(vol, "one.7z"), ".", cwd=src)
+    parts = set_parts(vol, "one.7z.")
+    tr = os.path.join(root, "trace")
+    s = run(root, parts[0], os.path.join(root, "out"), free=True, env={"XTEST_FREE_TRACE": tr})
+    check("one block", s["state"] == "done" and tree(os.path.join(root, "out")) == tree(src), s)
+    t = read_trace(tr)
+    first_freed = next(i for i, (w, _) in enumerate(t) if w == "freed")
+    check("one block", all(w == "freed" for w, _ in t[first_freed:]) and sum(w == "file" for w, _ in t) == len(files), t)
+    check("one block", not os.listdir(vol), os.listdir(vol))
+
+
+def test_free_rar_sets(root):
+    # Not solid: freed part by part, the result the same as a plain extraction.
+    multi = [f"rar4-multi.part{i}.rar" for i in range(1, 7)]
+    solid = [f"rar5-solid.part0{i}.rar" for i in range(1, 5)]
+    copy_fixtures(root, multi + solid)
+    plain = os.path.join(root, "plain4")
+    s = run(root, os.path.join(root, multi[0]), plain)
+    check("rar4 multi plain", s["state"] == "done", s)
+    tr = os.path.join(root, "trace4")
+    s = run(root, os.path.join(root, multi[0]), os.path.join(root, "free4"), free=True, env={"XTEST_FREE_TRACE": tr})
+    check("rar4 multi free", s["state"] == "done" and tree(os.path.join(root, "free4")) == tree(plain), s)
+    check("rar4 multi free", s["free_mode"] == "parts" and s["parts_freed"] == 6, s)
+    check("rar4 multi free", not any(os.path.exists(os.path.join(root, n)) for n in multi), "parts left")
+    t = read_trace(tr)
+    nfiles = sum(w == "file" for w, _ in t)
+    seen = 0
+    early = 0
+    for w, a in t:
+        seen += w == "file"
+        early += w == "freed" and seen < nfiles
+    check("rar4 multi free", early >= 1, f"no part freed before the end: {t}")
+    # Solid: one stream from the first file to the last, so every part stays until all are out.
+    plain = os.path.join(root, "plain5")
+    s = run(root, os.path.join(root, solid[0]), plain)
+    tr = os.path.join(root, "trace5")
+    s = run(root, os.path.join(root, solid[0]), os.path.join(root, "free5"), free=True, env={"XTEST_FREE_TRACE": tr})
+    check("rar5 solid free", s["state"] == "done" and tree(os.path.join(root, "free5")) == tree(plain), s)
+    check("rar5 solid free", s["free_mode"] == "end" and s["parts_freed"] == 4, s)
+    t = read_trace(tr)
+    first_freed = next((i for i, (w, _) in enumerate(t) if w == "freed"), len(t))
+    check("rar5 solid free", all(w == "freed" for w, _ in t[first_freed:]) and first_freed > 0, t)
+
+
+def test_free_single_archive_at_the_end(root):
+    src = make_src(root)
+    arc = os.path.join(root, "t.zip")
+    with zipfile.ZipFile(arc, "w", zipfile.ZIP_DEFLATED) as z:
+        for dp, dn, fn in os.walk(src):
+            for n in fn:
+                p = os.path.join(dp, n)
+                z.write(p, os.path.relpath(p, src))
+    keep = open(arc, "rb").read()
+    tr = os.path.join(root, "trace")
+    s = run(root, arc, os.path.join(root, "o"), free=True, env={"XTEST_FREE_TRACE": tr})
+    check("zip end", s["state"] == "done" and tree(os.path.join(root, "o")) == tree(src), s)
+    check("zip end", s["free_mode"] == "end" and s["parts_freed"] == 1 and not os.path.exists(arc), s)
+    check("zip end", read_trace(tr)[-1] == ("freed", "t.zip") and len(read_trace(tr)) == 4, read_trace(tr))
+    # Damaged: it fails, and the archive stays as it was.
+    bad = bytearray(keep)
+    at = bad.find(b"deep deep")
+    if at < 0:
+        at = len(bad) // 2
+    bad[at + 40] ^= 0xFF
+    with open(arc, "wb") as f:
+        f.write(bad)
+    s = run(root, arc, os.path.join(root, "o2"), free=True)
+    check("zip end damaged", s["state"] == "failed" and s["parts_freed"] == 0 and os.path.exists(arc), s)
+
+
+def make_set(root, name="s.7z", n=8, size=150000, vol="200k"):
+    src, files = free_src(root, n, size)
+    folder = os.path.join(root, "vol")
+    os.makedirs(folder, exist_ok=True)
+    sevenzip("a", "-mx=0", "-ms=off", "-v" + vol, os.path.join(folder, name), ".", cwd=src)
+    return src, files, set_parts(folder, name + ".")
+
+
+def test_free_damage_found_before_anything_goes(root):
+    if not SEVENZIP:
+        return "skip"
+    src, files, parts = make_set(root)
+    last = parts[-2]
+    good = open(last, "rb").read()
+    bad = bytearray(good)
+    bad[len(bad) // 2] ^= 0xFF
+    with open(last, "wb") as f:
+        f.write(bad)
+    s = run(root, parts[0], os.path.join(root, "o"), free=True)
+    check("damage", s["state"] == "failed" and s["parts_freed"] == 0, s)
+    check("damage", all(os.path.exists(p) for p in parts) and not os.path.exists(os.path.join(root, "o")), "touched")
+    check("damage", not any(n.endswith(".partial-deleted") for n in os.listdir(os.path.dirname(parts[0]))), "renamed")
+    # Whole again (the damaged part fetched again): the same job simply runs.
+    with open(last, "wb") as f:
+        f.write(good)
+    s = run(root, parts[0], os.path.join(root, "o"), free=True)
+    check("damage then whole", s["state"] == "done" and tree(os.path.join(root, "o")) == tree(src), s)
+
+
+def stop_midway(root, env, cancel):
+    """A set freed as it goes, stopped (a Stop, or a write that fails) once a part is gone."""
+    src, files, parts = make_set(root, n=8, size=300000, vol="300k")
+    dest = os.path.join(root, "o")
+    p, st, cn = run(root, parts[0], dest, wait=False, free=True, env=env)
+    deadline = time.time() + 60
+    cur = {}
+    while cancel and time.time() < deadline:
+        try:
+            with open(st) as f:
+                cur = json.load(f)
+            if cur.get("parts_freed", 0) >= 1:
+                break
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.01)
+    if cancel:
+        open(cn, "w").close()
+    p.wait(timeout=60)
+    with open(st) as f:
+        s = json.load(f)
+    return s, src, files, parts, dest
+
+
+def check_stopped(name, s, parts, dest, files):
+    folder = os.path.dirname(parts[0])
+    left = sorted(os.listdir(folder))
+    check(name, s["state"] == "failed" and s["parts_freed"] >= 1, s)
+    # Nothing more went after it stopped: what was reported gone is gone, the rest renamed, kept.
+    check(name, s["parts_freed"] + s["parts_left"] == len(parts), s)
+    check(name, len(left) == s["parts_left"] and all(n.endswith(".partial-deleted") for n in left), left)
+    check(name, s["left_first"] == left[0], (s["left_first"], left))
+    # What came out before it stopped is kept, whole.
+    out = tree(dest)
+    check(name, out and all(out[rel] == files[os.path.normpath(rel)] for rel in out), sorted(out))
+
+
+def test_free_cancel_midway(root):
+    if not SEVENZIP:
+        return "skip"
+    s, src, files, parts, dest = stop_midway(root, {"XTEST_WRITE_DELAY_US": "100000"}, cancel=True)
+    check("free cancel", s["message"] == "fs_extract_cancelled", s)
+    check_stopped("free cancel", s, parts, dest, files)
+    # It can't go on from here (its first part is gone), and trying again changes nothing.
+    left = sorted(os.listdir(os.path.dirname(parts[0])))
+    s = run(root, parts[0], os.path.join(root, "again"), free=True)
+    check("free cancel, again", s["state"] == "failed" and sorted(os.listdir(os.path.dirname(parts[0]))) == left, s)
+
+
+def test_free_failure_midway(root):
+    if not SEVENZIP:
+        return "skip"
+    # The drive fails a write half way through.
+    s, src, files, parts, dest = stop_midway(root, {"XTEST_WRITE_LIMIT": str(8 * 300000 // 2)}, cancel=False)
+    check("free failure", s["message"].startswith("fs_extract_no_space"), s)
+    check_stopped("free failure", s, parts, dest, files)
+
+
+def test_free_room_counts_the_parts(root):
+    if not SEVENZIP:
+        return "skip"
+    src, files, parts = make_set(root)
+    total = sum(len(b) for b in files.values())
+    margin = 64 << 20
+    # The plan a listing shows, from the archive's listing alone.
+    s = run(root, parts[0], os.path.join(root, "x"), list_only=True, free=True)
+    check("free plan", s["state"] == "done" and s["free_mode"] == "parts" and s["parts"] == len(parts), s)
+    check("free plan", s["unpacked"] == total and s["plan_known"] and s["free_peak"] < total, s)
+    plan_peak = s["free_peak"]
+    # A drive with room for the unpack only with the parts given back on the way.
+    room = margin + (plan_peak + total) // 2
+    s = run(root, parts[0], os.path.join(root, "o1"), env={"XTEST_FREE": str(room)})
+    check("room, kept", s["state"] == "failed" and s["message"].startswith("fs_extract_no_space"), s)
+    s = run(root, parts[0], os.path.join(root, "o2"), free=True, env={"XTEST_FREE": str(room)})
+    check("room, freed", s["state"] == "done" and tree(os.path.join(root, "o2")) == tree(src), s)
+    check("room, freed", s["free_peak"] <= plan_peak + 512 * len(files), (s["free_peak"], plan_peak))
+    # Too little even so: refused before anything is deleted.
+    src2, files2, parts2 = make_set(root, name="t.7z")
+    s = run(root, parts2[0], os.path.join(root, "o3"), free=True, env={"XTEST_FREE": str(margin + plan_peak // 4)})
+    check("room, too little", s["state"] == "failed" and s["message"].startswith("fs_extract_no_space"), s)
+    check("room, too little", s["parts_freed"] == 0 and all(os.path.exists(p) for p in parts2), s)
+
+
+def test_free_plan_for_what_goes_at_the_end(root):
+    copy_fixtures(root, [f"rar5-solid.part0{i}.rar" for i in range(1, 5)] + [f"rar4-multi.part{i}.rar" for i in range(1, 7)])
+    s = run(root, os.path.join(root, "rar5-solid.part01.rar"), os.path.join(root, "x"), list_only=True, free=True)
+    check("plan solid rar", s["state"] == "done" and s["free_mode"] == "end" and s["parts"] == 4, s)
+    s = run(root, os.path.join(root, "rar4-multi.part1.rar"), os.path.join(root, "x"), list_only=True, free=True)
+    check("plan rar", s["state"] == "done" and s["free_mode"] == "parts" and s["parts"] == 6 and s["plan_known"], s)
+    check("plan rar", s["free_peak"] < s["unpacked"] + s["archive_bytes"], s)
+    arc = os.path.join(root, "one.zip")
+    with zipfile.ZipFile(arc, "w") as z:
+        z.writestr("a.txt", "x" * 1000)
+    s = run(root, arc, os.path.join(root, "x"), list_only=True, free=True)
+    check("plan zip", s["free_mode"] == "end" and s["free_peak"] == 1000 and s["plan_known"], s)
+    # A second name (a hard link) would be damaged with it: refused, and said why in the plan.
+    os.link(arc, os.path.join(root, "other-name.zip"))
+    s = run(root, arc, os.path.join(root, "x"), list_only=True, free=True)
+    check("plan hard link", s["state"] == "done" and s["free_why"].startswith("fs_extract_free_refused"), s)
+    s = run(root, arc, os.path.join(root, "o"), free=True)
+    check("hard link", s["state"] == "failed" and s["message"].startswith("fs_extract_free_refused"), s)
+    check("hard link", os.path.exists(arc) and not os.path.exists(os.path.join(root, "o")), s)
 
 
 def main():
