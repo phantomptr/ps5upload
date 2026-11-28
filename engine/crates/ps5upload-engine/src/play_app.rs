@@ -480,8 +480,14 @@ fn store_path() -> Option<PathBuf> {
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 static CONNECTS: ConnectLimit = ConnectLimit::new();
 
+/// Whether an app on `console` is paired with this engine (the discovery answer's `you.paired`).
+pub(crate) fn is_paired(console: &str) -> bool {
+    let want = host_key(console);
+    with_hub(|h| h.store().apps.iter().any(|a| a.console == want))
+}
+
 /// The console an app socket comes from: its address (an IPv4 one as itself, not mapped).
-fn console_of(ip: IpAddr) -> String {
+pub(crate) fn console_of(ip: IpAddr) -> String {
     let ip = match ip {
         IpAddr::V6(a) => a.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
         v4 => v4,

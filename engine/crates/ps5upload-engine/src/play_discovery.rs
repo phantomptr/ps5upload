@@ -8,6 +8,12 @@
 //! playing (the app's home screen then offers "Join <name>'s game": one press, and the host still
 //! lets them in). Nothing else is answered.
 //!
+//! When the probe comes from a console in this engine's list, the answer also has `"you":
+//! {"known": true, "name", "streaming", "together", "paired"}`: the console's name on the list,
+//! whether this engine is Remote Playing it now, how many friends play in its Play Together, and
+//! whether its PS5Upload Play is paired here. The app then picks "its" computer by itself (the one
+//! streaming it first) and keeps the others for joining a friend. Anyone else never gets `you`.
+//!
 //! What keeps it from being misused:
 //! * **No amplification:** the answer is never larger than the probe (a probe too short for it
 //!   gets nothing), and answers are held to [`PER_SOURCE_GAP`] per address and
@@ -35,8 +41,23 @@ const MAX_PROBE: usize = 1500;
 /// One answer per address this often at most, and this many a second in all.
 const PER_SOURCE_GAP: Duration = Duration::from_millis(250);
 const REPLIES_PER_SEC: usize = 50;
-/// Longest device name in an answer (characters).
+/// Longest device name in an answer (characters), and in bytes (a name in another script is up
+/// to 4 bytes a character).
 const NAME_MAX: usize = 64;
+const NAME_MAX_BYTES: usize = 128;
+
+/// What the answer says to a console this engine has on its list.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct You {
+    /// Its name on the list, if it has one.
+    pub name: Option<String>,
+    /// This engine is Remote Playing it now.
+    pub streaming: bool,
+    /// Friends playing in its Play Together here.
+    pub together: usize,
+    /// Its PS5Upload Play is paired with this engine.
+    pub paired: bool,
+}
 
 /// What an answer says.
 #[derive(Clone, Debug)]
@@ -47,29 +68,61 @@ pub(crate) struct Info {
     pub id: String,
     /// Play Togethers open here whose host is playing.
     pub together: usize,
+    /// Only for a probe from a console on this engine's list.
+    pub you: Option<You>,
 }
 
-/// The answer to `req`, or None: not a probe, or too short to carry the answer.
-pub(crate) fn reply_for(req: &[u8], info: &Info) -> Option<Vec<u8>> {
-    if req.len() > MAX_PROBE || !req.starts_with(PROBE) {
-        return None;
+/// `s` without control characters, at most `chars` characters and `bytes` bytes.
+fn cut(s: &str, chars: usize, bytes: usize) -> String {
+    let mut out = String::new();
+    for c in s.chars().filter(|c| !c.is_control()).take(chars) {
+        if out.len() + c.len_utf8() > bytes {
+            break;
+        }
+        out.push(c);
     }
-    let name: String = info
-        .name
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(NAME_MAX)
-        .collect();
-    let body = json!({
-        "name": name,
+    out
+}
+
+fn body_of(info: &Info, name_chars: usize, with_you: bool) -> Vec<u8> {
+    let bytes = NAME_MAX_BYTES * name_chars / NAME_MAX;
+    let mut v = json!({
+        "name": cut(&info.name, name_chars, bytes),
         "port": info.port,
         "version": info.version,
         "id": info.id,
         "together": info.together,
-    })
-    .to_string()
-    .into_bytes();
-    (body.len() <= req.len()).then_some(body)
+    });
+    if let (true, Some(y)) = (with_you, &info.you) {
+        v["you"] = json!({
+            "known": true,
+            "name": y.name.as_deref().map(|n| cut(n, name_chars, bytes)),
+            "streaming": y.streaming,
+            "together": y.together,
+            "paired": y.paired,
+        });
+    }
+    v.to_string().into_bytes()
+}
+
+/// The answer to `req`, or None: not a probe, or too short to carry the answer. The names are cut
+/// until it fits; `you` goes last of all.
+pub(crate) fn reply_for(req: &[u8], info: &Info) -> Option<Vec<u8>> {
+    if req.len() > MAX_PROBE || !req.starts_with(PROBE) {
+        return None;
+    }
+    for with_you in [true, false] {
+        if with_you && info.you.is_none() {
+            continue;
+        }
+        for chars in [NAME_MAX, NAME_MAX / 2, NAME_MAX / 4, 0] {
+            let body = body_of(info, chars, with_you);
+            if body.len() <= req.len() {
+                return Some(body);
+            }
+        }
+    }
+    None
 }
 
 /// A home network's address (see the module notes), or one `allow` admits.
@@ -156,7 +209,7 @@ pub(crate) fn start(http: SocketAddr, allow: Vec<crate::AllowRule>) {
             }
         };
         crate::log_at!(Info, "together", "play discovery: answering on UDP {at}");
-        let info = move || Info {
+        let info = move |from: IpAddr| Info {
             name: crate::mesh_api::device_name(),
             port: http.port(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -164,15 +217,31 @@ pub(crate) fn start(http: SocketAddr, allow: Vec<crate::AllowRule>) {
                 .map(|h| h.chars().take(16).collect())
                 .unwrap_or_default(),
             together: crate::join::open_playing_count(),
+            you: you_for(from),
         };
         serve(sock, info, allow, || crate::join::settings().play_discovery).await;
     });
 }
 
-/// Answers probes on `sock` while `on()` says so.
+/// `you` for a probe from `from`: None unless it is a console on this engine's list.
+fn you_for(from: IpAddr) -> Option<You> {
+    let console = crate::play_app::console_of(from);
+    let (name, _) = crate::consoles_api::console_brief(&console)?;
+    let together = crate::join::app_view(&console, false)["guests"]
+        .as_array()
+        .map_or(0, Vec::len);
+    Some(You {
+        name,
+        streaming: crate::rp_stream_api::live_video(&console).is_some(),
+        together,
+        paired: crate::play_app::is_paired(&console),
+    })
+}
+
+/// Answers probes on `sock` while `on()` says so; `info` is asked with the probe's source.
 pub(crate) async fn serve(
     sock: UdpSocket,
-    info: impl Fn() -> Info,
+    info: impl Fn(IpAddr) -> Info,
     allow: Vec<crate::AllowRule>,
     on: impl Fn() -> bool,
 ) {
@@ -192,12 +261,12 @@ pub(crate) async fn serve(
         if !req.starts_with(PROBE) || !source_ok(from.ip(), &allow) || !on() {
             continue;
         }
-        let Some(reply) = reply_for(req, &info()) else {
-            continue;
-        };
         if !pace.allow(from.ip(), Instant::now()) {
             continue;
         }
+        let Some(reply) = reply_for(req, &info(from.ip())) else {
+            continue;
+        };
         let _ = sock.send_to(&reply, from).await;
     }
 }
@@ -213,6 +282,19 @@ mod tests {
             version: "13.0.0".into(),
             id: "0123456789abcdef".into(),
             together: 1,
+            you: None,
+        }
+    }
+
+    fn yours() -> Info {
+        Info {
+            you: Some(You {
+                name: Some("Living room".into()),
+                streaming: true,
+                together: 2,
+                paired: false,
+            }),
+            ..info()
         }
     }
 
@@ -252,6 +334,78 @@ mod tests {
         assert!(reply_for(&[b'x'; 600], &info()).is_none());
         assert!(reply_for(&probe(MAX_PROBE + 1), &info()).is_none());
         assert!(reply_for(b"PS5UPLOAD_PLAY_DISCOVER v2                ", &info()).is_none());
+    }
+
+    #[test]
+    fn a_console_on_the_list_is_told_about_itself_and_anyone_else_is_not() {
+        let v: serde_json::Value =
+            serde_json::from_slice(&reply_for(&probe(512), &yours()).unwrap()).unwrap();
+        assert_eq!(
+            v["you"],
+            json!({"known": true, "name": "Living room", "streaming": true, "together": 2, "paired": false})
+        );
+        // Not on the list: no `you` at all.
+        let v: serde_json::Value =
+            serde_json::from_slice(&reply_for(&probe(512), &info()).unwrap()).unwrap();
+        assert!(v.get("you").is_none(), "{v}");
+        // A console with no name on the list is still known.
+        let mut nameless = yours();
+        nameless.you.as_mut().unwrap().name = None;
+        let v: serde_json::Value =
+            serde_json::from_slice(&reply_for(&probe(512), &nameless).unwrap()).unwrap();
+        assert_eq!(v["you"]["known"], true);
+        assert!(v["you"]["name"].is_null());
+    }
+
+    #[test]
+    fn you_is_only_for_a_console_on_this_engines_list() {
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        // Tests keep the shared documents in memory (each nextest test is its own process).
+        let doc = crate::shared_state::read(crate::consoles_api::DOC);
+        if crate::consoles_api::console_brief("127.0.0.1").is_none() {
+            assert_eq!(you_for(ip), None);
+        }
+        crate::shared_state::write(
+            crate::consoles_api::DOC,
+            doc.rev,
+            json!({"profiles": [{"host": "127.0.0.1", "name": "Desk PS5"}]}),
+        )
+        .unwrap();
+        let y = you_for(ip).unwrap();
+        assert_eq!(y.name.as_deref(), Some("Desk PS5"));
+        assert!(!y.streaming);
+        // An IPv4 console reached over a mapped address is the same console.
+        assert!(you_for("::ffff:127.0.0.1".parse().unwrap()).is_some());
+        assert_eq!(you_for("192.168.200.9".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn the_you_answer_fits_a_padded_probe_with_the_longest_names() {
+        // Names that grow most in JSON: 4-byte characters, and quotes (escaped, two bytes each).
+        for n in ["\u{1F3AE}".repeat(500), "\"".repeat(500), "\\".repeat(500)] {
+            let mut i = yours();
+            i.name = n.clone();
+            i.version = "13.0.0-beta.10".into();
+            i.together = 999;
+            i.you.as_mut().unwrap().name = Some(n.clone());
+            let r = reply_for(&probe(512), &i).unwrap();
+            assert!(r.len() <= 512, "{}", r.len());
+            let v: serde_json::Value = serde_json::from_slice(&r).unwrap();
+            assert_eq!(v["you"]["known"], true, "{v}");
+            assert!(!v["name"].as_str().unwrap().is_empty());
+            // Every size: never larger than the probe; `you` goes before nothing is answered.
+            for len in [PROBE.len(), 64, 100, 150, 200, 300, 400, 512, MAX_PROBE] {
+                if let Some(r) = reply_for(&probe(len), &i) {
+                    assert!(r.len() <= len, "{} > {len}", r.len());
+                }
+            }
+        }
+        // A probe big enough for the plain answer but not for `you` still gets the plain one.
+        let plain = reply_for(&probe(512), &info()).unwrap();
+        let r = reply_for(&probe(plain.len()), &yours()).unwrap();
+        assert!(r.len() <= plain.len());
+        let v: serde_json::Value = serde_json::from_slice(&r).unwrap();
+        assert!(v.get("you").is_none());
     }
 
     #[test]
@@ -310,9 +464,12 @@ mod tests {
         let at = sock.local_addr().unwrap();
         let on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let on2 = on.clone();
-        tokio::spawn(serve(sock, info, Vec::new(), move || {
-            on2.load(std::sync::atomic::Ordering::Relaxed)
-        }));
+        tokio::spawn(serve(
+            sock,
+            |_| info(),
+            Vec::new(),
+            move || on2.load(std::sync::atomic::Ordering::Relaxed),
+        ));
         let app = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let mut buf = [0u8; 2048];
         let wait = |d: u64| Duration::from_millis(d);
