@@ -12,6 +12,7 @@ import { assemble, loadInfo, loadSources } from "../games/model";
 import { onNavAction } from "../nav";
 import type { SectionContext } from "../sections";
 import { t } from "../strings";
+import { rateText, trackJob } from "../ui/rate";
 import { Modal } from "../ui/Modal";
 import { compareVersions, filterGroups, gameSize, groupEntries, newestUpdate, type Format, type GameGroup, type Part, type Role } from "./group";
 import {
@@ -545,6 +546,13 @@ async function scanAll(): Promise<void> {
   void loadInstalledIds();
 }
 
+/** `line` with the speed, elapsed time and time left of job `id` (#981). */
+function withRate(line: string, id: string, done: number, total: number): string {
+  const v = trackJob(id, Date.now(), done, total);
+  const r = rateText(v, v.elapsedSeconds);
+  return r ? `${line} · ${r}` : line;
+}
+
 /** Copies `src` (on a share) to `dest`; true when it finished. */
 async function copyIn(src: string, dest: string, name: string): Promise<boolean> {
   const { job } = await call<{ job: string }>("/api/smb/copy", { src, dest });
@@ -552,7 +560,11 @@ async function copyIn(src: string, dest: string, name: string): Promise<boolean>
     stopped,
     onStatus: (st) =>
       patch({
-        task: { key: "copy", text: t("cw_lib_copying", { name, pct: pct(st.bytes_done, st.bytes_total), size: formatBytes(st.bytes_total) }), stoppable: true },
+        task: {
+          key: "copy",
+          text: withRate(t("cw_lib_copying", { name, pct: pct(st.bytes_done, st.bytes_total), size: formatBytes(st.bytes_total) }), `lib-copy:${job}`, st.bytes_done, st.bytes_total),
+          stoppable: true,
+        },
       }),
   });
   if (end.end === "done") return true;
@@ -594,7 +606,7 @@ async function install(e: Entry): Promise<void> {
         patch({
           task: {
             key: "install",
-            text: `${installPhaseText(s.message) ?? t("cw_pkg_phase_starting")} · ${pct(s.bytes_done, s.bytes_total)}%`,
+            text: withRate(`${installPhaseText(s.message) ?? t("cw_pkg_phase_starting")} · ${pct(s.bytes_done, s.bytes_total)}%`, `lib-install:${job}`, s.bytes_done, s.bytes_total),
             stoppable: installStoppable(s.message),
           },
         });

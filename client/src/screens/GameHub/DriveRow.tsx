@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "react-router";
+import { RateFigures } from "../../components/RateFigures";
 import {
   copyToCollection,
   openConsoleCopyInConvert,
@@ -2589,17 +2590,16 @@ function LibraryRowImpl({
               {downloadProgress &&
                 downloadProgress.totalBytes === 0 &&
                 ` · ${formatBytes(downloadProgress.bytesReceived)}`}
-              {/* Live throughput. Driven off `elapsedMs` (which the
-                useElapsed hook ticks every 500 ms) so the value
-                refreshes naturally; computing it inline avoids a
-                separate state field for what's a derived value. */}
-              {busy === "download" &&
-                downloadProgress &&
-                downloadProgress.bytesReceived > 0 &&
-                elapsedMs > 0 &&
-                ` · ${formatBytes(
-                  (downloadProgress.bytesReceived * 1000) / elapsedMs,
-                )}/s`}
+              {/* Speed over the last seconds and the time left (#981): the
+                same figures as the Activity panel, not an average since the start. */}
+              {busy === "download" && downloadProgress && (
+                <RateFigures
+                  id={`lib-download:${entry.name}`}
+                  done={downloadProgress.bytesReceived}
+                  total={downloadProgress.totalBytes}
+                  prefix=" · "
+                />
+              )}
               {/* Same shape for the move's in-flight fs_copy: the
                 FS_OP_STATUS poller writes bytesCopied/totalBytes
                 into moveProgress on a 500 ms cadence. */}
@@ -2610,13 +2610,14 @@ function LibraryRowImpl({
                   (moveProgress.bytesCopied / moveProgress.totalBytes) *
                   100
                 ).toFixed(0)}%)`}
-              {busy === "move-copying" &&
-                moveProgress &&
-                moveProgress.bytesCopied > 0 &&
-                elapsedMs > 0 &&
-                ` · ${formatBytes(
-                  (moveProgress.bytesCopied * 1000) / elapsedMs,
-                )}/s`}
+              {busy === "move-copying" && moveProgress && (
+                <RateFigures
+                  id={`lib-move:${entry.name}`}
+                  done={moveProgress.bytesCopied}
+                  total={moveProgress.totalBytes}
+                  prefix=" · "
+                />
+              )}
             </span>
             {busy === "download" && (
               <button

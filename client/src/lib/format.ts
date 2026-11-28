@@ -61,3 +61,16 @@ export function formatDuration(sec: number, lang?: string): string {
   const h = Math.floor(m / 60);
   return `${fmt(h, "hour", "h")} ${fmt(m % 60, "minute", "m")}`;
 }
+
+/**
+ * A time left, rounded so it does not tick every second (#981): under a minute in steps of 5 s,
+ * under an hour in whole minutes ("12m"), then hours and minutes. Same units as formatDuration.
+ */
+export function formatEta(sec: number, lang?: string): string {
+  if (!isFinite(sec) || sec < 0) return "—";
+  const s5 = Math.max(5, Math.ceil(sec / 5) * 5);
+  if (s5 < 60) return formatDuration(s5, lang);
+  const m = Math.max(1, Math.round(sec / 60));
+  if (m < 60) return (lang ? unitText(m, "minute", lang) : null) ?? `${m}m`;
+  return formatDuration(m * 60, lang);
+}

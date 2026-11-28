@@ -16,7 +16,8 @@
  *   (the page was within 0.1 KiB of 220). The raw cap went from 768 to 784 KiB when Uninstall
  *   learned to delete a game's folder or image (the page was 2.8 KiB over; gzip had room), and from
  *   784 to 800 KiB when Extract learned to delete the archive as it unpacks (0.1 KiB over; gzip had
- *   room).
+ *   room). The gzip cap went from 224 to 228 KiB when every transfer learned its speed, elapsed time
+ *   and time left (#981; 1.5 KiB over).
  * - Strings: every other locale is emitted next to the page as strings/<code>.json (minified, cw_*
  *   keys only); payload/Makefile gzips each into the ELF (build/webui_strings.c) and the helper
  *   serves them at GET /strings/<code>.json. The page fetches them with ?v=<hash of these files>
@@ -41,7 +42,7 @@ import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
 const RAW_BUDGET = 800 * 1024; // 784 until Extract could delete the archive as it unpacks
-const GZIP_BUDGET = 224 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences
+const GZIP_BUDGET = 228 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences, 224 until #981
 const TOKENS_ID = "virtual:pc-tokens.css";
 
 /** The `{…}` body that starts at `open` (the index of a "{"), braces balanced. */

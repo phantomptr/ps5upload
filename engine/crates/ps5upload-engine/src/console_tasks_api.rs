@@ -2,7 +2,8 @@
 //! the helper (`ps5upload_core::console_tasks`); these routes forward.
 //!
 //! * `GET  /api/ps5/console-tasks?addr=` -> `{ok, supported, tasks[]}`: each task
-//!   `{id, kind, state, name, files_done, files_total, bytes_done, bytes_total, age_s, cancellable}`.
+//!   `{id, kind, state, name, files_done, files_total, bytes_done, bytes_total, age_s, elapsed_s?, cancellable}`;
+//!   `elapsed_s`: seconds since it started (how long it ran once ended), absent from an older helper.
 //!   A helper older than this feature answers `supported: false` with no tasks, not an error.
 //! * `POST /api/ps5/console-tasks/cancel` `{addr, id}` -> `{ok}`: needs an explicit `addr`.
 //!

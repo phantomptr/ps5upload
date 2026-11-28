@@ -8,6 +8,7 @@ import { freeName, statOrNull } from "../files/paste";
 import { PathPicker } from "../files/PathPicker";
 import type { SectionContext } from "../sections";
 import { t } from "../strings";
+import { RateLine } from "../ui/rate";
 import {
   bytesToWrite,
   canLeaveOutPlainEmulator,
@@ -166,7 +167,12 @@ export function ConvertView(p: ConvertViewProps) {
       {run ? (
         running ? (
           <div className="cw-msg" role="status" data-convert-progress="">
-            <span>{progressLine(run)}</span>
+            <span>
+              {progressLine(run)}
+              {!run.stopping && run.bytesTotal > 0 ? (
+                <RateLine id={`convert:${run.source}:${run.dest}`} done={run.bytesDone} total={run.bytesTotal} ownElapsed prefix=" · " className="cw-rate" />
+              ) : null}
+            </span>
             {run.bytesTotal > 0 ? (
               <div className="cw-bar">
                 <div className="cw-bar-fill" style={{ width: `${Math.min(100, (run.bytesDone / run.bytesTotal) * 100)}%` }} />

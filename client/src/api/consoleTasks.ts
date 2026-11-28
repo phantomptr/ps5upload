@@ -19,6 +19,9 @@ export interface ConsoleTaskInfo {
   bytes_total: number;
   /** Seconds since it ended; 0 while it runs. */
   age_s: number;
+  /** Seconds since it started on the console (how long it ran, once ended); absent from an
+   *  older helper (#981). */
+  elapsed_s?: number;
   cancellable: boolean;
 }
 

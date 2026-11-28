@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { RotateCcw, Undo2, CheckCircle2 } from "lucide-react";
+import { RateFigures } from "../../components/RateFigures";
 
 import { restoreCheck, restoreFinish, type RestoreReply } from "../../api/titleRestore";
 import { Button, WarningCard } from "../../components";
@@ -203,7 +204,17 @@ export function RestoreHomeScreenCard({
         }
         detail={detail ?? undefined}
         action={
-          running ? undefined : state === "restorable" ? (
+          running ? (
+            // The package's bytes as the PS5 reads them: their speed and time left (#981).
+            run?.install?.metrics?.total_bytes ? (
+              <RateFigures
+                id={`restore:${name}`}
+                done={Math.min(run.install.metrics.served_bytes ?? 0, run.install.metrics.total_bytes)}
+                total={run.install.metrics.total_bytes}
+                className="text-xs text-[var(--color-muted)]"
+              />
+            ) : undefined
+          ) : state === "restorable" ? (
             <Button
               size="sm"
               leftIcon={<RotateCcw size={13} />}

@@ -111,6 +111,8 @@ export function applyConsoleTasks(host: string, list: readonly ConsoleTaskInfo[]
       payload: { consoleTaskId: info.id },
       control: { owner: "console-task", host: key, taskId: info.id, cancellable: info.cancellable },
       progress: consoleTaskProgress(info),
+      // Its elapsed time counts from when the console started it, not from when this app saw it.
+      ...(typeof info.elapsed_s === "number" && info.elapsed_s > 0 ? { startedAgoMs: info.elapsed_s * 1000 } : {}),
     });
     if (!running) finish(id, info);
   }

@@ -66,6 +66,7 @@ import {
   type BatchResult,
 } from "./move";
 import { extractLeftSomething, extractOpensDest, stillAsking } from "./askGuard";
+import { rateText, RateLine } from "../ui/rate";
 import { batchOptions, currentBatch, startBatch, stopBatch, useBatch, waitJob, type BatchProgress } from "./batch";
 import {
   askConflict,
@@ -400,7 +401,8 @@ function withBytes(line: string, b: Busy): string {
   if (total <= 0) return line;
   const done = Math.min(b.bytesDone ?? 0, total);
   const pct = Math.min(100, Math.floor((done / total) * 100));
-  return `${line} · ${t("cw_home_percent", { n: pct })} · ${formatBytes(done)} / ${formatBytes(total)}`;
+  const rate = rateText(b.rate, b.elapsedS);
+  return `${line} · ${t("cw_home_percent", { n: pct })} · ${formatBytes(done)} / ${formatBytes(total)}${rate ? ` · ${rate}` : ""}`;
 }
 
 /** "Copying 3 of 40" (item `at` is being sent or is running), or "Stopping…". */
@@ -413,14 +415,15 @@ export function busyText(b: Busy | null): string | null {
   }
   const at = Math.max(1, b.at);
   if (b.op === "copy") return withBytes(t("cw_files_batch_copy", { at, total: b.total }), b);
-  if (b.op === "move") return t("cw_files_batch_move", { at, total: b.total });
+  if (b.op === "move") return withBytes(t("cw_files_batch_move", { at, total: b.total }), b);
   if (b.op === "chmod") return t("cw_files_fixperm_batch", { at, total: b.total });
   if (b.op === "rename") return t("cw_files_br_batch", { at, total: b.total });
   if (b.op === "unpack") return withBytes(t("cw_files_unpack_batch", { name: baseName(b.paths?.[0] ?? "") }), b);
   if (b.op === "extract") return withBytes(t("cw_files_extract_batch", { name: baseName(b.paths?.[0] ?? "") }), b);
   if (b.op === "install") {
     const name = baseName(b.paths?.[0] ?? "");
-    return `${name}: ${installBusyText(installPhaseText(b.phase), b.bytesDone ?? 0, b.bytesTotal ?? 0)}`;
+    const rate = rateText(b.rate, b.elapsedS);
+    return `${name}: ${installBusyText(installPhaseText(b.phase), b.bytesDone ?? 0, b.bytesTotal ?? 0)}${rate ? ` · ${rate}` : ""}`;
   }
   return t("cw_files_batch_delete", { at, total: b.total });
 }
@@ -992,6 +995,9 @@ function TasksLine({ tasks }: { tasks: Job[] }) {
     <div className="cw-msg" role="status">
       {t("cw_files_tasks", { n: tasks.length })}
       {pct != null ? ` · ${t("cw_home_percent", { n: pct })}` : ""}
+      {tasks.length === 1 ? (
+        <RateLine id={tasks[0].job} done={tasks[0].bytes_done} total={tasks[0].bytes_total} elapsedS={tasks[0].elapsed_s} prefix=" · " />
+      ) : null}
       <div className="cw-bar" aria-hidden>
         <div className={`cw-bar-fill${pct == null ? " is-unknown" : ""}`} style={{ width: `${pct ?? 100}%` }} />
       </div>

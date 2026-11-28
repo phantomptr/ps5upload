@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatDuration } from "./format";
+import { formatBytes, formatDuration, formatEta } from "./format";
+
+describe("formatEta", () => {
+  it("rounds so the time left does not tick every second", () => {
+    expect(formatEta(-1)).toBe("—");
+    expect(formatEta(1)).toBe("5s");
+    expect(formatEta(41)).toBe("45s");
+    expect(formatEta(58)).toBe("1m");
+    expect(formatEta(61)).toBe("1m");
+    expect(formatEta(12.6 * 60)).toBe("13m");
+    expect(formatEta(2 * 3600 + 5 * 60 + 20)).toBe("2h 5m");
+  });
+});
 
 describe("formatBytes", () => {
   it("returns dash for negative or non-finite input", () => {

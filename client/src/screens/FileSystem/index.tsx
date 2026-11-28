@@ -216,6 +216,7 @@ import { formatBytes } from "../../lib/format";
 import { useWindowedRows } from "../../lib/useWindowedRows";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
+import { RateFigures } from "../../components/RateFigures";
 import { resumedShown } from "../../lib/resumedProgress";
 import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 
@@ -4805,6 +4806,9 @@ export default function FileSystemScreen() {
                 {tr("fs_unpack_running", { name: unpackOp.name }, `Decompressing ${unpackOp.name}`)}
                 {unpackOp.total > 0 &&
                   ` · ${formatBytes(unpackOp.done)} / ${formatBytes(unpackOp.total)} (${Math.floor((unpackOp.done / unpackOp.total) * 100)}%)`}
+                {unpackOp.total > 0 && !unpackOp.stopping && (
+                  <RateFigures id={`unpack:${unpackOp.name}`} done={unpackOp.done} total={unpackOp.total} prefix=" · " />
+                )}
               </span>
               <Button variant="secondary" size="sm" disabled={unpackOp.stopping} onClick={() => void stopUnpack()}>
                 {tr("fs_unpack_stop", undefined, "Stop")}
@@ -4819,6 +4823,9 @@ export default function FileSystemScreen() {
                 {tr("fs_extract_running", { name: extractOp.name }, `Extracting ${extractOp.name}`)}
                 {extractOp.total > 0 &&
                   ` · ${formatBytes(extractOp.done)} / ${formatBytes(extractOp.total)} (${Math.min(100, Math.floor((extractOp.done / extractOp.total) * 100))}%)`}
+                {extractOp.total > 0 && !extractOp.stopping && (
+                  <RateFigures id={`extract:${extractOp.name}`} done={extractOp.done} total={extractOp.total} prefix=" · " />
+                )}
               </span>
               <Button variant="secondary" size="sm" disabled={extractOp.stopping} onClick={() => void stopExtract()}>
                 {tr("fs_extract_stop", undefined, "Stop")}
@@ -5857,7 +5864,6 @@ function DownloadOpBanner({
     startedAtMs > 0 ? Math.max(0, (now - startedAtMs) / 1000) : 0;
   const pct =
     totalBytes > 0 ? Math.min(100, (bytesReceived / totalBytes) * 100) : 0;
-  const speed = elapsedSec > 0 ? bytesReceived / elapsedSec : 0;
 
   return (
     <div className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3 text-xs">
@@ -5897,11 +5903,13 @@ function DownloadOpBanner({
             {formatBytes(bytesReceived)}
           </span>
         )}
-        {speed > 0 && (
-          <span className="text-[var(--color-muted)]">
-            {formatBytes(speed)}/s
-          </span>
-        )}
+        {/* Speed over the last seconds and the time left (#981), not an average since the start. */}
+        <RateFigures
+          id={`download:${rootName}:${startedAtMs}`}
+          done={bytesReceived}
+          total={totalBytes}
+          className="text-[var(--color-muted)]"
+        />
       </div>
 
       {lostContact && (

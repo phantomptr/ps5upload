@@ -1032,6 +1032,12 @@ static int is_mine(const uint8_t id[16], void *ctx) {
     return ava1_jobs_owner_is(id, k_console_id);
 }
 
+/* How long a job the page started has run (#981); -1 for any other (a PC's: its app shows that). */
+static int64_t job_elapsed(const uint8_t id[16], void *ctx) {
+    (void)ctx;
+    return ctasks_elapsed_ms(id, (uint64_t)mono_ms());
+}
+
 /* "uploading": the destinations of running uploads (a PC's), for the Files badge. Left out when
  * the list cannot be read (the jobs answer stands on its own). */
 static void add_uploads(char *json, size_t cap) {
@@ -1064,7 +1070,7 @@ static void r_jobs(const char *b, size_t n, uint8_t *out, int fd) {
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
-    if (webui_jobs_to_json(out, ol, is_mine, NULL, json, API_JOBS_JSON) < 0) {
+    if (webui_jobs_to_json(out, ol, is_mine, job_elapsed, NULL, json, API_JOBS_JSON) < 0) {
         send_error(fd, 500, "bad_jobs_reply", 14);
     } else {
         /* The page has now seen how its finished jobs ended: release them (after a short grace, so

@@ -44,6 +44,10 @@ pub struct ConsoleTask {
     /// Seconds since it ended; 0 while it runs.
     #[serde(default)]
     pub age_s: u64,
+    /// Seconds since it started (how long it ran, once ended), on the console's clock; `None`
+    /// from a helper too old to say (#981).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_s: Option<u64>,
     /// Whether cancel can stop it.
     #[serde(default)]
     pub cancellable: bool,
@@ -103,6 +107,15 @@ fn smb_task(j: &Value, now: i64) -> Option<ConsoleTask> {
     if !running && age > SMB_KEEP_S {
         return None;
     }
+    // A daemon that says how long it ran; else worked out from "started" (a clock that went back
+    // reads 0).
+    let elapsed_s = j.get("elapsed_s").and_then(Value::as_u64).or_else(|| {
+        let started = j
+            .get("started")
+            .and_then(Value::as_i64)
+            .filter(|s| *s > 0)?;
+        Some((if running { now } else { ended } - started).max(0) as u64)
+    });
     Some(ConsoleTask {
         id: format!("{SMB_PREFIX}{id}"),
         kind: kind.to_string(),
@@ -120,6 +133,7 @@ fn smb_task(j: &Value, now: i64) -> Option<ConsoleTask> {
         bytes_done: u64_of(j, "bytes_done"),
         bytes_total: u64_of(j, "bytes_total"),
         age_s: if running { 0 } else { age as u64 },
+        elapsed_s,
         cancellable: running,
     })
 }
@@ -236,6 +250,25 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_comes_from_the_helper_and_is_absent_when_it_does_not_say() {
+        let v = json!({"now":1000,"tasks":[
+            {"id":"a","kind":"copy","state":"running","elapsed_s":42},
+            {"id":"b","kind":"copy","state":"running"},
+        ],"smb_jobs":[
+            {"job":"d","kind":"download","state":"running","src":"s","dest":"/d","started":2000,"elapsed_s":7},
+            // the console clock went back: never a negative time
+            {"job":"e","kind":"download","state":"running","src":"s","dest":"/d","started":2000},
+        ]});
+        let t = parse_reply(&v);
+        assert_eq!(t[0].elapsed_s, Some(42));
+        assert_eq!(t[1].elapsed_s, None);
+        assert_eq!(t[2].elapsed_s, Some(7));
+        assert_eq!(t[3].elapsed_s, Some(0));
+        let out = serde_json::to_value(&t[1]).unwrap();
+        assert!(out.get("elapsed_s").is_none());
+    }
+
+    #[test]
     fn share_jobs_are_named_and_scans_left_out() {
         let v = json!({"now":1000,"tasks":[],"smb_jobs":[
             {"job":"d1","kind":"download","state":"running","src":"Share/Games/x.iso","dest":"/data/y/x.iso",
@@ -254,6 +287,9 @@ mod tests {
         assert_eq!(t[1].name, "up");
         assert_eq!(t[1].age_s, 10);
         assert!(!t[1].cancellable);
+        // #981: how long they ran, from when they started (no elapsed_s from this daemon)
+        assert_eq!(t[0].elapsed_s, Some(100));
+        assert_eq!(t[1].elapsed_s, Some(490));
         assert_eq!(
             (t[2].kind.as_str(), t[2].state.as_str()),
             ("delete", "failed")

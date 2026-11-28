@@ -6,6 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Transfer speed everywhere (#981)**
+- **Minion shows how fast a copy goes.** A copy from a network share (NAS), a copy or move on the console, an extract, an install, an upload from your phone, a check and a conversion now show the current speed (MiB/s), the time elapsed and about how long is left, next to the percentage. "Stalled" appears when nothing has moved for 15 seconds.
+- In the app, the same figures for a download through Files or Games, a library move, a link download, a decompress or extract, an archive unpack, the console backup, a restore to the home screen, the app update and the speed test. A task started on the console counts its time from when it started there. The Activity panel says "Stalled" too, and a staged install's speed no longer reads nothing and then jumps.
+
 **TV mode (#976)**
 - **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
 

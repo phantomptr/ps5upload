@@ -5,6 +5,7 @@ import { fetchVolumes, jobCancel, jobStatus } from "../../api/ps5";
 import { Button, Checkbox, Input, Spinner } from "../../components";
 import { consoleAddr, hostOf, transferAddr } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
+import { RateFigures } from "../../components/RateFigures";
 import { pkgStorageFor } from "../../lib/pkgStorage";
 import { useTr } from "../../state/lang";
 import {
@@ -289,6 +290,7 @@ export function LinkDownloadCard({
                     "Downloading to the PS5: {sent} of {total}",
                   )
                 : tr("linkdl.running", undefined, "Downloading to the PS5…")}
+              <RateFigures id="linkdl" done={sent} total={total} prefix=" · " className="text-[var(--color-muted)]" />
             </span>
             <Button variant="ghost" size="sm" onClick={cancel}>
               {tr("linkdl.cancel", undefined, "Cancel")}

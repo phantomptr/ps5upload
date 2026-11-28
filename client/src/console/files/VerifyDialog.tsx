@@ -3,6 +3,7 @@ import { formatBytes } from "../../lib/format";
 import { ApiError } from "../api";
 import { getLanguage, t } from "../strings";
 import { Modal } from "../ui/Modal";
+import { RateLine } from "../ui/rate";
 import { filesErrorText } from "./Files";
 import { crcHex, opResult, startOp, watchOp, type OpDeps, type OpStatus } from "./opJob";
 
@@ -139,6 +140,7 @@ export function VerifyDialog({
         <div className="cw-msg" role="status" data-verify-step={state.step}>
           {t(state.step === "hash" ? "cw_files_verify_hashing" : "cw_files_verify_crc")}
           {pct != null ? ` · ${t("cw_home_percent", { n: pct })} · ${formatBytes(state.done)} / ${formatBytes(state.total)}` : ""}
+          {pct != null ? <RateLine id={`verify:${path}:${state.step}`} done={state.done} total={state.total} ownElapsed prefix=" · " className="cw-rate" /> : null}
           <div className="cw-bar" aria-hidden>
             <div className={`cw-bar-fill${pct == null ? " is-unknown" : ""}`} style={{ width: `${pct ?? 100}%` }} />
           </div>

@@ -78,6 +78,20 @@ describe("applyConsoleTasks", () => {
     expect(t.progress).toEqual({ current: 200, total: 400, unit: "bytes" });
   });
 
+  it("#981: a task found running counts its elapsed time from when the console started it", () => {
+    const before = Date.now();
+    applyConsoleTasks(HOST, [info({ elapsed_s: 600 })]);
+    const [t] = rows();
+    const startedAt = new Date(t.createdAt).getTime();
+    expect(before - startedAt).toBeGreaterThanOrEqual(600_000 - 50);
+    expect(before - startedAt).toBeLessThan(600_000 + 5_000);
+    // An older helper says nothing: from now.
+    useTaskStore.setState({ tasks: [] });
+    resetConsoleTasksState();
+    applyConsoleTasks(HOST, [info({ id: "bb" })]);
+    expect(new Date(rows()[0].createdAt).getTime()).toBeGreaterThanOrEqual(before);
+  });
+
   it("keeps each console's tasks to itself", () => {
     applyConsoleTasks(HOST, [info()]);
     applyConsoleTasks("192.0.2.99", []);
