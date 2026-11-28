@@ -27,6 +27,8 @@ function stubPad(): void {
   vi.stubGlobal("navigator", { getGamepads: () => [g] });
 }
 
+// The first import of the screen is slow on a busy machine (a full parallel run): more time than
+// the 5 s default, so it does not fail on load alone.
 describe("Controllers: stick dead zones", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -40,7 +42,7 @@ describe("Controllers: stick dead zones", () => {
     expect(out).toContain('data-testid="rp-pad-deadzone"');
     expect(out).toContain('data-testid="rp-pad-deadzone-status"');
     expect(out).toContain("left 0%, right 87%");
-  });
+  }, 20_000);
 
   it("says nothing about dead zones for a controller without them", async () => {
     installWindowStub();
@@ -49,5 +51,5 @@ describe("Controllers: stick dead zones", () => {
     const out = renderToStaticMarkup(<ControllerSetup />);
     expect(out).toContain('data-testid="rp-pad-deadzone"');
     expect(out).not.toContain("rp-pad-deadzone-status");
-  });
+  }, 20_000);
 });
