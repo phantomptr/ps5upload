@@ -256,7 +256,7 @@ fn pong(m: &ClientMsg) -> Option<Message> {
 }
 
 /// The engine's clock for latency stamps: µs since the first time it was read, monotonic.
-fn engine_us() -> u64 {
+pub(crate) fn engine_us() -> u64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
@@ -287,6 +287,8 @@ struct Live {
     /// This session's id (NEXT_SESSION), shown by `GET /api/ps5/rp/session`.
     session: u64,
     hevc: bool,
+    /// HEVC Main10 in HDR (set as the session starts).
+    hdr: AtomicBool,
     /// The bitrate the console was asked for (kbit/s; it cannot change mid-session): an internet
     /// guest's video track compares its bandwidth estimate with it (join_net).
     bitrate_kbps: std::sync::atomic::AtomicU32,
@@ -370,6 +372,8 @@ struct Spectator {
     /// Its keyframe gap once it keeps falling behind ([`LAGGING_KEY_GAP`], an internet guest's
     /// [`INTERNET_LAGGING_KEY_GAP`]).
     lagging_gap: Duration,
+    /// Takes timed video (kind 7 instead of 1): a player whose app asked for it (join.rs).
+    timing: bool,
 }
 
 impl Spectator {
@@ -385,6 +389,7 @@ impl Spectator {
             lag_skips: 0,
             last_skip: None,
             lagging_gap: LAGGING_KEY_GAP,
+            timing: false,
         }
     }
 
@@ -687,12 +692,14 @@ pub(crate) fn add_spectator(id: u64) -> Option<mpsc::Receiver<Message>> {
 /// never far behind: a full queue skips to the next keyframe (counted in `skipped`) instead of
 /// adding delay. None when no session runs for `host`. `internet`: over a WebRTC data channel
 /// (keyframes come sooner after it keeps falling behind, [`INTERNET_LAGGING_KEY_GAP`]).
+/// `timing`: its pictures come as kind 7 (with the engine's time), as a page that asked for it.
 pub(crate) fn add_player(
     id: u64,
     host: &str,
     video_queue: usize,
     skipped: Arc<AtomicU64>,
     internet: bool,
+    timing: bool,
 ) -> Option<PlayerFeed> {
     let l = live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == crate::vinput_api::host_key(host))?;
@@ -706,6 +713,7 @@ pub(crate) fn add_player(
         } else {
             LAGGING_KEY_GAP
         },
+        timing,
         ..Spectator::watcher(id, tx)
     };
     l.add_spectator(sp, Some(&vtx));
@@ -723,6 +731,22 @@ pub(crate) fn live_session(host: &str) -> Option<u64> {
     live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
         .map(|l| l.session)
+}
+
+/// The session running for `host`: its codec ("h264", "h265" or "h265_hdr") and the bitrate it
+/// was asked for (kbit/s), or None.
+pub(crate) fn live_video(host: &str) -> Option<(&'static str, u32)> {
+    let key = crate::vinput_api::host_key(host);
+    live()
+        .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
+        .map(|l| {
+            let codec = match (l.hevc, l.hdr.load(Ordering::Relaxed)) {
+                (true, true) => "h265_hdr",
+                (true, false) => "h265",
+                _ => "h264",
+            };
+            (codec, l.bitrate_kbps.load(Ordering::Relaxed))
+        })
 }
 
 /// A Play Together player's picture is waiting for a keyframe (it skipped frames it could not
@@ -876,12 +900,31 @@ impl Live {
     }
 
     fn to_spectators_tagged_at(&self, kind: u8, msg: &Bytes, key: bool, now: Instant) {
+        self.to_spectators_timed_at(kind, msg, key, now, None);
+    }
+
+    /// `to_spectators_tagged` for a video access unit the engine had whole at `t_us`: a player
+    /// that takes timed video gets it as kind 7 with that time.
+    fn to_spectators_timed(&self, msg: &Bytes, key: bool, t_us: u64) {
+        self.to_spectators_timed_at(1, msg, key, Instant::now(), Some(t_us));
+    }
+
+    fn to_spectators_timed_at(
+        &self,
+        kind: u8,
+        msg: &Bytes,
+        key: bool,
+        now: Instant,
+        t_us: Option<u64>,
+    ) {
         let Ok(mut g) = self.spectators.lock() else {
             return;
         };
         if g.is_empty() {
             return;
         }
+        // Built once, for the players that take timed video.
+        let mut timed: Option<Message> = None;
         for sp in g.iter_mut() {
             if kind > 1 {
                 // Sound and the rest: a full queue just misses it.
@@ -915,9 +958,16 @@ impl Live {
                 }
             }
             sp.need_key = false;
-            if let Err(mpsc::error::TrySendError::Full(_)) =
-                q.try_send(Message::Binary(msg.clone()))
-            {
+            let m = if kind == 1 && sp.timing {
+                timed
+                    .get_or_insert_with(|| {
+                        bin_timed(t_us.unwrap_or_else(engine_us), msg.get(1..).unwrap_or(&[]))
+                    })
+                    .clone()
+            } else {
+                Message::Binary(msg.clone())
+            };
+            if let Err(mpsc::error::TrySendError::Full(_)) = q.try_send(m) {
                 sp.need_key = true;
                 sp.skipped_at(now);
                 if let Some(c) = &sp.skipped {
@@ -1007,6 +1057,7 @@ impl Live {
             host,
             session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             hevc,
+            hdr: AtomicBool::new(false),
             bitrate_kbps: std::sync::atomic::AtomicU32::new(StreamConfig::default().bitrate_kbps),
             keep_alive,
             pad: Default::default(),
@@ -1498,7 +1549,7 @@ impl Sink {
             key,
             msg.slice(1..),
         );
-        live.to_spectators_tagged(1, &msg, key);
+        live.to_spectators_timed(&msg, key, t_us);
         if live.picture_off() {
             return true; // guests and the feed have it; this page asked not to
         }
@@ -2048,6 +2099,10 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .min(MAX_KEEP_ALIVE),
     ));
     live.bitrate_kbps.store(cfg.bitrate_kbps, Ordering::Relaxed);
+    live.hdr.store(
+        matches!(cfg.codec, ps5upload_core::rp_stream::Codec::H265Hdr),
+        Ordering::Relaxed,
+    );
     let _ = live.regist_hex.set(
         creds
             .regist_key
@@ -3585,6 +3640,58 @@ mod tests {
         live.need_key.store(false, Ordering::Relaxed);
         assert!(sink.video(KEY, false));
         assert_eq!(kinds(&mut vr), ["bin1"]);
+    }
+
+    #[test]
+    fn a_player_whose_app_asks_for_timing_gets_kind_7_and_other_players_kind_1() {
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let player = |id: u64, timing: bool| {
+            let (tx, other) = mpsc::channel(SPECTATOR_QUEUE);
+            let (vtx, video) = mpsc::channel(4);
+            live.add_spectator(
+                Spectator {
+                    video: Some(vtx.clone()),
+                    need_key: false,
+                    timing,
+                    ..Spectator::watcher(id, tx)
+                },
+                Some(&vtx),
+            );
+            (video, other)
+        };
+        let (mut timed, _o1) = player(1, true);
+        let (mut plain, _o2) = player(2, false);
+        let before = engine_us();
+        assert!(sink.video(KEY, false));
+        let after = engine_us();
+        let Ok(Message::Binary(b)) = timed.try_recv() else {
+            panic!("no timed video");
+        };
+        assert_eq!(b[0], KIND_VIDEO_TIMED);
+        let t = u64::from_be_bytes(b[1..9].try_into().unwrap());
+        assert!((before..=after).contains(&t));
+        assert_eq!(&b[9..], KEY);
+        let Ok(Message::Binary(w)) = plain.try_recv() else {
+            panic!("no plain video");
+        };
+        assert_eq!(w[0], 1);
+        assert_eq!(&w[1..], KEY);
+    }
+
+    #[test]
+    fn the_codec_a_player_is_told_says_hdr() {
+        let _g = LIVE_TEST_LOCK.blocking_lock();
+        let live = Arc::new(Live::new("10.0.0.41".into(), true, DEFAULT_KEEP_ALIVE));
+        live.hdr.store(true, Ordering::Relaxed);
+        live.bitrate_kbps.store(20_000, Ordering::Relaxed);
+        *LIVE.lock().unwrap() = Some(live);
+        assert_eq!(live_video("10.0.0.41"), Some(("h265_hdr", 20_000)));
+        assert_eq!(live_video("10.0.0.42"), None);
+        *LIVE.lock().unwrap() = None;
     }
 
     #[test]

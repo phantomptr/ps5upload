@@ -116,6 +116,40 @@ pub fn from_app(app: u32, l2: u8, r2: u8) -> u32 {
     b
 }
 
+/// Every bit of [`button`] the helper takes.
+pub const PAD_BITS: u32 = button::CREATE
+    | button::L3
+    | button::R3
+    | button::OPTIONS
+    | button::UP
+    | button::RIGHT
+    | button::DOWN
+    | button::LEFT
+    | button::L2
+    | button::R2
+    | button::L1
+    | button::R1
+    | button::TRIANGLE
+    | button::CIRCLE
+    | button::CROSS
+    | button::SQUARE
+    | button::PS
+    | button::TOUCHPAD;
+
+/// Buttons already in libScePad's layout (a native PS5 app reads its pad with libScePad) as the
+/// helper's: the same bits, any others dropped, and L2 / R2 down while their trigger is pressed
+/// at all, as [`from_app`] does.
+pub fn from_raw(raw: u32, l2: u8, r2: u8) -> u32 {
+    let mut b = raw & PAD_BITS;
+    if l2 > 0 {
+        b |= button::L2;
+    }
+    if r2 > 0 {
+        b |= button::R2;
+    }
+    b
+}
+
 /// One finger on the touchpad (x 0-1919, y 0-1079 as the helper scales it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Touch {
@@ -881,6 +915,26 @@ mod tests {
         // every app bit maps to a distinct helper bit
         let all = APP_TO_PAD.iter().fold(0, |a, (x, _)| a | x);
         assert_eq!(from_app(all, 0, 0).count_ones(), 16);
+    }
+
+    #[test]
+    fn raw_buttons_are_kept_as_they_are_and_unknown_bits_dropped() {
+        assert_eq!(
+            from_raw(button::CROSS | button::PS, 0, 0),
+            button::CROSS | button::PS
+        );
+        assert_eq!(from_raw(button::TOUCHPAD, 0, 0), button::TOUCHPAD);
+        assert_eq!(from_raw(0, 9, 0), button::L2);
+        assert_eq!(from_raw(0, 0, 9), button::R2);
+        assert_eq!(
+            from_raw(0x8000_0000 | 0x20000, 0, 0),
+            0,
+            "unknown bits are dropped"
+        );
+        // the app layout and the raw one say the same for every button
+        for (app, pad) in APP_TO_PAD {
+            assert_eq!(from_raw(pad, 0, 0), from_app(app, 0, 0));
+        }
     }
 
     #[test]

@@ -18,6 +18,14 @@
 //!   "denied" | "no_answer" (the host did not answer in time) | "closed" | "not_playing" |
 //!   "old_helper" | "unreachable" | "slow_down" (5 wrong codes in a minute) | "seat_taken" (a
 //!   resume to the stream's controller, which the host needs back, with no pad free)}`.
+//! * the hello may say what the guest plays on ([`ClientInfo`]): `"client": {"kind": "ps5",
+//!   "app": "play", "v": "13.0.0", "caps": {"hevc", "main10", "raw_pad", "timing"}}` (all
+//!   optional, short words only, unknown keys ignored). The host sees it (`client_kind`,
+//!   `client_app`, `client_v` on the ask and the guest); a guest whose app said it cannot decode
+//!   the session's codec gets `codec_warning` ("hevc", "main10") in "joined" and its status, the
+//!   host the same on the ask and the guest (nobody is refused for it). `raw_pad`: its pad
+//!   frames carry libScePad's button bits; `timing`: its pictures come as kind 7 (with the
+//!   engine's time, as the host's page can ask) and its pongs carry `engine_us`.
 //! * guest → engine: binary pad frames ([`parse_pad`]), `{"ping": t}` (answered `{"pong": t}`),
 //!   `{"leave": 1}`.
 //! * engine → guest: the session's picture and sound exactly as the watch party gets them (same
@@ -158,8 +166,9 @@ const MOTION_ABSURD: f32 = 1e5;
 /// apps' bits (`PadButton`, the same as Remote Play's), turned into the helper's (libScePad's,
 /// `vpad::from_app`); sticks 0-255 (128 at rest), touch in 1920 × 1080, gyro in rad/s, accel in
 /// g. `seq` is the guest's (it may start anywhere): the link numbers what it sends to the helper
-/// itself.
-pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
+/// itself. `raw`: the guest's app said its buttons are libScePad's already (`caps.raw_pad`, a
+/// native PS5 app): kept as they are (`vpad::from_raw`).
+pub(crate) fn parse_pad(b: &[u8], raw: bool) -> Option<(u32, PadState)> {
     if b.len() < 16 || b[0] != KIND_PAD {
         return None;
     }
@@ -216,7 +225,11 @@ pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
     Some((
         seq,
         PadState {
-            buttons: vpad::from_app(buttons, b[13], b[14]),
+            buttons: if raw {
+                vpad::from_raw(buttons, b[13], b[14])
+            } else {
+                vpad::from_app(buttons, b[13], b[14])
+            },
             lx: b[9],
             ly: b[10],
             rx: b[11],
@@ -868,6 +881,9 @@ impl PageReport {
                 Some("webcodecs") => Some("webcodecs"),
                 Some("mse") => Some("mse"),
                 Some("track") => Some("track"),
+                // A native app's own decoder (the PS5's).
+                Some("native") => Some("native"),
+                Some("ps5") => Some("ps5"),
                 _ => None,
             },
             jitter_ms: n("jitter_ms").map(|x| (x.min(60_000.0) * 10.0).round() / 10.0),
@@ -891,6 +907,8 @@ impl PageReport {
                 Some("webcodecs") => Some("webcodecs"),
                 Some("wasm") => Some("wasm"),
                 Some("mse") => Some("mse"),
+                Some("native") => Some("native"),
+                Some("ps5") => Some("ps5"),
                 _ => None,
             },
             snd_decoded: n("snd_decoded").map(|x| x as u64),
@@ -1100,6 +1118,10 @@ pub(crate) struct Guest {
     stats: Arc<Stats>,
     /// An internet guest's peer connection (their last one), None on the LAN.
     net: Option<Arc<crate::join_net::PeerInfo>>,
+    /// What their app said about itself (their last hello).
+    client: ClientInfo,
+    /// Their app may not show this session's picture ([`ClientInfo::codec_warning`]).
+    codec_warning: Option<&'static str>,
 }
 
 /// A guest on [`STREAM_SEAT`] giving it back to the host's side.
@@ -1225,6 +1247,8 @@ pub(crate) enum Decision {
 struct Ask {
     id: u64,
     name: String,
+    /// The guest's app, for the host's prompt ("on a PS5").
+    client: ClientInfo,
     answer: oneshot::Sender<Decision>,
 }
 
@@ -1498,6 +1522,8 @@ impl Party {
             joined_at: now,
             stats: Arc::default(),
             net: None,
+            client: ClientInfo::default(),
+            codec_warning: None,
         });
         self.guests.last()
     }
@@ -1999,6 +2025,12 @@ impl Party {
                     // "stutters", "poor"; null before its first report or from an older page).
                     "page": g.stats.page_json(now),
                     "quality": g.stats.quality(now),
+                    // Their app ("ps5" / "play" / its version), when it said; and a picture it
+                    // said it cannot show ("hevc", "main10").
+                    "client_kind": g.client.kind,
+                    "client_app": g.client.app,
+                    "client_v": g.client.v,
+                    "codec_warning": g.codec_warning,
                 })
             })
             .collect();
@@ -2010,7 +2042,15 @@ impl Party {
             "invite": invite,
             "players_in": self.guests_in(),
             "guests": guests,
-            "pending": self.pending.iter().map(|a| serde_json::json!({"id": a.id, "name": a.name, "state": "asking"})).collect::<Vec<_>>(),
+            "pending": self.pending.iter().map(|a| serde_json::json!({
+                "id": a.id,
+                "name": a.name,
+                "state": "asking",
+                "client_kind": a.client.kind,
+                "client_app": a.client.app,
+                "client_v": a.client.v,
+                "codec_warning": a.client.codec_warning(live_codec(&self.console)),
+            })).collect::<Vec<_>>(),
             "settings": settings_view(&self.settings),
             "max_guests": MAX_GUESTS,
             // "Guests play as" on this console, and the helper's companion that binds them.
@@ -2047,6 +2087,8 @@ impl Party {
             "took_host": g.took_host,
             "queue": g.stats.queue.load(Ordering::Relaxed),
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
+            // The session's picture may not show on their app ("hevc", "main10").
+            "codec_warning": g.codec_warning,
         }}))
     }
 
@@ -2825,6 +2867,69 @@ impl GuestSocket for WebSocket {
     }
 }
 
+/// What a guest's app says about itself in its hello (`client`): `kind` ("ps5", …), `app`
+/// ("play"), `v` (its version) and what it can do (`caps`). Everything optional and checked:
+/// short words only, unknown keys ignored, anything else as if not said.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClientInfo {
+    kind: Option<String>,
+    app: Option<String>,
+    v: Option<String>,
+    /// Decodes HEVC / HEVC Main10 (None: not said).
+    hevc: Option<bool>,
+    main10: Option<bool>,
+    /// Pad frames carry libScePad's button bits ([`parse_pad`]).
+    raw_pad: bool,
+    /// Takes timed video (kind 7, `[7][u64 BE engine µs][AU]`), and its pongs carry `engine_us`.
+    timing: bool,
+}
+
+/// A word an app may say about itself: 1-24 of `[A-Za-z0-9._-]`.
+fn client_word(v: Option<&serde_json::Value>) -> Option<String> {
+    let w = v?.as_str()?;
+    (!w.is_empty()
+        && w.len() <= 24
+        && w.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')))
+    .then(|| w.to_string())
+}
+
+impl ClientInfo {
+    /// The hello's `client` (anything that is not an object says nothing).
+    fn from_hello(v: Option<&serde_json::Value>) -> ClientInfo {
+        let Some(o) = v.and_then(|v| v.as_object()) else {
+            return ClientInfo::default();
+        };
+        let caps = o.get("caps").and_then(|c| c.as_object());
+        let cap = |k: &str| caps.and_then(|c| c.get(k)).and_then(|x| x.as_bool());
+        ClientInfo {
+            kind: client_word(o.get("kind")),
+            app: client_word(o.get("app")),
+            v: client_word(o.get("v")),
+            hevc: cap("hevc"),
+            main10: cap("main10"),
+            raw_pad: cap("raw_pad").unwrap_or(false),
+            timing: cap("timing").unwrap_or(false),
+        }
+    }
+
+    /// Why this guest may not show the session's picture (`codec`: "h264", "h265" or
+    /// "h265_hdr"): "hevc" (it said it cannot decode HEVC), "main10" (not HEVC Main10, the HDR
+    /// stream's), or None. Said to the guest and the host; nobody is refused for it.
+    fn codec_warning(&self, codec: Option<&str>) -> Option<&'static str> {
+        match codec {
+            Some("h265") | Some("h265_hdr") if self.hevc == Some(false) => Some("hevc"),
+            Some("h265_hdr") if self.main10 == Some(false) => Some("main10"),
+            _ => None,
+        }
+    }
+}
+
+/// The session's codec on `console` ("h264", "h265", "h265_hdr"), or None.
+fn live_codec(console: &str) -> Option<&'static str> {
+    crate::rp_stream_api::live_video(console).map(|(c, _)| c)
+}
+
 #[derive(serde::Deserialize, Default)]
 struct Hello {
     #[serde(default)]
@@ -2836,6 +2941,9 @@ struct Hello {
     code: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// The guest's app ([`ClientInfo`]); read leniently, never a reason to refuse the hello.
+    #[serde(default)]
+    client: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2944,13 +3052,14 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         return;
     };
     let name = clean_name(hello.name.as_deref());
+    let client = ClientInfo::from_hello(hello.client.as_ref());
     let t0 = Instant::now();
     let sock = GUEST_SOCKETS.fetch_add(1, Ordering::Relaxed);
     // What the guest came with, never the credential itself.
     crate::log_at!(
         Debug,
         "together",
-        "join: guest socket {sock} ({}) says hello: resume={} invite={} code={}",
+        "join: guest socket {sock} ({}) says hello: resume={} invite={} code={} app={}/{} caps={:?}",
         if socket.net().is_some() {
             "internet"
         } else {
@@ -2959,6 +3068,9 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         hello.resume.as_deref().is_some_and(|t| !t.is_empty()),
         hello.invite.as_deref().is_some_and(|k| !k.is_empty()),
         hello.code.as_deref().is_some_and(|c| !c.trim().is_empty()),
+        client.kind.as_deref().unwrap_or("-"),
+        client.app.as_deref().unwrap_or("-"),
+        (client.hevc, client.main10, client.raw_pad, client.timing),
     );
     let mut admit = None;
     if let Some(tok) = hello.resume.as_deref().filter(|t| !t.is_empty()) {
@@ -2989,7 +3101,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     let admit = match admit {
         Some(a) => a,
         None => match entry {
-            Some(e) => match ask(&mut socket, e, &name, ip).await {
+            Some(e) => match ask(&mut socket, e, &name, &client, ip).await {
                 Some(a) => a,
                 None => return,
             },
@@ -3024,7 +3136,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             (c, id)
         }
     };
-    play(socket, console, id, ip).await;
+    play(socket, console, id, ip, client).await;
 }
 
 /// A guest coming back with `token`: None when the socket closed while waiting for the host.
@@ -3349,6 +3461,7 @@ async fn ask<S: GuestSocket>(
     socket: &mut S,
     entry: Entry,
     name: &str,
+    client: &ClientInfo,
     ip: IpAddr,
 ) -> Option<Admit> {
     let now = Instant::now();
@@ -3409,6 +3522,7 @@ async fn ask<S: GuestSocket>(
         p.pending.push(Ask {
             id,
             name: name.to_string(),
+            client: client.clone(),
             answer: tx,
         });
         Ok(())
@@ -3749,18 +3863,27 @@ fn now_ms() -> u64 {
 }
 
 /// A guest who is in: picture and sound out, pad states in, until they leave or are let go.
-async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAddr) {
+async fn play<S: GuestSocket>(
+    mut socket: S,
+    console: String,
+    id: u64,
+    ip: IpAddr,
+    client: ClientInfo,
+) {
     static GEN: AtomicU64 = AtomicU64::new(1);
     let gen = GEN.fetch_add(1, Ordering::Relaxed);
     let key = host_key(&console);
     let (tx, mut rx) = mpsc::channel::<Out>(64);
     let net = socket.net();
     let internet = net.is_some();
+    let warning = client.codec_warning(live_codec(&console));
     let Some((fx, player, token, stats)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
         let g = p.guest_mut(id)?;
         g.ip = Some(ip);
         g.net = net;
+        g.client = client.clone();
+        g.codec_warning = warning;
         Some((fx, g.player, g.token.clone(), g.stats.clone()))
     })
     .flatten() else {
@@ -3775,6 +3898,7 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
         PLAYER_QUEUE,
         stats.skipped.clone(),
         internet,
+        client.timing,
     );
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
     // An internet guest whose page offered a video track gets the pictures there (join_net::rtc).
@@ -3808,6 +3932,9 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
             "track": track,
             // …and the sound on the audio track.
             "audio": audio,
+            // Their app said it cannot show this session's picture ("hevc", "main10"): it may
+            // stay dark. Nobody is refused for it.
+            "codec_warning": warning,
         })))
         .await
         .is_err();
@@ -3844,7 +3971,7 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
             },
             inc = socket.recv() => match inc {
                 Some(Ok(Message::Binary(b))) => {
-                    if let Some((_seq, st)) = parse_pad(&b) {
+                    if let Some((_seq, st)) = parse_pad(&b, client.raw_pad) {
                         stats.pad_frames.fetch_add(1, Ordering::Relaxed);
                         if let Some(st) = pacer.offer(Instant::now(), st) {
                             forward_pad(&key, &console, id, gen, st);
@@ -3883,7 +4010,13 @@ async fn play<S: GuestSocket>(mut socket: S, console: String, id: u64, ip: IpAdd
                             }
                         }
                         if let Some(p) = m.ping {
-                            if socket.send(say(serde_json::json!({"pong": p}))).await.is_err() {
+                            // An app that takes timed video lines its clock up with the engine's.
+                            let pong = if client.timing {
+                                serde_json::json!({"pong": p, "engine_us": crate::rp_stream_api::engine_us()})
+                            } else {
+                                serde_json::json!({"pong": p})
+                            };
+                            if socket.send(say(pong)).await.is_err() {
                                 break;
                             }
                         }
@@ -6000,7 +6133,7 @@ mod tests {
     #[test]
     fn a_pad_frame_reads_as_the_guest_page_writes_it() {
         let app = vpad::app_button::PS | vpad::app_button::CROSS;
-        let (seq, s) = parse_pad(&frame(u32::MAX - 1, app, &[], None)).unwrap();
+        let (seq, s) = parse_pad(&frame(u32::MAX - 1, app, &[], None), false).unwrap();
         assert_eq!(seq, u32::MAX - 1, "a clock-based seq is fine");
         let pad = vpad::button::PS | vpad::button::CROSS | vpad::button::L2 | vpad::button::R2;
         assert_eq!(s.buttons, pad);
@@ -6009,52 +6142,59 @@ mod tests {
             (10, 20, 30, 40, 50, 60)
         );
         assert!(s.touch.is_empty() && s.motion.is_none());
-        let (_, s) = parse_pad(&frame(
-            1,
-            0,
-            &[(0, 100, 200), (1, 1900, 1000)],
-            Some([0.5, 0.0, -1.0, 0.0, 1.0, 0.25]),
-        ))
+        let (_, s) = parse_pad(
+            &frame(
+                1,
+                0,
+                &[(0, 100, 200), (1, 1900, 1000)],
+                Some([0.5, 0.0, -1.0, 0.0, 1.0, 0.25]),
+            ),
+            false,
+        )
         .unwrap();
         assert_eq!(s.touch.len(), 2);
         assert_eq!(s.touch[1].x, 1900);
         assert_eq!(s.motion.unwrap().accel, [0.0, 1.0, 0.25]);
         // malformed: three fingers, short, trailing bytes, bad motion, wrong kind
-        assert!(parse_pad(&frame(1, 0, &[(0, 0, 0); 3], None)).is_none());
+        assert!(parse_pad(&frame(1, 0, &[(0, 0, 0); 3], None), false).is_none());
         let f = frame(1, 0, &[(0, 1, 1)], None);
-        assert!(parse_pad(&f[..f.len() - 1]).is_none());
+        assert!(parse_pad(&f[..f.len() - 1], false).is_none());
         let mut f = frame(1, 0, &[], None);
         f.push(9);
-        assert!(parse_pad(&f).is_none());
-        assert!(parse_pad(&frame(1, 0, &[], Some([f32::NAN, 0., 0., 0., 0., 0.]))).is_none());
-        assert!(parse_pad(&frame(1, 0, &[], Some([f32::INFINITY, 0., 0., 0., 0., 0.]))).is_none());
+        assert!(parse_pad(&f, false).is_none());
+        assert!(parse_pad(
+            &frame(1, 0, &[], Some([f32::NAN, 0., 0., 0., 0., 0.])),
+            false
+        )
+        .is_none());
+        assert!(parse_pad(
+            &frame(1, 0, &[], Some([f32::INFINITY, 0., 0., 0., 0., 0.])),
+            false
+        )
+        .is_none());
         let mut f = frame(1, 0, &[], None);
         f[0] = 8;
-        assert!(parse_pad(&f).is_none());
+        assert!(parse_pad(&f, false).is_none());
     }
 
     #[test]
     fn out_of_range_motion_is_held_to_a_real_pads_or_dropped_never_the_whole_frame() {
         let cross = vpad::app_button::CROSS;
         // beyond what a DualSense reads: held to its range
-        let (_, s) = parse_pad(&frame(
-            1,
-            cross,
-            &[],
-            Some([500.0, -500.0, 1.0, 99.0, -99.0, 0.5]),
-        ))
+        let (_, s) = parse_pad(
+            &frame(1, cross, &[], Some([500.0, -500.0, 1.0, 99.0, -99.0, 0.5])),
+            false,
+        )
         .unwrap();
         let m = s.motion.unwrap();
         assert_eq!(m.gyro, [GYRO_MAX, -GYRO_MAX, 1.0]);
         assert_eq!(m.accel, [ACCEL_MAX, -ACCEL_MAX, 0.5]);
         // no reading at all (the helper refuses beyond 1e6): the motion goes, the press stays
         for bad in [1e6_f32, -2e5, 3.4e38] {
-            let (_, s) = parse_pad(&frame(
-                2,
-                cross,
-                &[(0, 5, 6)],
-                Some([0.0, 0.0, 0.0, 0.0, bad, 0.0]),
-            ))
+            let (_, s) = parse_pad(
+                &frame(2, cross, &[(0, 5, 6)], Some([0.0, 0.0, 0.0, 0.0, bad, 0.0])),
+                false,
+            )
             .unwrap();
             assert!(s.motion.is_none(), "{bad}");
             assert_eq!(s.buttons & vpad::button::CROSS, vpad::button::CROSS);
@@ -6062,10 +6202,99 @@ mod tests {
         }
         // everything that reaches the helper is well inside its own limit
         for x in [-1e5_f32, 1e5, 12345.0] {
-            let (_, s) = parse_pad(&frame(3, 0, &[], Some([x; 6]))).unwrap();
+            let (_, s) = parse_pad(&frame(3, 0, &[], Some([x; 6])), false).unwrap();
             let m = s.motion.unwrap();
             assert!(m.gyro.iter().chain(m.accel.iter()).all(|v| v.abs() <= 40.0));
         }
+    }
+
+    #[test]
+    fn a_native_apps_pad_frame_keeps_its_libscepad_buttons() {
+        use vpad::button as pad;
+        let raw = pad::CROSS | pad::PS | pad::TOUCHPAD;
+        let (_, s) = parse_pad(&frame(1, raw | 0x8000_0000, &[], None), true).unwrap();
+        // Triggers 50 / 60 in the frame press L2 / R2 too; the unknown top bit is dropped.
+        assert_eq!(s.buttons, raw | pad::L2 | pad::R2);
+        // Read as the app layout, the same bits would be other buttons.
+        let (_, s) = parse_pad(&frame(1, raw, &[], None), false).unwrap();
+        assert_ne!(s.buttons & !(pad::L2 | pad::R2), raw);
+    }
+
+    #[test]
+    fn a_guests_app_says_what_it_is_and_what_it_can_do() {
+        let c = ClientInfo::from_hello(Some(&serde_json::json!({
+            "kind": "ps5", "app": "play", "v": "13.0.0",
+            "caps": {"hevc": true, "main10": false, "raw_pad": true, "timing": true, "later": 1},
+            "unknown": {"deep": [1, 2, 3]},
+        })));
+        assert_eq!(c.kind.as_deref(), Some("ps5"));
+        assert_eq!(c.app.as_deref(), Some("play"));
+        assert_eq!(c.v.as_deref(), Some("13.0.0"));
+        assert_eq!((c.hevc, c.main10), (Some(true), Some(false)));
+        assert!(c.raw_pad && c.timing);
+        // Nothing, or not an object: nothing said (a browser page sends no client).
+        assert_eq!(ClientInfo::from_hello(None), ClientInfo::default());
+        assert_eq!(
+            ClientInfo::from_hello(Some(&serde_json::json!("ps5"))),
+            ClientInfo::default()
+        );
+        // Words that are too long or carry other characters are as if not said; caps that are
+        // not booleans too.
+        let c = ClientInfo::from_hello(Some(&serde_json::json!({
+            "kind": "x".repeat(25), "app": "<b>", "v": 13,
+            "caps": {"hevc": "yes", "raw_pad": 1},
+        })));
+        assert_eq!(c, ClientInfo::default());
+        // The whole hello still reads with a client of any shape.
+        let h: HelloMsg =
+            serde_json::from_str(r#"{"hello":{"code":"AB","client":[1,2]}}"#).unwrap();
+        assert_eq!(h.hello.code.as_deref(), Some("AB"));
+    }
+
+    #[test]
+    fn a_guest_that_cannot_show_the_picture_is_warned_not_refused() {
+        let c = |hevc: Option<bool>, main10: Option<bool>| ClientInfo {
+            hevc,
+            main10,
+            ..ClientInfo::default()
+        };
+        assert_eq!(
+            c(Some(true), Some(false)).codec_warning(Some("h265_hdr")),
+            Some("main10")
+        );
+        assert_eq!(
+            c(Some(false), None).codec_warning(Some("h265_hdr")),
+            Some("hevc")
+        );
+        assert_eq!(
+            c(Some(false), None).codec_warning(Some("h265")),
+            Some("hevc")
+        );
+        assert_eq!(c(Some(true), Some(false)).codec_warning(Some("h265")), None);
+        assert_eq!(
+            c(Some(false), Some(false)).codec_warning(Some("h264")),
+            None
+        );
+        // Not said: no warning (a browser page says nothing and decides itself).
+        assert_eq!(c(None, None).codec_warning(Some("h265_hdr")), None);
+        assert_eq!(c(Some(false), Some(false)).codec_warning(None), None);
+    }
+
+    #[test]
+    fn a_native_apps_report_names_its_own_decoder_and_sound() {
+        let r = PageReport::from_page(&serde_json::json!({
+            "frames": 10, "decoder": "native", "snd": "native",
+        }))
+        .unwrap();
+        assert_eq!((r.decoder, r.sound), (Some("native"), Some("native")));
+        let r = PageReport::from_page(&serde_json::json!({
+            "frames": 10, "decoder": "ps5", "snd": "ps5",
+        }))
+        .unwrap();
+        assert_eq!((r.decoder, r.sound), (Some("ps5"), Some("ps5")));
+        let r =
+            PageReport::from_page(&serde_json::json!({"frames": 1, "decoder": "other"})).unwrap();
+        assert_eq!(r.decoder, None);
     }
 
     // ── short codes ──
@@ -6978,6 +7207,7 @@ mod tests {
         p.pending.push(Ask {
             id: 99,
             name: "B".into(),
+            client: ClientInfo::default(),
             answer: atx,
         });
         let (fx, keep) = p.tick(t, None);
@@ -7257,6 +7487,7 @@ mod tests {
         p.pending.push(Ask {
             id: 1,
             name: "B".into(),
+            client: ClientInfo::default(),
             answer: atx,
         });
         p.invite(false, t);
@@ -9081,6 +9312,91 @@ mod tests {
         ws.send(TMsg::Text(hello.to_string().into())).await.unwrap();
         let v = next(&mut ws).await;
         assert!(v["stage"] == "refused" && v["why"] != "hello", "{v}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_native_guest_is_shown_on_a_ps5_and_its_pad_and_clock_are_taken_as_they_are() {
+        let _turn = PARTY_TESTS.lock().await;
+        let console = "10.77.0.80";
+        let f = Arc::new(FakeHelper::default());
+        set_helper(console, f.clone());
+        set_live(console, 1);
+        let url = serve().await;
+        let (ci, h) = local();
+        let s = body(
+            open(
+                ci,
+                h,
+                Json(AddrBody {
+                    addr: console.into(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let code = s["invite"]["code"].as_str().unwrap().to_string();
+        let mut g = guest(
+            &url,
+            serde_json::json!({"hello": {"code": code, "name": "Kai", "client": {
+                "kind": "ps5", "app": "play", "v": "13.0.0",
+                "caps": {"hevc": true, "main10": true, "raw_pad": true, "timing": true},
+            }}}),
+        )
+        .await;
+        assert_eq!(next(&mut g).await["stage"], "asking");
+        // The host's prompt says where they play from.
+        let st = host_state(console).await;
+        let ask = &st["pending"][0];
+        assert_eq!(ask["client_kind"], "ps5", "{st}");
+        assert_eq!(ask["client_app"], "play");
+        assert_eq!(ask["client_v"], "13.0.0");
+        assert!(ask["codec_warning"].is_null());
+        allow_next(console, true).await;
+        let j = next(&mut g).await;
+        assert_eq!(j["stage"], "joined", "{j}");
+        assert!(j["codec_warning"].is_null());
+        let st = host_state(console).await;
+        assert_eq!(st["guests"][0]["client_kind"], "ps5", "{st}");
+        assert_eq!(st["guests"][0]["client_app"], "play");
+        // libScePad's TRIANGLE (0x1000 is OPTIONS in the apps' layout) reaches the console as it is.
+        use vpad::button as pad;
+        g.send(TMsg::Binary(frame(1, pad::TRIANGLE, &[], None).into()))
+            .await
+            .unwrap();
+        let player = j["player"].as_u64().unwrap() as u8;
+        for _ in 0..200 {
+            if f.states()
+                .iter()
+                .any(|s| s.slot == player && s.state.buttons == pad::TRIANGLE | pad::L2 | pad::R2)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let sent: Vec<(u8, u32)> = f
+            .states()
+            .iter()
+            .map(|s| (s.slot, s.state.buttons))
+            .collect();
+        assert!(
+            sent.contains(&(player, pad::TRIANGLE | pad::L2 | pad::R2)),
+            "player {player}: {sent:?} {:?}",
+            f.log()
+        );
+        // Its pongs carry the engine's clock (for kind 7's times).
+        g.send(TMsg::Text(r#"{"ping": 5}"#.into())).await.unwrap();
+        let p = next_with(&mut g, "pong").await;
+        assert_eq!(p["pong"], 5);
+        assert!(p["engine_us"].as_u64().is_some(), "{p}");
+        let (ci, h) = local();
+        close(
+            ci,
+            h,
+            Json(AddrBody {
+                addr: console.into(),
+            }),
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
