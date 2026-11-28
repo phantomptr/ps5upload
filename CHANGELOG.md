@@ -14,6 +14,10 @@ What's new in ps5upload, written for humans.
 
 **Installs**
 - The message for a 0x80B2 install error is in plain words now, in every language.
+- **Deleting a package right after installing it from the console gives its space back (#979).** The installer kept the package open for 10 minutes after the install (longer if the PS5 skipped part of it), so the space stayed used after the delete. It now opens the package only while the PS5 is reading it.
+
+**Clean up**
+- **Space no file uses (#979).** For an M.2 or USB drive, **Check** compares the space the drive counts as used with what its files take, and says how much no file holds. It reads names and sizes only.
 
 ## 12.6.44
 

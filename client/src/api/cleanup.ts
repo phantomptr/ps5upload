@@ -138,3 +138,31 @@ export function cleanupApplyStatus(host: string, applyId: number): Promise<Clean
 export function cleanupCancel(host: string, id: number): Promise<unknown> {
   return request("POST", "/api/ps5/cleanup/cancel", { addr: mgmtAddr(host), id }, QUICK_TIMEOUT_MS);
 }
+
+/** "Space no file uses" (#979): an M.2 or USB drive's used space set against what its files take. */
+export interface SpaceCheck {
+  path: string;
+  fs_type: string;
+  total_bytes: number;
+  used_bytes: number;
+  /** What the files and folders on the drive take (allocated blocks). */
+  files_bytes: number;
+  files: number;
+  dirs: number;
+  /** Folders that could not be counted. */
+  skipped: number;
+  /** Used space no file holds. */
+  unaccounted_bytes: number;
+  /** clear: it adds up; held: space no file holds; partial: some folders could not be counted;
+   *  busy: the drive changed during the check. */
+  verdict: "clear" | "held" | "partial" | "busy";
+  elapsed_ms: number;
+}
+
+/** The check counts every file on the drive (names and sizes only): seconds on a drive of games,
+ *  longer with many small files. */
+const SPACE_CHECK_TIMEOUT_MS = 30 * 60_000;
+
+export function spaceCheck(host: string, path: string): Promise<SpaceCheck> {
+  return request("POST", "/api/ps5/space-check", { addr: mgmtAddr(host), path }, SPACE_CHECK_TIMEOUT_MS);
+}

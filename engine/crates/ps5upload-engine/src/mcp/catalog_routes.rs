@@ -712,6 +712,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ps5/smp/image-rw/finish"),
     ("POST", "/api/ps5/smp/rescan"),
     ("GET", "/api/ps5/smp/status"),
+    ("POST", "/api/ps5/space-check"),
     ("GET", "/api/ps5/status"),
     ("GET", "/api/ps5/syslog/tail"),
     ("GET", "/api/ps5/tailnet"),
