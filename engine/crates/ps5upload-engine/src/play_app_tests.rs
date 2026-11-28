@@ -289,6 +289,9 @@ async fn an_app_pairs_with_the_code_on_the_tv_and_its_token_works_after_a_restar
     assert_eq!(d["doc"]["paired"], true, "{d}");
     assert!(d["doc"]["together"].is_object());
     assert_eq!(d["doc"]["console"]["addr"], "127.0.0.1");
+    // No helper heard from: its version and app API are not known (null, not missing).
+    assert!(d["doc"]["helper"]["version"].is_null(), "{d}");
+    assert!(d["doc"]["helper"].get("app_api").is_some());
     // Listed for PS5Upload, connected, never with its token.
     let (ci, h) = local();
     let (_, list) = body(paired(ci, h).await).await;

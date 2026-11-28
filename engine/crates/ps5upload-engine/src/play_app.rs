@@ -36,7 +36,10 @@
 //! * with a valid token (made for this console's address: a token only ever acts on the console
 //!   that paired it), the status document: `{"doc": {"rev", "paired": true, "engine", "console",
 //!   "session", "together", "remote_play", "helper", "keep_awake", "app"}}`, pushed when it
-//!   changes (round trips and the invite's time left refresh every 10 s at most).
+//!   changes (round trips and the invite's time left refresh every 10 s at most). `helper` is
+//!   `{"present", "version", "app_api"}`: the helper's version from its hello answer, and whether
+//!   it serves the app's loopback API (what it said, else version 13.0.0 or newer); null when not
+//!   known.
 //! * intents, each with an optional `"req"` number echoed in the answer `{"done": kind, "req",
 //!   "ok", "error"?}`: `{"decide": {"ask", "allow"}}` (the first answer to an ask wins, from here
 //!   or PS5Upload: a later one gets `already_answered`), `{"kick": {"player"}}`, `{"invite":
@@ -844,6 +847,7 @@ fn status(console: &str, secrets: bool) -> Value {
         None => json!({"state": "idle"}),
     };
     let app = with_hub(|h| h.reports.get(&host_key(console)).cloned()).unwrap_or_default();
+    let (helper_version, app_api) = crate::mesh_api::helper_info(console);
     json!({
         "engine": {
             "version": env!("CARGO_PKG_VERSION"),
@@ -854,9 +858,13 @@ fn status(console: &str, secrets: bool) -> Value {
         "together": crate::join::app_view(console, secrets),
         // Remote Play paired with this console on this engine; the helper heard from lately.
         "remote_play": {"paired": crate::consoles_api::rp_paired(console)},
+        // `version` and `app_api` (it serves the app's 127.0.0.1:9181) from its last hello
+        // answer, null when not known: the app tells "no helper" from "an older helper".
         "helper": {
             "present": crate::mesh_api::helper_seen_s(console)
                 .map(|s| s < HELPER_SEEN.as_secs()),
+            "version": helper_version,
+            "app_api": app_api,
         },
         "keep_awake": settings.get("keep_awake_mode").cloned().unwrap_or(Value::Null),
         "app": app,
