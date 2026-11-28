@@ -329,6 +329,23 @@ res = dict(kv.split("=") for kv in out.split("result ", 1)[1].split("\n")[0].spl
 check(int(res.get("pictures", 0)) > 250, "pictures go on after the change")
 check(any(s.get("route") == "tailscale" and s.get("route_switches") == 1 for s in r["stats"]), "the host hears the change")
 
+# 11b2. A change of way that fails after the engine moved the seat (13.0.0 audit): the new way's
+# socket takes the seat (the old one hears "replaced") and never says joined. The game must not
+# end with "replaced": the session comes back with its token, and the failed change is not tried
+# again at once.
+p, port, rep, (dark,) = ways("ways_switch_fail", "--seconds", "16", "--lifetime", "18", "--proxy", "0:4:7.5",
+                             "--resume-mute", "1")
+out = run("join", "127.0.0.1", str(port), "ABCDEF", "--seconds", "14", "--way", f"lan:{dark}",
+          "--way", f"tailscale:{port}")
+r = finish(p, rep)
+check(r["muted_resumes"] == 1, "the change of way took the seat and went quiet")
+check("phase ended replaced" not in out and "phase ended lost" not in out, "a failed change never ends the game")
+check("failed; the way in use stays" in out and "next change in 5 s" in out, "a failed change waits before the next")
+resumes = [h for h in r["hellos"] if "resume" in h]
+check(len(resumes) == 2, f"one change, then one come-back with the token ({len(resumes)} resumes)")
+res = dict(kv.split("=") for kv in out.split("result ", 1)[1].split("\n")[0].split()) if "result " in out else {}
+check(int(res.get("pictures", 0)) > 300, f"pictures go on after the come-back ({res.get('pictures')})")
+
 # 11c. Nothing direct answers: through this home's PS5Upload (the bridge) with the invite's room
 # and certificate; a bridge that fails says why.
 room, fp = "AAAAAAAAAAAAAAAAAAAAAh", "AB:CD:EF"

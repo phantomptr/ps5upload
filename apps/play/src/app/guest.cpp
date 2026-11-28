@@ -263,7 +263,13 @@ void Guest::run() noexcept
                     ever_joined = true;
             }
             else if (got == net::WsClient::Got::closed)
+            {
+                // A change of way in flight: the engine moved the seat to its socket. Taken over
+                // when it is confirmed; else the resume path below (never the end of the game).
+                if (route_settle())
+                    continue;
                 break;
+            }
             const std::uint64_t now = net::now_us();
             if (joined_.load() && now - last_ping >= kPingEveryUs)
             {
@@ -625,6 +631,10 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
         break;
     case proto::GuestEvent::bye:
         log("guest: bye %s", e.why);
+        // This guest's own change of way moved the seat (docs/ROUTES.md §4): the new socket
+        // takes over, or the session comes back with its token. Never the end of the game.
+        if (!std::strcmp(e.why, "replaced") && replaced_by_own_switch())
+            break;
         // The host's game stopped: the place is kept while they may start again, so come back
         // with the token (the engine answers "waiting" until they do), as the web page does.
         if (!std::strcmp(e.why, "host_stopped") && token_[0] && !released_.load())

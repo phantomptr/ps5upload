@@ -388,6 +388,19 @@ int Selector::history(Change *out, int cap) const noexcept
     return n;
 }
 
+// ---- SwitchBackoff --------------------------------------------------------------------------
+
+void SwitchBackoff::failed(std::uint64_t now) noexcept
+{
+    std::uint64_t w = kFirstUs;
+    for (int i = 0; i < fails_ && w < kMaxUs; ++i)
+        w *= 2;
+    wait_ = w < kMaxUs ? w : kMaxUs;
+    until_ = now + wait_;
+    if (fails_ < 1000)
+        ++fails_;
+}
+
 // ---- Pacer ----------------------------------------------------------------------------------
 
 bool Pacer::take(std::uint64_t now, unsigned bytes) noexcept

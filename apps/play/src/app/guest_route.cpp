@@ -32,6 +32,11 @@ constexpr std::uint64_t kReopenEveryUs = 30000000;
 constexpr unsigned kReopenWireBytes = 600; // a connect, the upgrade and its answer
 constexpr int kProbes = route::Selector::kMax; // every way can be raced and probed
 constexpr unsigned kBridgeMs = 20000;
+// A change of way: "joined" on the new socket within this after its hello, else it failed.
+constexpr std::uint64_t kSwitchWaitUs = 3000000;
+// "replaced" on the old socket this soon after a change failed is that change's (the engine had
+// moved the seat before the new socket went): the session comes back with its token.
+constexpr std::uint64_t kReplacedGraceUs = 5000000;
 
 // One per way that is checked (the bridge never is); static: they are large and live for the app.
 route::Probe g_probes[kProbes];
@@ -366,6 +371,14 @@ void Guest::route_main() noexcept
     std::uint64_t last_view = 0;
     while (route_run_.load())
     {
+        // A change of way in flight: its socket is watched closely; backups wait for it.
+        const int sw = sw_state_.load();
+        if (sw == sw_open || sw == sw_wait)
+        {
+            net::sleep_ms(20);
+            route_switch_step();
+            continue;
+        }
         net::sleep_ms(100);
         const std::uint64_t now = net::now_us();
         pthread_mutex_lock(&route_lock_);
@@ -416,10 +429,13 @@ void Guest::route_main() noexcept
             sel_.meter(i) = m;
             pthread_mutex_unlock(&route_lock_);
         }
-        if (joined_.load() && switch_to_.load() < 0)
+        if (joined_.load() && switch_to_.load() < 0 && sw_state_.load() == sw_idle)
         {
+            // After a change that failed, the next waits (SwitchBackoff): never again at once.
             pthread_mutex_lock(&route_lock_);
-            const auto d = sel_.decide(now);
+            route::Selector::Decision d;
+            if (sw_backoff_.allowed(now))
+                d = sel_.decide(now);
             pthread_mutex_unlock(&route_lock_);
             if (d.to >= 0 && d.to != active)
             {
@@ -448,6 +464,10 @@ void Guest::route_stop() noexcept
         pthread_join(route_thread_, nullptr);
         route_thread_ = {};
     }
+    // A change of way still in flight ends with the session (the route thread has stopped).
+    if (sw_state_.exchange(sw_idle) != sw_idle)
+        g_next.close();
+    old_replaced_ = false;
     // The race threads are the routed guest's (the first player's): another controller's seat
     // has no ways of its own and must not join threads that are not its.
     if (!n_routes_)
@@ -457,82 +477,154 @@ void Guest::route_stop() noexcept
             pthread_join(g_race_thread[i], nullptr), g_race_started[i] = false;
 }
 
-// On the guest thread: a change the selector asked for.
+// On the guest thread: starts a change the selector asked for, and ends one the route thread
+// finished (takes the new socket over, or counts the failure). Never waits on the network: the
+// picture goes on through the way in use until the new one is confirmed.
 void Guest::route_tick(std::uint64_t now) noexcept
 {
-    (void)now;
+    const int st = sw_state_.load();
+    if (st == sw_ready)
+    {
+        // keep the message: taking the socket over resets the reader
+        ws_.adopt(g_next);
+        pthread_mutex_lock(&route_lock_);
+        const int from = sel_.active();
+        if (from >= 0 && sel_.at(from).way == route::Way::bridge)
+            sel_.meter(from).lost_connection(now); // not checked while not in use
+        sel_.use(sw_to_, now, sw_why_);
+        sw_backoff_.ok();
+        const route::Kind kind = sel_.at(sw_to_).kind;
+        pthread_mutex_unlock(&route_lock_);
+        old_replaced_ = false;
+        sw_state_ = sw_idle;
+        handle_text(sw_joined_, sw_joined_n_);
+        ws_.send_text("{\"keyframe\":true}");
+        pthread_mutex_lock(&lock_);
+        view_.route_changed_us = now;
+        pthread_mutex_unlock(&lock_);
+        log("route: now on %s (%s) in %u ms", kind_text(static_cast<int>(kind)), sw_why_,
+            static_cast<unsigned>((now - sw_t0_) / 1000));
+        route_view();
+        return;
+    }
+    if (st == sw_failed)
+    {
+        pthread_mutex_lock(&route_lock_);
+        sel_.meter(sw_to_).lost_connection(now);
+        sw_backoff_.failed(now);
+        const unsigned wait_s = static_cast<unsigned>(sw_backoff_.wait_us() / 1000000);
+        const route::Kind kind = sel_.at(sw_to_).kind;
+        pthread_mutex_unlock(&route_lock_);
+        sw_failed_at_ = now;
+        sw_state_ = sw_idle;
+        log("route: the change to %s (%s) failed; the way in use stays, next change in %u s at the soonest",
+            kind_text(static_cast<int>(kind)), sw_why_, wait_s);
+        if (old_replaced_)
+        {
+            // The engine had handed the seat to the new way's socket: come back with the token
+            // (the resume path, from the best way), never "replaced".
+            old_replaced_ = false;
+            log("route: the seat had moved; coming back with the token");
+            ws_.close();
+        }
+        return;
+    }
+    if (st != sw_idle)
+        return;
     const int to = switch_to_.load();
     if (to < 0 || !joined_.load())
         return;
-    char why[12];
-    pthread_mutex_lock(&lock_);
-    std::snprintf(why, sizeof why, "%s", view_.route_why[0] ? view_.route_why : "upgrade");
-    pthread_mutex_unlock(&lock_);
-    route_switch(to, why);
     switch_to_ = -1;
+    pthread_mutex_lock(&lock_);
+    std::snprintf(sw_why_, sizeof sw_why_, "%s", view_.route_why[0] ? view_.route_why : "upgrade");
+    pthread_mutex_unlock(&lock_);
+    if (!make_hello(sw_hello_, sizeof sw_hello_, true, to))
+        return;
+    sw_to_ = to;
+    sw_t0_ = now;
+    old_replaced_ = false;
+    sw_state_ = sw_open; // the route thread takes it from here
 }
 
-// Joins again on way `to` beside the open socket (make before break) and takes it over.
-bool Guest::route_switch(int to, const char *why) noexcept
+// On the route thread: joins again on way sw_to_ beside the open socket (make before break) and
+// waits for "joined" (kSwitchWaitUs at most); the guest thread takes it over.
+void Guest::route_switch_step() noexcept
 {
-    const std::uint64_t t0 = net::now_us();
-    int status = 0;
-    if (!route_open(g_next, to, &status))
-    {
-        log("route: could not open the %s way (%s)", why, g_next.error());
-        pthread_mutex_lock(&route_lock_);
-        sel_.meter(to).lost_connection(net::now_us());
-        pthread_mutex_unlock(&route_lock_);
-        return false;
-    }
-    char hello[768];
-    make_hello(hello, sizeof hello, true, to);
-    if (!g_next.send_text(hello))
-    {
+    const auto fail = [this](const char *what) {
+        log("route: the %s way %s", sw_why_, what);
         g_next.close();
-        return false;
-    }
-    while (net::now_us() - t0 < 3000000 && !stop_.load())
+        sw_state_ = sw_failed;
+    };
+    if (sw_state_.load() == sw_open)
     {
-        const auto got = g_next.next(100);
+        int status = 0;
+        if (!route_open(g_next, sw_to_, &status))
+        {
+            log("route: could not open the %s way (%s)", sw_why_, g_next.error());
+            sw_state_ = sw_failed;
+            return;
+        }
+        if (!g_next.send_text(sw_hello_))
+            return fail("could not be greeted");
+        sw_t0_ = net::now_us();
+        sw_state_ = sw_wait;
+        return;
+    }
+    if (sw_state_.load() != sw_wait)
+        return;
+    for (int i = 0; i < 16; ++i)
+    {
+        const auto got = g_next.next(5); // 0 would never read the socket
         if (got == net::WsClient::Got::closed)
+            return fail("closed before taking the seat");
+        if (got != net::WsClient::Got::message)
             break;
-        if (got != net::WsClient::Got::message || g_next.op() != ws::kText)
+        if (g_next.op() != ws::kText)
             continue;
         proto::GuestEvent e;
         if (!proto::parse_guest(reinterpret_cast<const char *>(g_next.data()), g_next.size(), e))
             continue;
         if (e.type == proto::GuestEvent::joined)
         {
-            // keep the message: taking the socket over resets the reader
-            char joined[512];
-            const std::size_t jn = g_next.size() < sizeof joined ? g_next.size() : sizeof joined - 1;
-            std::memcpy(joined, g_next.data(), jn);
-            joined[jn] = 0;
-            ws_.adopt(g_next);
-            const std::uint64_t now = net::now_us();
-            pthread_mutex_lock(&route_lock_);
-            const int from = sel_.active();
-            if (from >= 0 && sel_.at(from).way == route::Way::bridge)
-                sel_.meter(from).lost_connection(now); // not checked while not in use
-            sel_.use(to, now, why);
-            pthread_mutex_unlock(&route_lock_);
-            handle_text(joined, jn);
-            ws_.send_text("{\"keyframe\":true}");
-            pthread_mutex_lock(&lock_);
-            view_.route_changed_us = now;
-            pthread_mutex_unlock(&lock_);
-            log("route: now on %s (%s) in %u ms", kind_text(static_cast<int>(sel_.at(to).kind)), why,
-                static_cast<unsigned>((now - t0) / 1000));
-            route_view();
-            return true;
+            const std::size_t jn = g_next.size() < sizeof sw_joined_ ? g_next.size() : sizeof sw_joined_ - 1;
+            std::memcpy(sw_joined_, g_next.data(), jn);
+            sw_joined_[jn] = 0;
+            sw_joined_n_ = jn;
+            sw_state_ = sw_ready;
+            return;
         }
         if (e.type == proto::GuestEvent::refused || e.type == proto::GuestEvent::bye)
-            break;
+            return fail("was refused the seat");
     }
-    log("route: the %s way did not take the seat", why);
-    g_next.close();
-    return false;
+    if (net::now_us() - sw_t0_ > kSwitchWaitUs || stop_.load())
+        fail("did not take the seat");
+}
+
+// On the guest thread, when the way in use closed: a change of way in flight (the engine moved
+// the seat to its socket) is waited for and taken over. True: playing on the new way now.
+bool Guest::route_settle() noexcept
+{
+    while (!stop_.load())
+    {
+        const int st = sw_state_.load();
+        if (st == sw_idle)
+            return false;
+        if (st == sw_ready || st == sw_failed)
+            break;
+        net::sleep_ms(20);
+    }
+    route_tick(net::now_us());
+    return ws_.is_open() && joined_.load();
+}
+
+// A "replaced" on the way in use is this guest's own change of way (in flight, or one that just
+// failed after the engine had moved the seat): not the end of the game.
+bool Guest::replaced_by_own_switch() noexcept
+{
+    if (sw_state_.load() == sw_idle && (!sw_failed_at_ || net::now_us() - sw_failed_at_ > kReplacedGraceUs))
+        return false;
+    old_replaced_ = true;
+    return true;
 }
 
 // The way in use dropped (or its connect failed): the best other way now.

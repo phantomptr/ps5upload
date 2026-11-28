@@ -16,7 +16,7 @@ import time
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 report = {"hellos": [], "pads": [], "keyframes": 0, "pings": 0, "stats": [], "leaves": 0,
           "app_hellos": [], "intents": [], "bad_pads": 0, "connections": 0, "hub_hosts": [], "hub_host_msgs": [],
-          "probe_sockets": 0, "probe_checks": [], "bursts": [], "replaced": 0, "bridges": [],
+          "probe_sockets": 0, "probe_checks": [], "bursts": [], "replaced": 0, "muted_resumes": 0, "bridges": [],
           "chats": [], "mics": [], "voice_up": [], "knocks": [], "http": [], "notices": [], "flags": []}
 T0 = time.monotonic()
 lock = threading.Lock()
@@ -219,6 +219,20 @@ def guest(ws, args, state, via=None):
     h = json.loads(hello)["hello"]
     rec("hellos", dict(h, _via=via) if via else h)
     resume = h.get("resume")
+    if resume and state.get("live") and state.get("muted", 0) < args.resume_mute:
+        # a change of way whose socket takes the seat a second later (the old socket hears
+        # "replaced") and then never says joined: the change fails after the seat moved
+        state["muted"] = state.get("muted", 0) + 1
+        rec("muted_resumes")
+        time.sleep(1.0)
+        state["live"] = object()
+        rec("replaced")
+        try:
+            ws.c.settimeout(6)
+            ws.recv()  # until the guest gives up on it (it closes the socket)
+        except Exception:
+            pass
+        return
     if resume and state.get("live"):
         rec("replaced")
     if resume and resume != "tok1":
@@ -739,6 +753,8 @@ def main():
     ap.add_argument("--room-pw", help="knocks need this password (sealed to the room key)")
     ap.add_argument("--name-taken", help="a guest with this name is told it is taken")
     ap.add_argument("--rooms-429", type=int, default=0, help="the first N GET /rooms answer 429 Retry-After 1")
+    ap.add_argument("--resume-mute", type=int, default=0,
+                    help="the first N changes of way take the seat and never say joined")
     ap.add_argument("--proxy", action="append", default=[],
                     help="DELAY_MS[:HOLE_AFTER_S[:HOLE_UNTIL_S]]: another way in, with that round trip")
     args = ap.parse_args()

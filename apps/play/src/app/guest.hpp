@@ -198,7 +198,9 @@ class Guest
     bool route_is_bridge(int way) noexcept; // -1: the one in use
     void route_pick() noexcept;
     void route_tick(std::uint64_t now) noexcept;
-    bool route_switch(int to, const char *why) noexcept;
+    void route_switch_step() noexcept; // the route thread's half of a change of way
+    bool route_settle() noexcept;      // the old socket closed during a change: wait for its end
+    bool replaced_by_own_switch() noexcept;
     void route_sent(std::uint32_t id) noexcept;
     void route_answer(std::uint32_t id) noexcept;
     void route_picture(std::uint64_t engine_us) noexcept;
@@ -241,6 +243,31 @@ class Guest
     pthread_t route_thread_{};
     std::int64_t last_skipped_ = -1;
     int lost_tries_ = 0;
+    // A change of way in flight (make before break, docs/ROUTES.md §4): the guest thread asks
+    // (sw_open), the route thread opens the new way, says hello with the token and waits for
+    // "joined" (sw_wait → sw_ready or sw_failed); the guest thread then takes the new socket over
+    // or counts the failure (sw_backoff_, under route_lock_). The picture goes on through the old
+    // socket meanwhile.
+    enum : int
+    {
+        sw_idle,
+        sw_open,
+        sw_wait,
+        sw_ready,
+        sw_failed
+    };
+    std::atomic<int> sw_state_{sw_idle};
+    int sw_to_ = -1;
+    char sw_why_[12] = {};
+    char sw_hello_[768] = {};
+    char sw_joined_[512] = {};
+    std::size_t sw_joined_n_ = 0;
+    std::uint64_t sw_t0_ = 0;
+    std::uint64_t sw_failed_at_ = 0;
+    route::SwitchBackoff sw_backoff_;
+    // The engine gave the seat to the new way's socket (the old one heard "replaced"): a change
+    // that then fails comes back with the token, it never ends the game.
+    bool old_replaced_ = false;
     // why the last try through this home's PS5Upload failed ("" none): the bridge's own reason,
     // "old" (no /api/join/bridge there: older than 13.0.0) or "unreachable"
     char bridge_why_[16] = {};

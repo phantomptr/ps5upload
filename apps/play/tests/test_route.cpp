@@ -319,6 +319,33 @@ void test_pacer()
     CHECK(ok == asked);
 }
 
+void test_switch_backoff()
+{
+    // a failed change of way waits 5 s, then 10, 20, 40, 80, then 2 minutes at most; one that
+    // works starts over
+    SwitchBackoff b;
+    CHECK(b.allowed(0));
+    b.failed(1 * S);
+    CHECK(!b.allowed(1 * S + 100000)); // not again a tenth of a second later (the audit's bug)
+    CHECK(!b.allowed(5 * S));
+    CHECK(b.allowed(6 * S));
+    const std::uint64_t want[] = {10 * S, 20 * S, 40 * S, 80 * S, 120 * S, 120 * S};
+    std::uint64_t t = 6 * S;
+    for (std::uint64_t w : want)
+    {
+        b.failed(t);
+        CHECK(b.wait_us() == w);
+        CHECK(!b.allowed(t + w - 1));
+        CHECK(b.allowed(t + w));
+        t += w;
+    }
+    CHECK(b.fails() == 7);
+    b.ok();
+    CHECK(b.allowed(t) && b.fails() == 0);
+    b.failed(t);
+    CHECK(b.wait_us() == SwitchBackoff::kFirstUs);
+}
+
 void test_kinds()
 {
     CHECK(kind_of_addr("192.168.86.100") == Kind::lan);
@@ -341,6 +368,7 @@ int main()
     test_choice_at_connect();
     test_switching();
     test_pacer();
+    test_switch_backoff();
     test_kinds();
     std::printf("route: %d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

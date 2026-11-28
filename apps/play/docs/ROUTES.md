@@ -238,14 +238,17 @@ The checks sockets of the ways not chosen stay open as warm backups.
 - Going back to a way left less than 2 minutes ago needs twice the hold.
 - At most 3 changes by choice in 10 minutes (a lost way may always be left).
 - Equal tiers never cause a change.
+- A change that failed is not tried again at once (`SwitchBackoff`): the next change waits 5 s,
+  then 10, 20, 40, 80 s, at most 2 minutes. A change that works starts it over.
 
 The tests cover each rule, including two ways that trade places every 15 s for 30 minutes
 (at most 3 changes in each 10 minutes).
 
-**How it changes way** (`Guest::route_switch`, make before break):
+**How it changes way** (`Guest::route_tick` and `route_switch_step`, make before break):
 
-1. Open the guest socket on the new way and send the hello with the **resume token**, the same
-   one a reconnect uses.
+1. The route thread opens the guest socket on the new way and sends the hello with the **resume
+   token**, the same one a reconnect uses. The guest thread never waits on it: the picture goes
+   on through the old way meanwhile.
 2. The engine hands the seat to the new socket: one socket per token. The old socket is told
    `{"bye":"replaced"}`. The pad, the console's controller slot and the player number stay.
 3. On `joined`, the app takes the new connection over (`WsClient::adopt`), with anything already
@@ -253,8 +256,10 @@ The tests cover each rule, including two ways that trade places every 15 s for 3
 4. The picture decoder starts again at the new way's first keyframe, which is a **keyframe
    boundary**. Until then the last picture stays on screen (up to 1.5 s), and there is no
    "Connection lost" screen.
-5. A change that fails leaves the old way in use. If the engine had already handed the seat over,
-   the normal resume path takes over, and it starts from the best way.
+5. A change that fails (no `joined` within 3 s) leaves the old way in use. If the engine had
+   already handed the seat over (the old socket heard `replaced` during the change, or within 5 s
+   after it failed), the normal resume path takes over with the token; a change of way never ends
+   the game.
 
 **After a drop**, the reconnect goes to the best other way first (`route_lost`), not the same
 address again. Every third try goes back to the same way.

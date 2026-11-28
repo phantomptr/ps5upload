@@ -246,6 +246,40 @@ class Selector
     int changes_ = 0;
 };
 
+// A change of way that failed is not tried again at once (13.0.0 audit: it was tried again within
+// a tenth of a second, over and over). The next change waits kFirstUs, then twice as long after
+// each further failure, at most kMaxUs; a change that works starts it over.
+class SwitchBackoff
+{
+  public:
+    static constexpr std::uint64_t kFirstUs = 5000000;
+    static constexpr std::uint64_t kMaxUs = 120000000;
+    void failed(std::uint64_t now) noexcept;
+    void ok() noexcept
+    {
+        fails_ = 0;
+        until_ = 0;
+    }
+    bool allowed(std::uint64_t now) const noexcept
+    {
+        return now >= until_;
+    }
+    int fails() const noexcept
+    {
+        return fails_;
+    }
+    // The wait the last failure set (0: none).
+    std::uint64_t wait_us() const noexcept
+    {
+        return wait_;
+    }
+
+  private:
+    int fails_ = 0;
+    std::uint64_t until_ = 0;
+    std::uint64_t wait_ = 0;
+};
+
 // The budget for checking the backups during play: a token bucket in bytes on the wire (both
 // ways), so no number of backups can ever take more than `rate` bytes a second.
 class Pacer
