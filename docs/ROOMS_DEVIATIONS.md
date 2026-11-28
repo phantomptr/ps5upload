@@ -226,6 +226,28 @@ Checked end to end by `make -C apps/play e2e-engine`: the real engine's routes i
   with another seat's token; the engine finds the group through any player of it
   (`group_by_token`) and keeps "let all from that PS5 in" on each of them (`allow_group`).
 
+## Fixes before release (fixes-13)
+
+- **Friend passes**: given only to people the host let in who are not strangers (from the public
+  Rooms list, or playing beside one: `Meta::stranger`); a stranger's `remember` is ignored. The
+  pass's id stays on the guest (`Meta::friend`, also for Play again); a remove or block revokes it.
+- **A released first player's talk**: their socket (it keeps the picture for the others of that
+  PS5) speaks in chat and voice as the PS5's player still in (lowest number; `Link::rebind`), with
+  the notice, mic and the host's mutes carried along, so per-player mutes and remove reach it.
+- **Two consoles hosting on one engine**: still one lobby per engine. It stands for the room opened
+  first (`room_api::lobby_console`): its card, preview and every knock from a card (hub, or
+  `knock.via` rooms/friends on this network) go there (`Entry::Lobby`). The other room's view says
+  `listed: {state: not_listed, why: "other_console"}` (clients show "Not listed right now").
+- **Asks per address**: one per device id; up to 3 from one address when each names its device
+  (`MAX_PENDING - 1`, one place stays for another home), 2 without device ids.
+- **Unique names**: checked again under the lock that queues or seats the ask, and held
+  (`Party::claims`) until the ask ends. A device back without its token (same device tag, its old
+  place away in the resume window) may take its own name again; once let in, the old place goes.
+- **PS5Upload Play**: a change of way runs on the route thread (the picture never waits on it);
+  a failed change waits 5 s, doubling to 2 minutes; `replaced` from the guest's own change never
+  ends the game (the new socket takes over, or the token brings it back). "Back to game" keeps
+  and uses the way the game was played over (`core/resume.hpp`).
+
 # Play Rooms: where the clients (rooms-ui) differ from the design or assume
 
 Branch `rooms-ui` (PS5Upload UI: desktop/phone/Docker web UI, guest join page, website Rooms page).
