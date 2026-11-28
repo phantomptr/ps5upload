@@ -31,8 +31,12 @@ tone, a short rumble), then plays the H.264 stream in a loop with the pad state 
 Everything is logged to `/data/ps5upload-play-spike/log.txt`; picture hashes go to
 `avc-hashes.txt` and `hevc-hashes.txt` next to it (compare with `dist/*.ref`).
 
-Commands: write one word to `/data/ps5upload-play-spike/cmd` (`exit`, `rumble`, `tone`, `avc`,
-`hevc`, `play-hevc`, `t1`, `t4`, `probe`). The app creates that folder with its own owner: make it
+Commands: write one word to `/data/ps5upload-play-spike/cmd` (`exit`, `rumble`, `tone`,
+`bgtone`, `avc`, `hevc`, `play-hevc`, `t1`, `t4`, `probe`).
+
+For the background test the app also logs a heartbeat every second and runs a TCP echo on port
+19271. A media-category build cannot listen, so it connects out to the address in
+`/data/ps5upload-play-spike/peer` instead; `tools/echo-server.py` is the matching test server. The app creates that folder with its own owner: make it
 writable for the helper first (`POST /api/ps5/fs/chmod {"path": "/data/ps5upload-play-spike", "mode": "777"}`).
 `awake` calls a ShellCoreUtil function that ends the app; it is kept only to show that.
 

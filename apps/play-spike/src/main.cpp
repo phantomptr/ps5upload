@@ -18,9 +18,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <new>
 #include <pthread.h>
+#include <sys/socket.h>
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -71,6 +74,7 @@ extern "C"
                         std::uint32_t freq, std::uint32_t param);
     int sceAudioOutOutput(std::int32_t handle, const void *buffer);
     int sceAudioOutClose(std::int32_t handle);
+    int sceNetInit();
 }
 
 // ---- video out structures (PS5Term) -------------------------------------------------------
@@ -486,9 +490,13 @@ std::uint8_t *back_buffer()
 }
 
 std::uint64_t vblank_wait_us;
+std::atomic<std::uint64_t> last_flip_us{0}, max_flip_gap_us{0};
 void show()
 {
     const unsigned base = tiled ? 2 : 0;
+    const std::uint64_t at = now_us(), prev = last_flip_us.exchange(at);
+    if (prev && at - prev > max_flip_gap_us.load())
+        max_flip_gap_us.store(at - prev);
     ++flip_count;
     sceVideoOutSubmitFlip(video, static_cast<int>(base + (flip_count & 1)), 1, flip_count);
     const std::uint64_t t = now_us();
@@ -1097,13 +1105,13 @@ void play(Stream &s, std::uint32_t codec, unsigned seconds, unsigned threads, bo
     decoder_close(d);
 }
 
+bool audio_initialized = false;
 void test_audio(unsigned ms)
 {
-    static bool init;
-    if (!init)
+    if (!audio_initialized)
     {
         logf("sceAudioOutInit: %#x", sceAudioOutInit());
-        init = true;
+        audio_initialized = true;
     }
     const std::uint32_t grain = 256, rate = 48000;
     const int port = sceAudioOutOpen(0xff, 0, 0, grain, rate, 1);
@@ -1220,6 +1228,161 @@ void probe_formats()
         }
 }
 
+// ---- background test: does the app keep running while another title is in front? --------
+// A heartbeat thread logs once a second (with the flip count and the longest gap between
+// flips since the last beat), a TCP echo server on port 19271 counts what a client sends,
+// and `bgtone` starts a quiet tone on its own thread that counts its blocks.
+std::atomic<unsigned> echoes{0}, audio_blocks{0};
+std::atomic<std::uint64_t> audio_max_call_us{0};
+std::atomic<bool> client_connected{false};
+
+void *heartbeat_main(void *)
+{
+    unsigned n = 0, last_flips = 0, last_echoes = 0, last_blocks = 0;
+    std::uint64_t last = now_us();
+    for (;;)
+    {
+        sceKernelUsleep(1000000);
+        const std::uint64_t now = now_us();
+        const unsigned flips = flip_count, e = echoes.load(), b = audio_blocks.load();
+        logf("hb %u: %.2f s since last beat, flips +%u (longest gap %.0f ms), echoes +%u%s, audio blocks "
+             "+%u (slowest output call %.1f ms)",
+             ++n, (now - last) / 1e6, flips - last_flips, max_flip_gap_us.exchange(0) / 1000.0, e - last_echoes,
+             client_connected.load() ? "" : " (no client)", b - last_blocks,
+             audio_max_call_us.exchange(0) / 1000.0);
+        last = now;
+        last_flips = flips;
+        last_echoes = e;
+        last_blocks = b;
+    }
+    return nullptr;
+}
+
+void *echo_main(void *)
+{
+    const int server = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(19271);
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    auto serve = [](int client) {
+        client_connected = true;
+        char buffer[256];
+        for (;;)
+        {
+            const long got = recv(client, buffer, sizeof buffer, 0);
+            if (got <= 0)
+                break;
+            echoes += 1;
+            if (send(client, buffer, got, 0) != got)
+                break;
+        }
+        client_connected = false;
+        close(client);
+        logf("echo peer gone (errno %d)", errno);
+    };
+    int b = bind(server, reinterpret_cast<sockaddr *>(&address), sizeof address);
+    if (b != 0)
+    {
+        // A media-category app is refused (EACCES): connect out instead, to the address in
+        // /data/ps5upload-play-spike/peer, and echo what that peer sends.
+        logf("echo bind port 19271: %d errno %d: connecting out instead", b, errno);
+        close(server);
+        for (;;)
+        {
+            char text[32] = {};
+            const int fd = open("/data/ps5upload-play-spike/peer", O_RDONLY);
+            if (fd >= 0)
+            {
+                (void)read(fd, text, sizeof text - 1);
+                close(fd);
+            }
+            unsigned a[4] = {};
+            int part = 0;
+            for (const char *p = text; *p && part < 4; ++p)
+            {
+                if (*p >= '0' && *p <= '9')
+                    a[part] = a[part] * 10 + (*p - '0');
+                else if (*p == '.')
+                    ++part;
+                else
+                    break;
+            }
+            sockaddr_in peer{};
+            peer.sin_family = AF_INET;
+            peer.sin_port = htons(19271);
+            peer.sin_addr.s_addr = htonl((a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]);
+            const int s = socket(AF_INET, SOCK_STREAM, 0);
+            const int c = connect(s, reinterpret_cast<sockaddr *>(&peer), sizeof peer);
+            logf("echo connect %u.%u.%u.%u:19271: %d errno %d", a[0], a[1], a[2], a[3], c, c ? errno : 0);
+            if (c == 0)
+                serve(s);
+            else
+                close(s);
+            sceKernelUsleep(2000000);
+        }
+    }
+    const int l = listen(server, 2);
+    logf("echo server: socket %d bind %d listen %d (port 19271)", server, b, l);
+    if (server < 0 || l != 0)
+        return nullptr;
+    for (;;)
+    {
+        const int client = accept(server, nullptr, nullptr);
+        if (client < 0)
+        {
+            logf("echo accept: %d", client);
+            sceKernelUsleep(1000000);
+            continue;
+        }
+        logf("echo client connected");
+        serve(client);
+    }
+    return nullptr;
+}
+
+void *bgtone_main(void *)
+{
+    const int port = sceAudioOutOpen(0xff, 0, 0, 256, 48000, 1);
+    logf("bgtone: sceAudioOutOpen %#x", port);
+    if (port < 0)
+        return nullptr;
+    static std::int16_t buffer[256 * 2];
+    double phase = 0;
+    for (;;)
+    {
+        for (unsigned f = 0; f < 256; ++f)
+        {
+            phase += 330.0 / 48000;
+            if (phase >= 1)
+                phase -= 1;
+            const double x = phase < 0.5 ? phase * 4 - 1 : 3 - phase * 4;
+            buffer[f * 2] = buffer[f * 2 + 1] = static_cast<std::int16_t>(x * 600);  // about -35 dB
+        }
+        const std::uint64_t t = now_us();
+        const int rc = sceAudioOutOutput(port, buffer);
+        const std::uint64_t took = now_us() - t;
+        if (took > audio_max_call_us.load())
+            audio_max_call_us.store(took);
+        if (rc < 0)
+        {
+            logf("bgtone: sceAudioOutOutput %#x", rc);
+            sceKernelUsleep(100000);
+        }
+        audio_blocks += 1;
+    }
+    return nullptr;
+}
+
+void start_thread(void *(*entry)(void *), const char *name)
+{
+    pthread_t thread;
+    const int rc = pthread_create(&thread, nullptr, entry, nullptr);
+    logf("thread %s: %d", name, rc);
+}
+
 [[noreturn]] void quit()
 {
     logf("exit: sceSystemServiceLoadExec(\"exit\")");
@@ -1265,6 +1428,18 @@ void poll_commands(bool in_play)
         test_audio(3000);
     else if (!std::strcmp(text, "probe"))
         probe_formats();
+    else if (!std::strcmp(text, "bgtone"))
+    {
+        static bool started;
+        if (!started)
+        {
+            started = true;
+            if (!audio_initialized)
+                logf("sceAudioOutInit: %#x", sceAudioOutInit());
+            audio_initialized = true;
+            start_thread(bgtone_main, "bgtone");
+        }
+    }
     else if (!std::strcmp(text, "awake"))
     {
         // Only on request: a ShellCoreUtil call an app may not be allowed to make.
@@ -1317,6 +1492,9 @@ int main()
     logf("sceSystemServiceHideSplashScreen: %#x", sceSystemServiceHideSplashScreen());
     notify("PS5Upload Play spike running");
     start_workers(6);
+    logf("sceNetInit: %#x", sceNetInit());
+    start_thread(heartbeat_main, "heartbeat");
+    start_thread(echo_main, "echo");
 
     const bool vq = compute_queue_open();
     const bool have_avc = load_stream(avc, "/app0/assets/avc.264", false);
