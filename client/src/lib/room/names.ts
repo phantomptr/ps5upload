@@ -39,7 +39,7 @@ export function dropInvisible(text: string): string {
 }
 const PUNCT = "-_.,!?'’&()#+:*~";
 const ALLOWED = /^[\p{L}\p{N}\p{M} \-_.,!?'’&()#+:*~]*$/u;
-const RESERVED = ["ps5upload", "official", "admin", "support", "phantomptr"];
+const RESERVED = ["ps5upload", "official", "admin", "support", "phantomptr", "moderator", "staff"];
 const TLDS = new Set(
   "com net org gg io me ly tv xyz co app link site online info biz ru de uk fr es it br jp cn in us eu to cc ws club live shop store top icu fun pro dev page".split(
     " ",

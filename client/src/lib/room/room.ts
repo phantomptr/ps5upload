@@ -8,7 +8,7 @@
 
 import { getEngineUrl } from "../../state/engine";
 import { readTier, type Tier } from "../../join/routeTier";
-import { readChatMode, type ChatMode } from "./chat";
+import { readChat, readChatMode, type ChatMode } from "./chat";
 import { readRegion, type Region } from "./regions";
 
 export type Visibility = "private" | "friends" | "public";
@@ -90,6 +90,20 @@ export interface RoomInfo {
   /** The engine knows rooms (13.0.0+). False: a Play Together engine; the room is shown with the
    *  defaults and nothing about rooms can be changed. */
   known: boolean;
+  /** The room's chat as the host engine keeps it (the last 50 lines, memory only). */
+  chatLog: HostChatLine[];
+}
+
+/** One line of the room's chat on the host's side (`room.chat_log`). */
+export interface HostChatLine {
+  /** The engine's running number (stable across reads), else the position. */
+  n: number;
+  from: string;
+  /** Sent by the host (this computer). */
+  host: boolean;
+  quick: number | null;
+  text: string | null;
+  at: number;
 }
 
 /** The engine's room defaults (design 2.3, 3.1): Private, friends auto-allowed, chat on. */
@@ -117,6 +131,7 @@ export const DEFAULT_ROOM: RoomInfo = {
   hostLink: null,
   openedAt: null,
   known: false,
+  chatLog: [],
 };
 
 /** The defaults a visibility brings (design 3.1, 7A.2): Public is quick messages, push-to-talk
@@ -205,6 +220,11 @@ export function readRoom(v: unknown): RoomInfo {
     hostLink: readLink(o.host_link),
     openedAt: num(o.opened_at_ms) ?? (num(o.opened_at) != null ? num(o.opened_at)! * 1000 : null),
     known: true,
+    chatLog: (Array.isArray(o.chat_log) ? o.chat_log : []).flatMap((l, i) => {
+      const c = readChat(l);
+      const lo = obj(l);
+      return c && lo ? [{ n: num(lo.n) ?? i + 1, from: c.from, host: lo.host === true, quick: c.quick, text: c.text, at: num(lo.at) ?? 0 }] : [];
+    }),
   };
 }
 

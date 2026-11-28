@@ -1765,7 +1765,7 @@ export function StreamPanel({
               ? tr("pt_switch_invite", undefined, "Stop the other stream, start and invite")
               : togetherStart === "attach"
                 ? tr("pt_show_invite", undefined, "Show it here and invite")
-                : tr("pt_start_invite", undefined, "Start and invite")
+                : tr("room_create", undefined, "Create a Play Room")
           }
           // Play my PS5's Start (or its Show it here / switch), the same code path.
           onStart={() =>

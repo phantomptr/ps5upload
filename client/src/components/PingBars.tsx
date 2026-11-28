@@ -1,4 +1,4 @@
-import { barsOf, msText, tierLabel, type Tier } from "../join/routeTier";
+import { barsOf, msText, tierLabel, toneOfTier, type Tier } from "../join/routeTier";
 import { useTr } from "../state/lang";
 
 /** Colours of the one tier table (design 6.1): green, green, amber, red; grey for nothing yet. */
@@ -62,6 +62,7 @@ export function PingBars({
       title={title}
       data-testid={testId}
       data-tier={tier ?? ""}
+      data-tone={toneOfTier(tier)}
       data-bars={n}
       data-kind={estimate ? "estimate" : measured ? "measured" : lastTime ? "last_time" : "live"}
     >

@@ -69,7 +69,11 @@ describe("Start and invite", () => {
   it("says what it is, the console, and one button: no network to choose", () => {
     installWindowStub();
     const out = view();
-    expect(out).toContain("No app needed");
+    // The Play Room's words, and its create form (name, size, who can see it, password).
+    expect(out).toContain("Play your PS5 games with friends");
+    expect(out).toContain('data-testid="room-create"');
+    expect(out).toContain('data-testid="room-vis-public"');
+    expect(out).toContain('data-testid="room-password"');
     expect(out).toMatch(/data-testid="pt-start-console">.*Living room/);
     expect(out).toMatch(/<button[^>]*data-testid="pt-start-invite"[^>]*>[\s\S]*Start and invite<\/span><\/button>/);
     expect(out).not.toMatch(/<button[^>]* disabled=""[^>]*data-testid="pt-start-invite"/);

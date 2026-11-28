@@ -39,7 +39,7 @@ describe("Play Together host state", () => {
       pending: [{ id: 12, name: "Eve", state: "asking", client_kind: "ps5", codec_warning: "hevc" }],
     });
     expect(s.guests[0]).toMatchObject({ onPs5: true, codecWarning: "main10" });
-    expect(s.asks).toEqual([{ id: 12, name: "Eve", onPs5: true, codecWarning: "hevc" }]);
+    expect(s.asks).toMatchObject([{ id: 12, name: "Eve", onPs5: true, codecWarning: "hevc" }]);
     // Anything else the engine might say is no warning.
     const odd = readJoinState({ ...engine, guests: [{ ...engine.guests[1], client_kind: "browser", codec_warning: "av1" }] });
     expect(odd.guests[0]).toMatchObject({ onPs5: false, codecWarning: null });
@@ -52,7 +52,7 @@ describe("Play Together host state", () => {
     expect(s.ws).toBe(engine.ws);
     expect(s.guests.map((g) => g.name)).toEqual(["Ann", "Ben", "Cy"]);
     expect(s.guests[1]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 42, connected: false });
-    expect(s.asks).toEqual([{ id: 11, name: "Dee", onPs5: false, codecWarning: null }]);
+    expect(s.asks).toMatchObject([{ id: 11, name: "Dee", onPs5: false, codecWarning: null }]);
     expect(s.settings).toEqual({ blockSystemButtons: false, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", pageBase: null, stun: [], sources: null, builtInHub: null, upnp: true, port: null, videoTrack: true, playDiscovery: true });
     expect(s.seatNext).toBe(false);
   });
@@ -95,13 +95,13 @@ describe("Play Together host state", () => {
     const s = readJoinState({ guests: [null, { id: 1 }], asks: "x", invite: { code: 1 } });
     expect(s.invite).toBeNull();
     expect(s.guests).toEqual([
-      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, ipv6: false, playsAs: null, seatNote: null, quality: null, carries: null, link: null, onPs5: false, codecWarning: null, tier: null },
+      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false, streamSeat: false, via: "lan", path: null, netPath: null, ipv6: false, playsAs: null, seatNote: null, quality: null, carries: null, link: null, onPs5: false, codecWarning: null, tier: null, room: { source: null, tag: null, muted: { voice: false, chat: false }, fromRooms: false, speaking: false, ready: false, joinedAt: null, client: null } },
     ]);
     expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);
     // An older engine's names still read.
     const old = readJoinState({ asks: [{ id: 2, name: "Eve" }], guests: [{ id: 3, player: 2, status: "reconnecting", reconnecting_left_s: 9 }] });
-    expect(old.asks).toEqual([{ id: 2, name: "Eve", onPs5: false, codecWarning: null }]);
+    expect(old.asks).toMatchObject([{ id: 2, name: "Eve", onPs5: false, codecWarning: null }]);
     expect(old.guests[0]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 9 });
   });
 

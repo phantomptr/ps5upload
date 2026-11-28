@@ -5,25 +5,34 @@ import { Play, Settings2, Users } from "lucide-react";
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { InternetHint } from "./NetworkChoice";
-import { joinApi } from "./playTogetherState";
+import { joinApi, setPendingRoom } from "./playTogetherState";
+import { CreateRoomFields, createBody } from "./PlayRoom/CreateRoom";
+import { PlayAppTip } from "./PlayRoom/PlayAppTip";
+import { defaultRoomName } from "../../lib/room/names";
+import { useRoomDraft } from "../../state/roomDraft";
+import { useMeshStore } from "../../state/mesh";
 import { PlayAppInstall } from "./PlayAppInstall";
 import { PlayAppPairing } from "./PlayAppPairing";
 
 /**
- * Play › Play together before a stream: what it is, the console, where the invite works, and one
- * button that starts the stream and makes the invite. The stream starts as Play my PS5's Start
- * does (StreamPanel start); the Play Together panel then shows in its place, opens Play Together
- * and makes the one link (Settings › App › Play Together › Invites work).
+ * Play › Play Room before a stream: "Create a Play Room" (design 7.1): the console, the room's
+ * name, size, who can see it and a password, and one button that starts the stream and opens the
+ * room. The stream starts as Play my PS5's Start does (StreamPanel start); the room panel then
+ * shows in its place, opens the room with these choices and makes the one link.
  */
 export function PlayTogetherStart({ host, ...rest }: Omit<PlayTogetherStartViewProps, "invites"> & { host: string | null }) {
   // Where invites work (Settings › Play Together): read once per console. null: an engine from
   // before internet invites; undefined: not known yet.
   const [invites, setInvites] = useState<"anywhere" | "wifi" | null | undefined>(undefined);
+  // Room size as saved (max_players + 1: a 12.6 file with 3 friends is a 4-player room).
+  const [savedSize, setSavedSize] = useState(4);
   useEffect(() => {
     if (!host) return;
     let alive = true;
     void joinApi.read(host).then((s) => {
-      if (alive && s) setInvites(s.settings.invites);
+      if (!alive || !s) return;
+      setInvites(s.settings.invites);
+      setSavedSize(s.room.known ? s.room.size : Math.max(2, Math.min(4, s.settings.maxPlayers + 1)));
     });
     return () => {
       alive = false;
@@ -31,7 +40,9 @@ export function PlayTogetherStart({ host, ...rest }: Omit<PlayTogetherStartViewP
   }, [host]);
   return (
     <div className="space-y-3">
-      <PlayTogetherStartView {...rest} invites={host ? invites : undefined} />
+      <PlayTogetherStartView {...rest} invites={host ? invites : undefined} savedSize={savedSize} />
+      {/* A friend with a PS5 joins with PS5Upload Play (once per device, dismiss for good). */}
+      <PlayAppTip />
       {/* PS5Upload Play on this PS5: install, update, open or remove it from here. */}
       <PlayAppInstall host={host} />
       {/* PS5Upload Play on the PS5: pair it here with the code it shows on the TV. */}
@@ -72,6 +83,8 @@ export interface PlayTogetherStartViewProps {
   /** Invites work: "anywhere", "wifi" (the settings say only on the Wi-Fi), null (the engine has
    *  no internet invites), undefined (not known yet). */
   invites: "anywhere" | "wifi" | null | undefined;
+  /** Room size as saved (2–4). */
+  savedSize?: number;
 }
 
 export function PlayTogetherStartView({
@@ -82,9 +95,15 @@ export function PlayTogetherStartView({
   onStart,
   playAs,
   invites,
+  savedSize = 4,
 }: PlayTogetherStartViewProps) {
   const tr = useTr();
   const navigate = useNavigate();
+  const me = useMeshStore((s) => s.me?.name) || "PS5Upload";
+  const draftBad = useRoomDraft((s) => {
+    const pw = s.draft.password ?? "";
+    return pw.length > 0 && pw.length < 4;
+  });
   return (
     <section
       aria-labelledby="pt-start-title"
@@ -94,13 +113,13 @@ export function PlayTogetherStartView({
       <div className="space-y-1">
         <h2 id="pt-start-title" className="flex items-center gap-2 text-sm font-semibold">
           <Users size={16} aria-hidden />
-          {tr("pt_title", undefined, "Play Together")}
+          {tr("room_title", undefined, "Play Room")}
         </h2>
         <p className="text-sm text-[var(--color-muted)]">
           {tr(
-            "pt_tab_intro",
+            "room_intro",
             undefined,
-            "Friends play along as Player 2, 3 and 4 from their phone, tablet or computer, in the browser. No app needed.",
+            "Play your PS5 games with friends. They join from a phone, a computer or their own PS5, with their own controller.",
           )}
         </p>
       </div>
@@ -114,6 +133,8 @@ export function PlayTogetherStartView({
         )}
         {playAs}
       </div>
+
+      <CreateRoomFields invites={invites} savedSize={savedSize} defaultName={defaultRoomName(tr, me)} />
 
       {/* One link for friends anywhere (the same Wi-Fi included): nothing to choose here. */}
       {invites === "anywhere" && (
@@ -140,14 +161,23 @@ export function PlayTogetherStartView({
         variant="primary"
         size="md"
         leftIcon={<Play size={14} />}
-        onClick={onStart}
-        disabled={!canStart}
+        onClick={() => {
+          // The room opens with these choices once the stream is up (joinApi.open).
+          setPendingRoom(createBody(useRoomDraft.getState().draft));
+          onStart();
+        }}
+        disabled={!canStart || draftBad}
         loading={starting}
         className="max-sm:w-full"
         data-testid="pt-start-invite"
       >
         {startLabel}
       </Button>
+      {consoleName && (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="room-create-note">
+          {tr("room_create_note", { console: consoleName }, `Starts Remote Play on ${consoleName} and opens your room.`)}
+        </p>
+      )}
     </section>
   );
 }
