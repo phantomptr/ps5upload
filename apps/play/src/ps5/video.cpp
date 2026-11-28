@@ -264,8 +264,9 @@ void *thread_main(void *) noexcept
                         st.ten_bit = ten;
                         if (ten)
                         {
-                            // The chroma plane starts after the coded height (32-row blocks).
-                            const unsigned rows = (out.frame_height + 31) & ~31u;
+                            // The chroma plane starts right after the reported height, as for 8-bit
+                            // (measured on the Pro: starting it at 1088 rows left 8 green rows).
+                            const unsigned rows = out.frame_height;
                             if (shift < 0)
                                 shift = hdr::shift_of(pic, out.frame_pitch_in_bytes, out.frame_width,
                                                       out.frame_height);

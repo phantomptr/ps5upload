@@ -233,6 +233,9 @@ fn play(rec: &Recording, mut s: DevSession, rumble_every: Option<Duration>, cons
     let mut audio = Vec::with_capacity(2048);
     let started = Instant::now();
     let mut rumbling = false;
+    // How punctually pictures go out (the recording's own pacing, before any network): logged
+    // every PACE_EVERY, so a guest's uneven pictures can be told apart from this side's.
+    let mut pace = Pace::default();
     while !s.ended() {
         let now = Instant::now();
         while let Some(st) = s.input() {
@@ -284,6 +287,9 @@ fn play(rec: &Recording, mut s: DevSession, rumble_every: Option<Duration>, cons
         }
         if f.kind == KIND_VIDEO {
             s.picture(&f.data, f.key);
+            if let Some(line) = pace.sent(now.saturating_duration_since(due), now) {
+                crate::log_at!(Info, "together", "replay host {console}: {line}");
+            }
         } else {
             let i = lap_index(u16::from_be_bytes([f.data[0], f.data[1]]), c.lap, span);
             audio.clear();
@@ -297,6 +303,45 @@ fn play(rec: &Recording, mut s: DevSession, rumble_every: Option<Duration>, cons
             c.lap = c.lap.wrapping_add(1);
             c.base = Instant::now() + gap;
         }
+    }
+}
+
+/// How often the pacing is logged.
+const PACE_EVERY: Duration = Duration::from_secs(10);
+
+/// Pictures sent since the last pacing line, and how late against the recording's clock.
+#[derive(Default)]
+struct Pace {
+    since: Option<Instant>,
+    sent: u32,
+    late_4ms: u32,
+    worst: Duration,
+}
+
+impl Pace {
+    /// A picture went out `late`; a line to log once every [`PACE_EVERY`].
+    fn sent(&mut self, late: Duration, now: Instant) -> Option<String> {
+        let since = *self.since.get_or_insert(now);
+        self.sent += 1;
+        if late > Duration::from_millis(4) {
+            self.late_4ms += 1;
+        }
+        self.worst = self.worst.max(late);
+        if now.saturating_duration_since(since) < PACE_EVERY {
+            return None;
+        }
+        let line = format!(
+            "{} pictures sent in {:.1} s, {} over 4 ms late, the latest {:.1} ms late",
+            self.sent,
+            now.saturating_duration_since(since).as_secs_f64(),
+            self.late_4ms,
+            self.worst.as_secs_f64() * 1000.0
+        );
+        *self = Pace {
+            since: Some(now),
+            ..Pace::default()
+        };
+        Some(line)
     }
 }
 
@@ -686,6 +731,25 @@ mod tests {
         );
         assert_eq!(audio_span(&r.frames), 2);
         assert_eq!(lap_gap(&r.frames), Duration::from_micros(16_667));
+    }
+
+    #[test]
+    fn the_pacing_line_comes_every_ten_seconds() {
+        let mut p = Pace::default();
+        let t0 = Instant::now();
+        assert!(p.sent(Duration::from_millis(1), t0).is_none());
+        assert!(p
+            .sent(Duration::from_millis(9), t0 + Duration::from_secs(5))
+            .is_none());
+        let line = p.sent(Duration::ZERO, t0 + PACE_EVERY).unwrap();
+        assert_eq!(
+            line,
+            "3 pictures sent in 10.0 s, 1 over 4 ms late, the latest 9.0 ms late"
+        );
+        assert!(
+            p.sent(Duration::ZERO, t0 + PACE_EVERY).is_none(),
+            "counts start over"
+        );
     }
 
     #[test]
