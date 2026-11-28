@@ -124,5 +124,18 @@ out = run("companion", "127.0.0.1", str(port), "wrong", "--seconds", "1.5")
 finish(p, rep)
 check("phase unpaired  invalid" in out and "(cleared)" in out, "a token that stopped working is dropped")
 
+# 8. The helper's app API on 127.0.0.1 (stand-in): engines, Remote Play, PIN, Tailscale forward.
+p, port, rep = engine("helper", "--lifetime", "10")
+out = run("helper", str(port))
+r = finish(p, rep)
+check("mesh 2" in out and "engine Living room PC 192.168.1.20:19113 tailnet=0" in out
+      and "engine Laptop 100.101.102.103:0 tailnet=1" in out, "mesh: engines only, the console left out")
+check("rp 1 ready=0 service_on=0 needs_user=1" in out and "enable 1 ready=1" in out, "Remote Play readiness, turned on")
+enable = [i["helper"] for i in r["intents"] if "helper" in i and i["helper"][1] == "/v1/rp/enable"]
+check(enable and enable[0][2] == {"confirm": True}, "turning Remote Play on says confirm")
+check("pin 1 waiting 12345678 300" in out and "pin_get 1 waiting" in out and "pin_cancel 1" in out, "Remote Play PIN")
+check("forward 1 9182" in out and "forward_lan 0 not_tailnet_address" in out, "Tailscale forward and its refusal")
+check("absent 0" in out, "no helper: calls fail quietly")
+
 print("e2e:", "all passed" if not failures else f"{failures} failed")
 sys.exit(1 if failures else 0)

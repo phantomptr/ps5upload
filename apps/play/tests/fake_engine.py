@@ -242,6 +242,60 @@ def app(ws, args, state):
             ws.text(full)
 
 
+RP_RAW = {"service_enabled": 0, "has_per_user": 1, "user_enabled": 0, "account_uid": 1, "account_id_raw": 5,
+          "account_type": "np"}
+helper_state = {"rp_on": False, "pin": "idle"}
+
+
+def helper_api(conn, method, path, hdr, rest):
+    """payload/include/app_api.h, canned: Host must be 127.0.0.1:<port>, no Origin."""
+    def answer(code, obj):
+        body = json.dumps(obj).encode()
+        conn.sendall(b"HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % (code, len(body)) + body)
+    host = hdr.get("host", "")
+    if not (host.startswith("127.0.0.1:") or host.startswith("localhost:")):
+        return answer(403, {"error": "bad_host"})
+    if "origin" in hdr:
+        return answer(403, {"error": "origin_refused"})
+    n = int(hdr.get("content-length", "0") or 0)
+    while len(rest) < n:
+        rest += conn.recv(4096)
+    body = json.loads(rest[:n] or b"{}")
+    rec("intents", {"helper": [method, path, body]})
+    on = helper_state["rp_on"]
+    rp = {"ready": on, "service_on": on, "user_on": on, "needs_user_permission": True, "signed_in": True,
+          "psn_activated": True, "readiness": RP_RAW}
+    if (method, path) == ("GET", "/v1/rp"):
+        return answer(200, rp)
+    if (method, path) == ("POST", "/v1/rp/enable"):
+        if body.get("confirm") is not True:
+            return answer(400, {"error": "confirm_required"})
+        helper_state["rp_on"] = True
+        rp.update(ready=True, service_on=True, user_on=True)
+        return answer(200, rp)
+    if (method, path) == ("POST", "/v1/rp/pin"):
+        helper_state["pin"] = "waiting"
+        return answer(200, {"state": "waiting", "pin": "12345678", "seconds_left": 300})
+    if (method, path) == ("GET", "/v1/rp/pin"):
+        return answer(200, {"state": helper_state["pin"], "pin": "12345678", "seconds_left": 299, "err": None})
+    if (method, path) == ("POST", "/v1/rp/pin/cancel"):
+        helper_state["pin"] = "idle"
+        return answer(200, {"ok": True})
+    if (method, path) == ("GET", "/v1/mesh"):
+        return answer(200, {"engine": None, "online": [
+            {"name": "Living room PC", "kind": "desktop", "version": "13.0.0", "addr": "192.168.1.20", "tailnet": False,
+             "port": 19113, "join_ws": "/api/join/ws", "app_ws": "/api/play/app"},
+            {"name": "Friend's PS5", "kind": "ps5", "version": "13.0.0", "addr": "192.168.1.30", "tailnet": False,
+             "port": None, "join_ws": None, "app_ws": None},
+            {"name": "Laptop", "kind": "desktop", "version": "13.0.0", "addr": "100.101.102.103", "tailnet": True,
+             "port": None, "join_ws": None, "app_ws": None}]})
+    if (method, path) == ("POST", "/v1/tailnet/forward"):
+        if not str(body.get("peer", "")).startswith("100."):
+            return answer(400, {"error": "not_tailnet_address"})
+        return answer(200, {"local_port": 9182, "peer": body["peer"], "port": body.get("port")})
+    return answer(404, {"error": "not_found"})
+
+
 def serve(conn, args, state):
     try:
         conn.settimeout(30)
@@ -255,6 +309,8 @@ def serve(conn, args, state):
         lines = head.decode().split("\r\n")
         path = lines[0].split(" ")[1]
         hdr = {l.split(":", 1)[0].lower(): l.split(":", 1)[1].strip() for l in lines[1:] if ":" in l}
+        if path.startswith("/v1/"):
+            return helper_api(conn, lines[0].split(" ")[0], path, hdr, rest)
         if path not in ("/api/join/ws", "/api/play/app") or hdr.get("upgrade", "").lower() != "websocket":
             if path == "/api/version":
                 body = json.dumps({"version": "13.0.0"}).encode()

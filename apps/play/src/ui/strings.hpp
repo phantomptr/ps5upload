@@ -36,6 +36,8 @@ namespace play::ui
     X(pick_none, "No PS5Upload found yet. Make sure PS5Upload is open on the computer, and that \"PS5Upload Play can find this computer\" is on in PS5Upload › Settings › Play Together. You can also type its address.") \
     X(pick_found, "On this network")                                                                            \
     X(pick_used, "Used before")                                                                                 \
+    X(pick_tailnet, "Over Tailscale")                                                                           \
+    X(pick_tailnet_fail, "Couldn't reach %s over Tailscale (%s). Is Tailscale on in PS5Upload › Settings?")      \
     X(pick_type, "Type an address")                                                                             \
     X(pick_type_sub, "The address PS5Upload shows, like 192.168.1.20:19113")                                    \
     X(way_title, "Join a game on %s")                                                                           \
@@ -109,7 +111,20 @@ namespace play::ui
     X(host_rp_ready, "Remote Play is set up on %s.")                                                            \
     X(host_rp_setup, "Set up Remote Play in PS5Upload › Play › Set up Play.")                                   \
     X(host_helper_on, "The PS5Upload helper is running on this PS5.")                                           \
-    X(host_helper_off, "The PS5Upload helper isn't running. Friends' controllers need it: start it from PS5Upload.") \
+    X(host_helper_off, "PS5Upload's helper isn't running here (or is older): start it from PS5Upload.") \
+    X(host_rp_on_here, "Remote Play is on for this PS5.")                                                       \
+    X(host_rp_off_here, "Remote Play is off on this PS5.")                                                      \
+    X(host_rp_user_here, "This PS5 user hasn't allowed Remote Play yet.")                                       \
+    X(host_rp_account, "This PS5's account isn't set up for Remote Play yet: use PS5Upload › Play › Set up Play.") \
+    X(host_rp_enable, "Turn on Remote Play")                                                                    \
+    X(host_rp_enable_confirm, "Press ✕ again to turn on Remote Play")                                           \
+    X(host_rp_enable_failed, "Remote Play didn't turn on (%s). Use PS5Upload › Play › Set up Play.")            \
+    X(host_rp_pin, "Show a Remote Play PIN")                                                                    \
+    X(host_rp_pin_stop, "Stop the Remote Play PIN")                                                             \
+    X(host_rp_pin_title, "Remote Play PIN")                                                                     \
+    X(host_rp_pin_text, "Type it in PS5Upload › Play › Set up Play. %d:%02d left.")                             \
+    X(host_rp_pin_paired, "Paired: PS5Upload can start Remote Play with this PS5 now.")                         \
+    X(host_rp_pin_failed, "That PIN didn't work (%s). Show a new one.")                                         \
     X(host_together, "Play Together")                                                                           \
     X(host_together_closed, "Play Together is closed.")                                                         \
     X(host_together_open, "Open Play Together")                                                                 \

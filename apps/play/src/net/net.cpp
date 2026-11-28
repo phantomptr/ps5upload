@@ -467,11 +467,12 @@ int discover(const std::uint32_t *unicast, int n_unicast, unsigned timeout_ms, A
     return found;
 }
 
-int http_get(const char *addr, std::uint16_t port, const char *path, char *out, std::size_t cap,
-             unsigned timeout_ms) noexcept
+int http_request(const char *method, const char *addr, std::uint16_t port, const char *path, const char *body,
+                 char *out, std::size_t cap, unsigned timeout_ms) noexcept
 {
-    if (cap)
-        out[0] = 0;
+    if (!cap)
+        return -1;
+    out[0] = 0;
     std::uint32_t ip = 0;
     const char *err = "";
     if (!resolve(addr, &ip))
@@ -479,41 +480,55 @@ int http_get(const char *addr, std::uint16_t port, const char *path, char *out, 
     const int fd = dial(ip, port, timeout_ms, &err);
     if (fd < 0)
         return -1;
-    char ipt[16], req[256];
+    char ipt[16], req[1536];
     ip_text(ip, ipt);
-    const int rl = std::snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s:%u\r\nConnection: close\r\n\r\n",
-                                 path, ipt, static_cast<unsigned>(port));
-    if (!send_all(fd, req, static_cast<std::size_t>(rl), timeout_ms))
+    const std::size_t bl = body ? std::strlen(body) : 0;
+    // Host is the address as dialled (the helper's app API takes only 127.0.0.1:<port>); never
+    // an Origin header.
+    const int rl = body ? std::snprintf(req, sizeof req,
+                                        "%s %s HTTP/1.1\r\nHost: %s:%u\r\nConnection: close\r\n"
+                                        "Content-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
+                                        method, path, ipt, static_cast<unsigned>(port), bl, body)
+                        : std::snprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: %s:%u\r\nConnection: close\r\n\r\n",
+                                        method, path, ipt, static_cast<unsigned>(port));
+    if (rl <= 0 || static_cast<std::size_t>(rl) >= sizeof req || !send_all(fd, req, static_cast<std::size_t>(rl), timeout_ms))
     {
         ::close(fd);
         return -1;
     }
-    char buf[8192];
+    // The whole answer into out, then the body moved to its start.
     std::size_t have = 0;
     const std::uint64_t until = now_us() + timeout_ms * 1000ull;
-    while (have < sizeof buf - 1)
+    while (have < cap - 1)
     {
         pollfd p{fd, POLLIN, 0};
         const std::uint64_t now = now_us();
         if (now >= until || poll(&p, 1, static_cast<int>((until - now) / 1000 + 1)) <= 0)
             break;
-        const long n = recv(fd, buf + have, sizeof buf - 1 - have, 0);
+        const long n = recv(fd, out + have, cap - 1 - have, 0);
         if (n <= 0)
             break;
         have += static_cast<std::size_t>(n);
     }
     ::close(fd);
-    buf[have] = 0;
+    out[have] = 0;
     int status = -1;
-    if (have > 12 && std::strncmp(buf, "HTTP/1.", 7) == 0 && buf[8] == ' ')
-        status = (buf[9] - '0') * 100 + (buf[10] - '0') * 10 + (buf[11] - '0');
-    const std::size_t end = ws::header_end(buf, have);
-    if (end && cap)
+    if (have > 12 && std::strncmp(out, "HTTP/1.", 7) == 0 && out[8] == ' ')
+        status = (out[9] - '0') * 100 + (out[10] - '0') * 10 + (out[11] - '0');
+    const std::size_t hend = ws::header_end(out, have);
+    if (hend)
     {
-        const std::size_t bl = have - end < cap - 1 ? have - end : cap - 1;
-        std::memcpy(out, buf + end, bl);
-        out[bl] = 0;
+        std::memmove(out, out + hend, have - hend);
+        out[have - hend] = 0;
     }
+    else
+        out[0] = 0;
     return status;
+}
+
+int http_get(const char *addr, std::uint16_t port, const char *path, char *out, std::size_t cap,
+             unsigned timeout_ms) noexcept
+{
+    return http_request("GET", addr, port, path, nullptr, out, cap, timeout_ms);
 }
 } // namespace play::net

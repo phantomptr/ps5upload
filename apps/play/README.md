@@ -11,7 +11,10 @@ A native PS5 app (title `FAKE99261`) with two roles:
   share the invite code and QR code, see who is playing, and change Play Together's switches.
 
 The app only ever dials out (to the PS5Upload engine's `/api/join/ws` and `/api/play/app`, and a
-UDP probe to port 19261 to find it); it never listens. It works without the PS5Upload helper.
+UDP probe to port 19261 to find it); it never listens. It works without the PS5Upload helper;
+when the helper runs, the app also uses its loopback app API (`127.0.0.1:9181`): the engines in
+its mesh (Tailscale ones through the helper's forward), this console's Remote Play readiness,
+turning Remote Play on (✕ twice) and a Remote Play pairing PIN.
 Settings and the log are in `/data/ps5upload-play/`.
 
 ## Build

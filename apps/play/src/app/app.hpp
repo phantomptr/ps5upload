@@ -6,6 +6,7 @@
 #include "../ui/canvas.hpp"
 #include "../ui/strings.hpp"
 #include "companion.hpp"
+#include "helper.hpp"
 #include "guest.hpp"
 
 #include <atomic>
@@ -48,6 +49,9 @@ class App
         net::Answer answers[4];
         bool picture = false;
         float ps = 0, leave = 0;
+        int helper_present = -1;
+        helper::Rp rp;
+        helper::Pin pin;
     };
     void fake(Screen s, const Fake &f) noexcept
     {
@@ -80,6 +84,26 @@ class App
     void save() noexcept;
     void remember_current() noexcept;
     static void on_token(const char *addr, std::uint16_t port, const char *token, void *ctx) noexcept;
+
+    // This console's helper (Remote Play readiness and PIN), watched while the host screen is up.
+    struct HelperState
+    {
+        int present = -1; // -1 not asked yet, 0 not running, 1 running
+        bool rp_known = false;
+        helper::Rp rp;
+        helper::Pin pin;
+        char error[96] = {};
+        std::uint64_t paired_until_us = 0; // "paired" shows this long
+    };
+    static void *helper_main(void *self) noexcept;
+    HelperState helper_state() noexcept;
+    pthread_t helper_thread_{};
+    std::atomic<bool> helper_run_{false};
+    pthread_mutex_t helper_lock_;
+    HelperState helper_;
+    HelperState helper_view_; // this frame's copy (the main thread's)
+    std::uint64_t rp_confirm_until_ = 0;
+    void refresh_helper_view() noexcept;
 
     // Discovery runs on its own thread while the pick screen is up.
     static void *discovery_main(void *self) noexcept;
@@ -121,6 +145,8 @@ class App
             sw_seat,
             sw_invites,
             sw_awake,
+            rp_enable,
+            rp_pin,
         } kind;
         long long id;
         int player;

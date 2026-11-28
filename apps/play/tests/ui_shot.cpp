@@ -214,6 +214,12 @@ int main(int argc, char **argv)
     std::snprintf(d.keep_awake, sizeof d.keep_awake, "transfers");
     d.helper_present = 1;
     shot("host", App::Screen::host, f);
+    f.helper_present = 1;
+    f.rp.service_on = false;
+    std::snprintf(f.pin.state, sizeof f.pin.state, "waiting");
+    std::snprintf(f.pin.pin, sizeof f.pin.pin, "12345678");
+    f.pin.seconds_left = 271;
+    shot("host-helper", App::Screen::host, f);
     shot("settings", App::Screen::settings, f);
     return 0;
 }

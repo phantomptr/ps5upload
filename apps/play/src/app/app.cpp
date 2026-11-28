@@ -55,6 +55,7 @@ struct PickItem
     std::uint16_t port;
     char name[65];
     const Host *host;
+    bool tailnet;
 };
 
 int pick_items(const net::Answer *found, int n_found, const Settings &s, PickItem *out, int cap) noexcept
@@ -67,6 +68,7 @@ int pick_items(const net::Answer *found, int n_found, const Settings &s, PickIte
         p.kind = PickItem::found;
         net::ip_text(found[i].ip_be, p.addr);
         p.port = found[i].info.port;
+        p.tailnet = found[i].tailnet;
         std::snprintf(p.name, sizeof p.name, "%s", found[i].info.name[0] ? found[i].info.name : p.addr);
     }
     const Host *recent[Settings::kHosts];
@@ -101,6 +103,7 @@ int clampi(int v, int lo, int hi) noexcept
 App::App(const char *version, ui::Image bg, ui::Image logo) noexcept : version_{version}, bg_{bg}, logo_{logo}
 {
     pthread_mutex_init(&disc_lock_, nullptr);
+    pthread_mutex_init(&helper_lock_, nullptr);
     std::size_t cap = 0;
     std::uint8_t *b = platform::message_buffer(0, &cap);
     static Guest guest(platform::sinks(), b, cap);
@@ -195,8 +198,32 @@ void *App::discovery_main(void *self) noexcept
         for (int i = 0; i < nr; ++i)
             if (net::resolve(recent[i]->addr, &uni[nu]))
                 ++nu;
+        // The helper (when it runs) knows the engines in its mesh, Tailscale ones too.
+        helper::Engine eng[8];
+        const int ne = helper::mesh(eng, 8);
+        for (int i = 0; i < ne && nu < Settings::kHosts; ++i)
+            if (!eng[i].tailnet && net::resolve(eng[i].addr, &uni[nu]))
+                ++nu;
         net::Answer a[8];
-        const int n = net::discover(uni, nu, 1500, a, 8);
+        int n = net::discover(uni, nu, 1500, a, 8);
+        for (int i = 0; i < ne && n < 8; ++i)
+        {
+            std::uint32_t ip = 0;
+            if (!net::resolve(eng[i].addr, &ip))
+                continue;
+            bool known = false;
+            for (int k = 0; k < n; ++k)
+                known = known || a[k].ip_be == ip;
+            if (known)
+                continue;
+            net::Answer x{};
+            x.ip_be = ip;
+            x.tailnet = eng[i].tailnet;
+            x.info.port = eng[i].port ? eng[i].port : 19113;
+            std::snprintf(x.info.name, sizeof x.info.name, "%s", eng[i].name);
+            std::snprintf(x.info.version, sizeof x.info.version, "%s", eng[i].version);
+            a[n++] = x;
+        }
         pthread_mutex_lock(&app->disc_lock_);
         std::memcpy(app->found_, a, sizeof(net::Answer) * static_cast<std::size_t>(n));
         app->n_found_ = n;
@@ -235,6 +262,17 @@ void App::start_host() noexcept
     const Host *h = settings_.find(addr_, port_);
     host_->stop();
     host_->start(addr_, port_, h ? h->token : "", version_, on_token, this);
+    if (!helper_run_.exchange(true))
+    {
+        pthread_mutex_lock(&helper_lock_);
+        helper_ = HelperState{};
+        pthread_mutex_unlock(&helper_lock_);
+        if (pthread_create(&helper_thread_, nullptr, helper_main, this) != 0)
+        {
+            helper_thread_ = {};
+            helper_run_ = false;
+        }
+    }
     log("app: host channel to %s:%u (%s)", addr_, static_cast<unsigned>(port_), h && h->token[0] ? "paired" : "not paired");
 }
 
@@ -242,6 +280,80 @@ void App::stop_host() noexcept
 {
     if (host_->running())
         host_->stop();
+    if (helper_run_.exchange(false) && helper_thread_)
+    {
+        pthread_join(helper_thread_, nullptr);
+        helper_thread_ = {};
+    }
+}
+
+void *App::helper_main(void *self) noexcept
+{
+    auto *app = static_cast<App *>(self);
+    std::uint64_t next_rp = 0;
+    while (app->helper_run_.load())
+    {
+        const std::uint64_t now = net::now_us();
+        pthread_mutex_lock(&app->helper_lock_);
+        const bool waiting = !std::strcmp(app->helper_.pin.state, "waiting");
+        pthread_mutex_unlock(&app->helper_lock_);
+        if (now >= next_rp)
+        {
+            next_rp = now + 3000000;
+            helper::Rp rp;
+            const bool ok = helper::rp(rp);
+            pthread_mutex_lock(&app->helper_lock_);
+            if (app->helper_.present == -1 || ok != (app->helper_.present == 1))
+                log("helper: app API %s", ok ? "answers" : "not there (the app works without it)");
+            app->helper_.present = ok ? 1 : 0;
+            app->helper_.rp_known = ok;
+            if (ok)
+                app->helper_.rp = rp;
+            app->dirty_ = true;
+            pthread_mutex_unlock(&app->helper_lock_);
+        }
+        if (waiting)
+        {
+            // The PIN's state, once a second while it is up (paired, failed, timeout end it).
+            helper::Pin pin;
+            if (helper::pin_get(pin))
+            {
+                pthread_mutex_lock(&app->helper_lock_);
+                if (!std::strcmp(pin.state, "paired"))
+                    app->helper_.paired_until_us = net::now_us() + 10000000;
+                app->helper_.pin = pin;
+                app->dirty_ = true;
+                pthread_mutex_unlock(&app->helper_lock_);
+            }
+        }
+        for (int i = 0; i < 10 && app->helper_run_.load(); ++i)
+            net::sleep_ms(100);
+    }
+    return nullptr;
+}
+
+void App::refresh_helper_view() noexcept
+{
+    if (fake_.on)
+    {
+        helper_view_ = HelperState{};
+        helper_view_.present = fake_.helper_present;
+        helper_view_.rp_known = fake_.helper_present == 1;
+        helper_view_.rp = fake_.rp;
+        helper_view_.pin = fake_.pin;
+        return;
+    }
+    helper_view_ = helper_state();
+    if (!std::strcmp(helper_view_.pin.state, "paired") && net::now_us() > helper_view_.paired_until_us)
+        std::snprintf(helper_view_.pin.state, sizeof helper_view_.pin.state, "%s", "idle");
+}
+
+App::HelperState App::helper_state() noexcept
+{
+    pthread_mutex_lock(&helper_lock_);
+    HelperState h = helper_;
+    pthread_mutex_unlock(&helper_lock_);
+    return h;
 }
 
 void App::leave_game() noexcept
@@ -363,6 +475,22 @@ void App::input_pick(std::uint32_t p) noexcept
     std::snprintf(addr_, sizeof addr_, "%s", it.addr);
     port_ = it.port;
     std::snprintf(engine_name_, sizeof engine_name_, "%s", it.kind == PickItem::found ? it.name : (it.host ? it.host->name : ""));
+    if (it.kind == PickItem::found && it.tailnet)
+    {
+        // Over Tailscale the app dials the helper's forward on this console.
+        std::uint16_t local = 0;
+        char err[32];
+        if (!helper::forward(it.addr, it.port, &local, err, sizeof err))
+        {
+            std::snprintf(note_, sizeof note_, tr(S::pick_tailnet_fail), it.name, err);
+            note_until_ = net::now_us() + 6000000;
+            platform::blip(platform::Blip::bad);
+            return;
+        }
+        log("app: %s over Tailscale through the helper's port %u", it.name, static_cast<unsigned>(local));
+        std::snprintf(addr_, sizeof addr_, "%s", "127.0.0.1");
+        port_ = local;
+    }
     disc_run_ = false;
     if (for_host_)
     {
@@ -544,8 +672,15 @@ int App::host_rows(const CompanionView &v, Row *rows, int cap) const noexcept
     if (v.phase != CompanionView::paired)
         return 0;
     const CompanionDoc &d = v.doc;
+    // Friends asking first; then this console's Remote Play, through the helper when it runs.
     for (int i = 0; i < d.n_asks; ++i)
         add(Row::ask, d.asks[i].id);
+    const HelperState &hs = helper_view_;
+    if (hs.present == 1 && hs.rp_known &&
+        (!hs.rp.service_on || (hs.rp.needs_user_permission && !hs.rp.user_on)))
+        add(Row::rp_enable);
+    if (hs.present == 1)
+        add(Row::rp_pin);
     if (!d.together_open)
         add(Row::open);
     else
@@ -568,6 +703,7 @@ void App::input_host(std::uint32_t p) noexcept
     if (p & pad::kCircle)
         return back();
     const CompanionView v = host_view();
+    refresh_helper_view();
     Row rows[24];
     const int n = host_rows(v, rows, 24);
     if (v.phase == CompanionView::failed && (p & pad::kCross))
@@ -592,6 +728,54 @@ void App::input_host(std::uint32_t p) noexcept
     case Row::pair:
         if (cross)
             ok(host_->pair());
+        break;
+    case Row::rp_enable:
+        if (cross)
+        {
+            // A change to the console's settings: a second press says yes.
+            const std::uint64_t now = net::now_us();
+            if (now > rp_confirm_until_)
+            {
+                rp_confirm_until_ = now + 5000000;
+                platform::blip(platform::Blip::choose);
+                break;
+            }
+            rp_confirm_until_ = 0;
+            helper::Rp rp;
+            char err[32] = {};
+            const bool done = helper::rp_enable(rp, err, sizeof err);
+            log("helper: turn on Remote Play: %s", done ? "done" : err);
+            pthread_mutex_lock(&helper_lock_);
+            if (done)
+                helper_.rp = rp, helper_.rp_known = true, helper_.error[0] = 0;
+            else
+                std::snprintf(helper_.error, sizeof helper_.error, tr(S::host_rp_enable_failed), err);
+            pthread_mutex_unlock(&helper_lock_);
+            ok(done);
+        }
+        break;
+    case Row::rp_pin:
+        if (cross)
+        {
+            helper::Pin pin;
+            char err[32] = {};
+            bool done;
+            if (!std::strcmp(helper_view_.pin.state, "waiting"))
+            {
+                done = helper::pin_cancel();
+                std::snprintf(pin.state, sizeof pin.state, "%s", "idle");
+            }
+            else
+                done = helper::pin_request(pin, err, sizeof err);
+            log("helper: Remote Play PIN %s: %s", pin.state, done ? "ok" : err);
+            pthread_mutex_lock(&helper_lock_);
+            if (done)
+                helper_.pin = pin, helper_.error[0] = 0;
+            else
+                std::snprintf(helper_.error, sizeof helper_.error, tr(S::host_rp_pin_failed), err);
+            pthread_mutex_unlock(&helper_lock_);
+            ok(done);
+        }
         break;
     case Row::ask:
         if (cross)
@@ -959,7 +1143,7 @@ void App::draw_pick(Canvas &c) noexcept
         else
         {
             std::snprintf(sub, sizeof sub, "%s:%u · %s", it.addr, static_cast<unsigned>(it.port),
-                          tr(it.kind == PickItem::found ? S::pick_found : S::pick_used));
+                          tr(it.kind != PickItem::found ? S::pick_used : it.tailnet ? S::pick_tailnet : S::pick_found));
             draw_row(c, kLeft, y, 1200, 104, sel_ == i, it.name, sub);
         }
         y += 120;
@@ -1264,6 +1448,7 @@ int App::draw_playing_layer(Canvas &l, const GuestView &v, std::uint64_t now, in
 
 void App::draw_host(Canvas &c, const CompanionView &v) noexcept
 {
+    refresh_helper_view();
     draw_frame(c, tr(S::home_host));
     char buf[320];
     const CompanionDoc &d = v.doc;
@@ -1331,16 +1516,40 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
     c.circle(kLeft + 10, y + 18, 9, d.playing ? col::good : col::muted);
     c.text(Font::small, kLeft + 34, y + 4, d.playing ? buf : tr(S::host_idle), d.playing ? col::text : col::muted, 1060);
     y += 44;
-    if (d.rp_paired)
-        std::snprintf(buf, sizeof buf, tr(S::host_rp_ready), d.engine_name[0] ? d.engine_name : "PS5Upload");
-    c.circle(kLeft + 10, y + 18, 9, d.rp_paired ? col::good : col::warn);
-    c.text(Font::small, kLeft + 34, y + 4, d.rp_paired ? buf : tr(S::host_rp_setup), d.rp_paired ? col::text : col::warn, 1060);
-    y += 44;
-    if (d.helper_present >= 0)
+    const HelperState &hs = helper_view_;
+    if (hs.present == 1 && hs.rp_known && !hs.rp.ready)
     {
-        c.circle(kLeft + 10, y + 18, 9, d.helper_present ? col::good : col::warn);
-        c.text(Font::small, kLeft + 34, y + 4, tr(d.helper_present ? S::host_helper_on : S::host_helper_off),
-               d.helper_present ? col::text : col::warn, 1060);
+        // What this console's helper says is missing, in order.
+        const S why = !hs.rp.service_on                                    ? S::host_rp_off_here
+                      : hs.rp.needs_user_permission && !hs.rp.user_on      ? S::host_rp_user_here
+                      : !hs.rp.psn_activated                               ? S::host_rp_account
+                                                                           : S::host_rp_setup;
+        c.circle(kLeft + 10, y + 18, 9, col::warn);
+        c.text(Font::small, kLeft + 34, y + 4, tr(why), col::warn, 1060);
+    }
+    else
+    {
+        const bool good = d.rp_paired || (hs.present == 1 && hs.rp_known && hs.rp.ready);
+        if (d.rp_paired)
+            std::snprintf(buf, sizeof buf, tr(S::host_rp_ready), d.engine_name[0] ? d.engine_name : "PS5Upload");
+        else
+            std::snprintf(buf, sizeof buf, "%s", tr(good ? S::host_rp_on_here : S::host_rp_setup));
+        c.circle(kLeft + 10, y + 18, 9, good ? col::good : col::warn);
+        c.text(Font::small, kLeft + 34, y + 4, buf, good ? col::text : col::warn, 1060);
+    }
+    y += 44;
+    // The helper: what this app saw on 127.0.0.1, else what the engine heard.
+    const int helper_on = hs.present >= 0 ? hs.present : d.helper_present;
+    if (helper_on >= 0)
+    {
+        c.circle(kLeft + 10, y + 18, 9, helper_on ? col::good : col::warn);
+        c.text(Font::small, kLeft + 34, y + 4, tr(helper_on ? S::host_helper_on : S::host_helper_off),
+               helper_on ? col::text : col::warn, 1060);
+        y += 44;
+    }
+    if (hs.error[0])
+    {
+        c.text(Font::small, kLeft + 34, y + 4, hs.error, col::warn, 1060);
         y += 44;
     }
     y += 16;
@@ -1402,16 +1611,47 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
                                                                  : S::awake_off);
             break;
         case Row::pair: title[0] = 0; break;
+        case Row::rp_enable:
+            std::snprintf(title, sizeof title, "%s",
+                          tr(net::now_us() < rp_confirm_until_ ? S::host_rp_enable_confirm : S::host_rp_enable));
+            break;
+        case Row::rp_pin:
+            std::snprintf(title, sizeof title, "%s",
+                          tr(!std::strcmp(hs.pin.state, "waiting") ? S::host_rp_pin_stop : S::host_rp_pin));
+            break;
         }
         draw_row(c, kLeft, y, row_w, row_h - 10, s, title, nullptr, value);
         if (r.kind == Row::ask)
             c.circle(kLeft + 14, y + (row_h - 10) / 2, 7, col::warn);
         y += row_h;
     }
-    // Right: Play Together's invite (code + QR).
+    // Right: the Remote Play PIN while it is up, else Play Together's invite (code + QR).
     const int rx = 1300;
-    c.text(Font::title, rx, 210, tr(S::host_together), col::text);
-    if (!d.together_open)
+    const bool pin_up = !std::strcmp(hs.pin.state, "waiting") || !std::strcmp(hs.pin.state, "paired");
+    if (pin_up)
+    {
+        c.text(Font::title, rx, 210, tr(S::host_rp_pin_title), col::text);
+        if (!std::strcmp(hs.pin.state, "paired"))
+            c.text_wrap(Font::body, rx, 290, 540, tr(S::host_rp_pin_paired), col::good);
+        else
+        {
+            char shown[20];
+            const std::size_t pl = std::strlen(hs.pin.pin);
+            // 1234 5678: easier to type
+            if (pl == 8)
+                std::snprintf(shown, sizeof shown, "%.4s %.4s", hs.pin.pin, hs.pin.pin + 4);
+            else
+                std::snprintf(shown, sizeof shown, "%s", hs.pin.pin);
+            c.text(Font::big, rx, 290, shown, col::text);
+            std::snprintf(buf, sizeof buf, tr(S::host_rp_pin_text), hs.pin.seconds_left / 60, hs.pin.seconds_left % 60);
+            c.text_wrap(Font::small, rx, 390, 540, buf, col::muted);
+        }
+    }
+    else
+        c.text(Font::title, rx, 210, tr(S::host_together), col::text);
+    if (pin_up)
+        ; // the PIN has the right side
+    else if (!d.together_open)
         c.text_wrap(Font::body, rx, 280, 520, tr(d.playing ? S::host_together_closed : S::host_together_wait), col::muted);
     else if (d.has_invite)
     {
@@ -1448,7 +1688,7 @@ void App::draw_host(Canvas &c, const CompanionView &v) noexcept
         const S l[] = {S::hint_remove, S::hint_back};
         draw_hints(c, g, l, 2);
     }
-    else if (r && r->kind >= Row::sw_block)
+    else if (r && r->kind >= Row::sw_block && r->kind <= Row::sw_awake)
     {
         const int g[] = {G_CROSS, G_CIRCLE};
         const S l[] = {S::hint_change, S::hint_back};

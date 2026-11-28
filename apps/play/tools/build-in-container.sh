@@ -108,7 +108,7 @@ common=(-O2 -Wall -Wextra -Werror -ffunction-sections -fdata-sections -fno-excep
         -DPLAY_PS5 "-DPLAY_VERSION=\"$version\"" -I"$opus_src/include")
 objs=()
 for s in "$root"/src/core/*.cpp "$root"/src/net/*.cpp "$root"/src/ui/*.cpp "$root"/src/ps5/*.cpp \
-         "$root"/src/app/app.cpp "$root"/src/app/guest.cpp "$root"/src/app/companion.cpp "$root"/src/app/log.cpp; do
+         "$root"/src/app/app.cpp "$root"/src/app/guest.cpp "$root"/src/app/companion.cpp "$root"/src/app/helper.cpp "$root"/src/app/log.cpp; do
     o="$build/obj/$(basename "$(dirname "$s")")_$(basename "${s%.cpp}").o"
     "${cc[@]}" -std=c++20 "${common[@]}" -c "$s" -o "$o"
     objs+=("$o")

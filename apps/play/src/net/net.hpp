@@ -86,11 +86,16 @@ struct Answer
 {
     std::uint32_t ip_be;
     proto::Found info;
+    bool tailnet = false; // from the helper's mesh: a Tailscale address (reached through the helper)
 };
 int discover(const std::uint32_t *unicast, int n_unicast, unsigned timeout_ms, Answer *out,
              int cap) noexcept;
 
-// A plain HTTP GET (for /api/version): the body into out (terminated); returns the status or -1.
+// A plain HTTP request (no keep-alive): the answer's body into out (terminated; out also holds the
+// headers while reading, so give it room); returns the status or -1. body: JSON, or null.
+int http_request(const char *method, const char *addr, std::uint16_t port, const char *path, const char *body,
+                 char *out, std::size_t cap, unsigned timeout_ms) noexcept;
+// GET.
 int http_get(const char *addr, std::uint16_t port, const char *path, char *out, std::size_t cap,
              unsigned timeout_ms) noexcept;
 } // namespace play::net

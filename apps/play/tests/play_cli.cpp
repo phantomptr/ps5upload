@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "../src/app/companion.hpp"
 #include "../src/app/guest.hpp"
+#include "../src/app/helper.hpp"
 #include "../src/app/log.hpp"
 #include "../src/core/proto.hpp"
 
@@ -228,6 +229,33 @@ int companion(int argc, char **argv)
     return 0;
 }
 
+int helper_cmd(int argc, char **argv)
+{
+    if (argc < 3)
+        return 2;
+    helper::set_port(static_cast<std::uint16_t>(std::atoi(argv[2])));
+    helper::Engine e[8];
+    const int n = helper::mesh(e, 8);
+    std::printf("mesh %d\n", n);
+    for (int i = 0; i < n; ++i)
+        std::printf("engine %s %s:%u tailnet=%d kind=%s\n", e[i].name, e[i].addr, e[i].port, e[i].tailnet, e[i].kind);
+    helper::Rp rp;
+    std::printf("rp %d ready=%d service_on=%d needs_user=%d\n", helper::rp(rp), rp.ready, rp.service_on,
+                rp.needs_user_permission);
+    char err[32] = {};
+    std::printf("enable %d ready=%d\n", helper::rp_enable(rp, err, sizeof err), rp.ready);
+    helper::Pin pin;
+    std::printf("pin %d %s %s %d\n", helper::pin_request(pin, err, sizeof err), pin.state, pin.pin, pin.seconds_left);
+    std::printf("pin_get %d %s\n", helper::pin_get(pin), pin.state);
+    std::printf("pin_cancel %d\n", helper::pin_cancel());
+    std::uint16_t local = 0;
+    std::printf("forward %d %u\n", helper::forward("100.101.102.103", 19113, &local, err, sizeof err), local);
+    std::printf("forward_lan %d %s\n", helper::forward("192.168.1.20", 19113, &local, err, sizeof err), err);
+    helper::set_port(9);
+    std::printf("absent %d\n", helper::rp(rp));
+    return 0;
+}
+
 int discover()
 {
     net::Answer a[16];
@@ -254,6 +282,8 @@ int main(int argc, char **argv)
         return companion(argc, argv);
     if (argc >= 2 && !std::strcmp(argv[1], "discover"))
         return discover();
+    if (argc >= 2 && !std::strcmp(argv[1], "helper"))
+        return helper_cmd(argc, argv);
     std::fprintf(stderr, "usage: play-cli discover | join ADDR PORT [CODE] | companion ADDR PORT [TOKEN] [--pair]\n");
     return 2;
 }
