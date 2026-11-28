@@ -11,6 +11,11 @@ export interface ConsoleStatus {
   /** The console's time zone, minutes ahead of UTC (summer time included); null when it cannot
    *  tell, absent from an older helper. The console's own browser has no zone (time.ts). */
   tz_min?: number | null;
+  /** Where tz_min came from (#978): "setting" (Settings › Time zone), "console" (the console's own
+   *  clock conversion), "registry" or "none". */
+  tz_src?: string;
+  /** Every value the helper read for the zone, for bug reports; the page does not use them. */
+  tz_raw?: Record<string, number | boolean | null>;
 }
 
 const BRAND = "PS5Upload Minion";

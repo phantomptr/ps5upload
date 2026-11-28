@@ -18,6 +18,7 @@ import {
 } from "../theme";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { forgetPhoneUrl } from "../ui/PhoneHandoff";
+import { formatZone, setConsoleZone, stepZone, timeInZone, ZONE_OFFSETS } from "../time";
 import { TailscaleSection } from "./Tailscale";
 import { DevicesSection } from "./Devices";
 
@@ -39,7 +40,33 @@ export interface WebSettings {
   enabled?: boolean;
   /** The page opens on Cheats instead of Home (#584); older helpers send none (Home). */
   start_cheats?: boolean;
+  /** The page's time zone chosen by hand, minutes ahead of UTC; null: Automatic (#978). Older
+   *  helpers send none and have no such setting. */
+  tz_min?: number | null;
+  /** What Automatic gives now (the console's own zone), null when the console does not say. */
+  tz_auto?: number | null;
+  /** Where Automatic's zone came from: "console", "registry" or "none". */
+  tz_auto_src?: string;
   version: string;
+}
+
+/** Whether this helper has the time zone setting (it sends `tz_min`, null or a number). */
+export function hasTimeZone(s: WebSettings | null): s is WebSettings & { tz_min: number | null } {
+  return !!s && (s.tz_min === null || typeof s.tz_min === "number");
+}
+
+/** The note under Settings › Time zone: the zone the PS5's browser uses and its time now. */
+export function timeZoneNote(s: Pick<WebSettings, "tz_min" | "tz_auto">, nowMs: number = Date.now()): string {
+  if (typeof s.tz_min === "number")
+    return t("cw_settings_tz_note_offset", { zone: formatZone(s.tz_min), now: timeInZone(nowMs, s.tz_min) });
+  if (typeof s.tz_auto === "number")
+    return t("cw_settings_tz_note_auto", { zone: formatZone(s.tz_auto), now: timeInZone(nowMs, s.tz_auto) });
+  return t("cw_settings_tz_note_unknown");
+}
+
+/** The offset "UTC offset" starts at: the console's own zone when it said one, else UTC. */
+export function firstOffset(s: Pick<WebSettings, "tz_auto">): number {
+  return typeof s.tz_auto === "number" && Number.isInteger(s.tz_auto) && s.tz_auto % 15 === 0 ? s.tz_auto : 0;
 }
 
 /** The section the page opens on: Cheats when the helper saved that start page and the page has a
@@ -129,6 +156,9 @@ export interface SettingsViewProps {
   onToggleTile: () => void;
   /** Choose the start page (#584): true opens on Cheats. Absent, or a helper without the setting: hidden. */
   onStartPage?: (cheats: boolean) => void;
+  /** Choose the time zone (#978): minutes ahead of UTC, or null for Automatic. Absent, or a helper
+   *  without the setting: hidden. */
+  onTimeZone?: (min: number | null) => void;
   onLanguage: (code: string) => void;
   /** The Full screen switch: whether the page is full screen now, or null where the browser cannot
    *  or refused (the switch is hidden). */
@@ -346,6 +376,68 @@ export function SettingsView(p: SettingsViewProps) {
         </section>
       ) : null}
 
+      {hasTimeZone(s) && p.onTimeZone ? (
+        <section className="cw-home-section" data-setting="time-zone">
+          <h2 className="cw-h2">{t("cw_settings_tz")}</h2>
+          <div className="cw-quick" role="group" aria-label={t("cw_settings_tz")}>
+            <button
+              type="button"
+              className="cw-focusable cw-button"
+              data-tz-choice="auto"
+              aria-pressed={s.tz_min === null}
+              disabled={p.busy}
+              onClick={() => {
+                if (s.tz_min !== null) p.onTimeZone?.(null);
+              }}
+            >
+              <span>{t("cw_settings_tz_auto")}</span>
+            </button>
+            <button
+              type="button"
+              className="cw-focusable cw-button"
+              data-tz-choice="offset"
+              aria-pressed={s.tz_min !== null}
+              disabled={p.busy}
+              onClick={() => {
+                if (s.tz_min === null) p.onTimeZone?.(firstOffset(s));
+              }}
+            >
+              <span>{t("cw_settings_tz_offset")}</span>
+            </button>
+          </div>
+          {s.tz_min !== null ? (
+            <div className="cw-quick" role="group" aria-label={t("cw_settings_tz_offset")}>
+              <button
+                type="button"
+                className="cw-focusable cw-button"
+                data-tz-step="earlier"
+                aria-label={t("cw_settings_tz_earlier")}
+                disabled={p.busy || s.tz_min <= ZONE_OFFSETS[0]}
+                onClick={() => p.onTimeZone?.(stepZone(s.tz_min as number, -1))}
+              >
+                <span aria-hidden="true">{"\u2212"}</span>
+              </button>
+              <span className="cw-tz-value" data-tz-value="">
+                {formatZone(s.tz_min)}
+              </span>
+              <button
+                type="button"
+                className="cw-focusable cw-button"
+                data-tz-step="later"
+                aria-label={t("cw_settings_tz_later")}
+                disabled={p.busy || s.tz_min >= ZONE_OFFSETS[ZONE_OFFSETS.length - 1]}
+                onClick={() => p.onTimeZone?.(stepZone(s.tz_min as number, 1))}
+              >
+                <span aria-hidden="true">+</span>
+              </button>
+            </div>
+          ) : null}
+          <p className="cw-dim cw-setting-note" data-tz-note="">
+            {timeZoneNote(s)}
+          </p>
+        </section>
+      ) : null}
+
       <section className="cw-home-section">
         <h2 className="cw-h2">{t("cw_settings_network")}</h2>
         {s ? (
@@ -503,7 +595,7 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
       });
   }, []);
 
-  const save = useCallback((change: Partial<Pick<WebSettings, "lan" | "tile" | "start_cheats">>) => {
+  const save = useCallback((change: Partial<Pick<WebSettings, "lan" | "tile" | "start_cheats" | "tz_min">>) => {
     setBusy(true);
     setError(null);
     call<WebSettings>("/api/settings/set", change)
@@ -511,6 +603,8 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
         async (s) => {
           setSettings(s);
           if (change.lan !== undefined) forgetPhoneUrl(); // "Continue on your phone" asks again
+          // The new zone at once, not at the next status poll (it applies on the PS5's own browser only).
+          if (change.tz_min !== undefined) setConsoleZone(s.tz_min ?? s.tz_auto ?? null);
           if (change.tile === undefined) return;
           // The tile is added or removed after the reply: wait for the real result (the switch stays
           // disabled meanwhile) and say so when it did not work.
@@ -556,6 +650,9 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
       }}
       onStartPage={(cheats) => {
         if (settings && !busy && settings.start_cheats !== cheats) save({ start_cheats: cheats });
+      }}
+      onTimeZone={(min) => {
+        if (settings && !busy && settings.tz_min !== min) save({ tz_min: min });
       }}
       onLanguage={(code) => {
         chooseLanguage(code);

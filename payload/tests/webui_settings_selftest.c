@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "webui_codec.h"
 #include "webui_settings.h"
 #include "webui_tile.h"
 
@@ -63,7 +64,7 @@ static int count_entries(const char *dir) {
 
 static void missing_file_gives_defaults(void) {
     char p[512];
-    webui_settings_t s = { 7, 7, 7, 7 };
+    webui_settings_t s = { 7, 7, 7, 7, 7, 7 };
     snprintf(p, sizeof p, "%s/none.json", g_dir);
     CHECK(webui_settings_load(p, &s) == 1);
     CHECK(s.lan == 0 && s.tile == 1 && s.enabled == 1);
@@ -84,14 +85,14 @@ static void garbled_file_gives_defaults(void) {
     size_t i;
     snprintf(p, sizeof p, "%s/bad.json", g_dir);
     for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
-        webui_settings_t s = { 7, 7, 7, 7 };
+        webui_settings_t s = { 7, 7, 7, 7, 7, 7 };
         put_file(p, bad[i]);
         CHECK(webui_settings_load(p, &s) == 1);
         CHECK(s.lan == 0 && s.tile == 1 && s.enabled == 1);
     }
     /* A valid object missing a key keeps that key's default. */
     {
-        webui_settings_t s = { 7, 7, 7, 7 };
+        webui_settings_t s = { 7, 7, 7, 7, 7, 7 };
         put_file(p, "{\"lan\":true}");
         CHECK(webui_settings_load(p, &s) == 0);
         CHECK(s.lan == 1 && s.tile == 1);
@@ -123,14 +124,14 @@ static void save_then_load_round_trips(void) {
     for (lan = 0; lan < 2; lan++)
         for (tile = 0; tile < 2; tile++)
             for (enabled = 0; enabled < 2; enabled++) {
-                webui_settings_t in = { lan, tile, enabled, 0 }, out = { 7, 7, 7, 7 };
+                webui_settings_t in = { lan, tile, enabled, 0, 0, 0 }, out = { 7, 7, 7, 7, 7, 7 };
                 CHECK(webui_settings_save(p, &in) == 0);
                 CHECK(webui_settings_load(p, &out) == 0);
                 CHECK(out.lan == lan && out.tile == tile && out.enabled == enabled);
             }
     /* The exact file text, and nothing left behind but the file itself. */
     {
-        webui_settings_t d = { 0, 1, 1, 0 };
+        webui_settings_t d = { 0, 1, 1, 0, 0, 0 };
         CHECK(webui_settings_save(p, &d) == 0);
         CHECK(get_file(p, text, sizeof text) != (size_t)-1);
         CHECK(strcmp(text, "{\"lan\":false,\"tile\":true,\"enabled\":true,\"start_cheats\":false}") == 0);
@@ -143,7 +144,7 @@ static void save_then_load_round_trips(void) {
         d.start_cheats = 1;
         CHECK(webui_settings_save(p, &d) == 0);
         {
-            webui_settings_t back = { 7, 7, 7, 7 };
+            webui_settings_t back = { 7, 7, 7, 7, 7, 7 };
             CHECK(webui_settings_load(p, &back) == 0);
             CHECK(back.lan == 0 && back.tile == 1 && back.enabled == 1 && back.start_cheats == 1);
         }
@@ -151,7 +152,7 @@ static void save_then_load_round_trips(void) {
     }
     /* A save that cannot happen leaves no file and says so. */
     {
-        webui_settings_t d = { 1, 0, 1, 0 };
+        webui_settings_t d = { 1, 0, 1, 0, 0, 0 };
         snprintf(sub, sizeof sub, "%s/no-such-dir/webui.json", g_dir);
         CHECK(webui_settings_save(sub, &d) == -1);
     }
@@ -172,7 +173,7 @@ static void startup_plan_follows_enabled_and_tile(void) {
     int lan;
     for (lan = 0; lan < 2; lan++)
         for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-            webui_settings_t s = { lan, cases[i].tile, cases[i].enabled, 0 };
+            webui_settings_t s = { lan, cases[i].tile, cases[i].enabled, 0, 0, 0 };
             webui_startup_t p = webui_startup_plan(&s);
             CHECK(p.serve == cases[i].serve);
             CHECK(p.tile_add == cases[i].add);
@@ -797,6 +798,58 @@ static void minion_forget_removes_leftovers(void) {
     unlink(keep);
 }
 
+/* #978: the page's time zone chosen by hand. Written only when set, read back, and a bad value is
+ * Automatic, never a garbled file that would reset the LAN and tile settings. */
+static void time_zone_setting(void) {
+    char p[512], text[256];
+    webui_settings_t d = { 1, 0, 1, 0, 1, -180 }, back = { 7, 7, 7, 7, 7, 7 };
+    snprintf(p, sizeof p, "%s/tz.json", g_dir);
+    CHECK(webui_settings_save(p, &d) == 0);
+    CHECK(get_file(p, text, sizeof text) != (size_t)-1);
+    CHECK(strcmp(text, "{\"lan\":true,\"tile\":false,\"enabled\":true,\"start_cheats\":false,\"tz_min\":-180}") == 0);
+    CHECK(webui_settings_load(p, &back) == 0);
+    CHECK(back.lan == 1 && back.tile == 0 && back.enabled == 1 && back.tz_set == 1 && back.tz_min == -180);
+    /* Nepal (+5:45) and the far ends */
+    d.tz_min = 345;
+    CHECK(webui_settings_save(p, &d) == 0 && webui_settings_load(p, &back) == 0 && back.tz_set && back.tz_min == 345);
+    d.tz_min = 840;
+    CHECK(webui_settings_save(p, &d) == 0 && webui_settings_load(p, &back) == 0 && back.tz_set && back.tz_min == 840);
+    d.tz_min = -720;
+    CHECK(webui_settings_save(p, &d) == 0 && webui_settings_load(p, &back) == 0 && back.tz_set && back.tz_min == -720);
+    /* Automatic: no key at all, as an older helper wrote it */
+    d.tz_set = 0;
+    d.tz_min = 0;
+    CHECK(webui_settings_save(p, &d) == 0);
+    CHECK(get_file(p, text, sizeof text) != (size_t)-1);
+    CHECK(strstr(text, "tz_min") == NULL);
+    CHECK(webui_settings_load(p, &back) == 0 && back.tz_set == 0 && back.lan == 1);
+    /* UTC by hand is a setting too, not Automatic */
+    d.tz_set = 1;
+    CHECK(webui_settings_save(p, &d) == 0 && webui_settings_load(p, &back) == 0 && back.tz_set == 1 && back.tz_min == 0);
+    /* bad values: Automatic, the rest of the file kept */
+    {
+        static const char *bad[] = {
+            "{\"lan\":true,\"tz_min\":\"-3\"}", "{\"lan\":true,\"tz_min\":-181}", "{\"lan\":true,\"tz_min\":900}",
+            "{\"lan\":true,\"tz_min\":-1.5}", "{\"lan\":true,\"tz_min\":null}", "{\"lan\":true,\"tz_min\":true}",
+        };
+        size_t i;
+        for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            webui_settings_t s = { 7, 7, 7, 7, 7, 7 };
+            put_file(p, bad[i]);
+            CHECK(webui_settings_load(p, &s) == 0);
+            CHECK(s.lan == 1 && s.tile == 1 && s.tz_set == 0 && s.tz_min == 0);
+        }
+    }
+    /* What an older helper reads from a file with the key: its own keys, as written. */
+    {
+        int v = 7;
+        const char *j = "{\"lan\":true,\"tile\":false,\"enabled\":true,\"start_cheats\":true,\"tz_min\":-180}";
+        CHECK(webui_json_bool(j, strlen(j), "lan", &v) == 1 && v == 1);
+        CHECK(webui_json_bool(j, strlen(j), "start_cheats", &v) == 1 && v == 1);
+    }
+    unlink(p);
+}
+
 int main(void) {
     snprintf(g_dir, sizeof g_dir, "/tmp/ps5upload-webui-settings-XXXXXX");
     if (!mkdtemp(g_dir)) {
@@ -806,6 +859,7 @@ int main(void) {
     missing_file_gives_defaults();
     garbled_file_gives_defaults();
     save_then_load_round_trips();
+    time_zone_setting();
     startup_plan_follows_enabled_and_tile();
     param_json_exact();
     tile_files_written_only_when_different();
