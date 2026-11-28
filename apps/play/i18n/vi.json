@@ -520,5 +520,6 @@
   "talk_latched": "Khi mic của tôi đang bật",
   "pm_give_p1": "Nhường Người chơi 1",
   "pm_take_p1": "Lấy lại Người chơi 1",
-  "pm_move_to": "Chuyển sang Người chơi %d"
+  "pm_move_to": "Chuyển sang Người chơi %d",
+  "released_note": "Bạn đã rời đi. Những người khác trên PS5 này vẫn chơi tiếp."
 }

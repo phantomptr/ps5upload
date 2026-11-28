@@ -625,6 +625,14 @@ void Guest::handle_text(const char *t, std::size_t n) noexcept
         break;
     case proto::GuestEvent::bye:
         log("guest: bye %s", e.why);
+        // The host's game stopped: the place is kept while they may start again, so come back
+        // with the token (the engine answers "waiting" until they do), as the web page does.
+        if (!std::strcmp(e.why, "host_stopped") && token_[0] && !released_.load())
+        {
+            host_restarting_ = true;
+            set_phase(GuestView::waiting, e.why);
+            break;
+        }
         set_phase(GuestView::ended, e.why);
         break;
     case proto::GuestEvent::pong:

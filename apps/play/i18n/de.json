@@ -520,5 +520,6 @@
   "talk_latched": "Solange mein Mikro an ist",
   "pm_give_p1": "Spieler 1 abgeben",
   "pm_take_p1": "Spieler 1 zurücknehmen",
-  "pm_move_to": "Auf Spieler %d setzen"
+  "pm_move_to": "Auf Spieler %d setzen",
+  "released_note": "Du bist raus. Die anderen an dieser PS5 spielen weiter."
 }

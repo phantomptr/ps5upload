@@ -520,5 +520,6 @@
   "talk_latched": "麦克风开着时",
   "pm_give_p1": "让出玩家 1",
   "pm_take_p1": "收回玩家 1",
-  "pm_move_to": "移到玩家 %d"
+  "pm_move_to": "移到玩家 %d",
+  "released_note": "你已离开。这台 PS5 上的其他人继续游玩。"
 }

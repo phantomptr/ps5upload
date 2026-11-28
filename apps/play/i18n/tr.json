@@ -520,5 +520,6 @@
   "talk_latched": "Mikrofonum açıkken",
   "pm_give_p1": "1. Oyuncuyu ver",
   "pm_take_p1": "1. Oyuncuyu geri al",
-  "pm_move_to": "%d. Oyuncu yap"
+  "pm_move_to": "%d. Oyuncu yap",
+  "released_note": "Ayrıldın. Bu PS5'teki diğerleri oynamaya devam ediyor."
 }

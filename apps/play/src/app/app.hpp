@@ -416,6 +416,7 @@ class App
     char device_[32] = {};
     voice::Mixer mixer_;     // each person's volume and mute (this PS5 only)
     std::uint32_t resume_saved_ = 0; // the joined token kept on disk (its first 4 bytes)
+    std::uint64_t resume_saved_at_ = 0; // when it was last written (its time is the 5 minutes' start)
     char join_name_[48] = {};
     // the host's computer: its engine id (pairings are kept by it), its own address (not a
     // Tailscale forward on this console), a helper grant for the next hello, this app's id

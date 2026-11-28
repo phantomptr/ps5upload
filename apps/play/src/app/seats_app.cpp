@@ -36,7 +36,9 @@ void App::seat_toast(S what, const char *name) noexcept
 void App::seats_frame(std::uint64_t now) noexcept
 {
     const GuestView gv = guest_view();
-    const bool primary_in = gv.phase == GuestView::joined || gv.phase == GuestView::reconnecting;
+    // in, coming back, or waiting for the host to start again (their places are kept meanwhile)
+    const bool primary_in =
+        gv.phase == GuestView::joined || gv.phase == GuestView::reconnecting || gv.phase == GuestView::waiting;
     if (fake_.on)
         return;
     if (!primary_in)
@@ -51,6 +53,8 @@ void App::seats_frame(std::uint64_t now) noexcept
             }
         if (gv.phase != GuestView::asking && gv.phase != GuestView::connecting)
             seats_.clear();
+        // the game this PS5 was in is over: the next one starts with its first player in
+        released_ = false;
         return;
     }
     platform::LocalPad pads[platform::kLocalPads];

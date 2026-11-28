@@ -520,5 +520,6 @@
   "talk_latched": "Finché il microfono è attivo",
   "pm_give_p1": "Cedi Giocatore 1",
   "pm_take_p1": "Riprendi Giocatore 1",
-  "pm_move_to": "Sposta su Giocatore %d"
+  "pm_move_to": "Sposta su Giocatore %d",
+  "released_note": "Sei uscito. Gli altri su questa PS5 continuano a giocare."
 }

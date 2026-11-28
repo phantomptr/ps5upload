@@ -520,5 +520,6 @@
   "talk_latched": "Amíg a mikrofonom be van kapcsolva",
   "pm_give_p1": "1. játékos átadása",
   "pm_take_p1": "1. játékos visszavétele",
-  "pm_move_to": "Áthelyezés: %d. játékos"
+  "pm_move_to": "Áthelyezés: %d. játékos",
+  "released_note": "Kiléptél. A többiek ezen a PS5-ön tovább játszanak."
 }

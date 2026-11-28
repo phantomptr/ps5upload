@@ -345,6 +345,7 @@ namespace play::ui
     X(pm_give_p1, "Give Player 1") \
     X(pm_take_p1, "Take Player 1 back") \
     X(pm_move_to, "Move to Player %d") \
+    X(released_note, "You left. The others on this PS5 play on.") \
     X(ov_duck, "Game sound while others talk") \
     X(duck_off, "Off") \
     X(duck_little, "A little quieter") \

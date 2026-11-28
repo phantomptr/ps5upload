@@ -30,7 +30,7 @@ constexpr unsigned kOpenMs = 1500;
 constexpr unsigned kNeedKbps = 15000; // the 1080p stream's default (engine auto_bitrate_kbps)
 constexpr std::uint64_t kReopenEveryUs = 30000000;
 constexpr unsigned kReopenWireBytes = 600; // a connect, the upgrade and its answer
-constexpr int kProbes = 4;
+constexpr int kProbes = route::Selector::kMax; // every way can be raced and probed
 constexpr unsigned kBridgeMs = 20000;
 
 // One per way that is checked (the bridge never is); static: they are large and live for the app.
@@ -448,6 +448,10 @@ void Guest::route_stop() noexcept
         pthread_join(route_thread_, nullptr);
         route_thread_ = {};
     }
+    // The race threads are the routed guest's (the first player's): another controller's seat
+    // has no ways of its own and must not join threads that are not its.
+    if (!n_routes_)
+        return;
     for (int i = 0; i < kProbes; ++i)
         if (g_race_started[i])
             pthread_join(g_race_thread[i], nullptr), g_race_started[i] = false;

@@ -1064,6 +1064,16 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
             {
                 log("app: leave chord: released (others from this PS5 play on)");
                 released_ = true;
+                std::snprintf(note_, sizeof note_, "%s", tr(S::released_note));
+                note_until_ = now + 5000000;
+                ov_note_until_ = note_until_;
+            }
+            else if (released_)
+            {
+                // already out while the others play: the chord again would end their game too
+                std::snprintf(note_, sizeof note_, "%s", tr(S::released_note));
+                note_until_ = now + 5000000;
+                ov_note_until_ = note_until_;
             }
             else
             {
@@ -1113,9 +1123,12 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
     {
         const std::uint32_t mark = static_cast<std::uint32_t>(gv.token[0]) << 24 | static_cast<std::uint32_t>(gv.token[1]) << 16 |
                                    static_cast<std::uint32_t>(std::strlen(gv.token));
-        if (mark != resume_saved_)
+        // Written again every minute while in: "Back to game" is offered for 5 minutes after the
+        // time saved, and the token stays the same for the whole game.
+        if (mark != resume_saved_ || now - resume_saved_at_ > 60000000)
         {
             resume_saved_ = mark;
+            resume_saved_at_ = now;
             save_resume(gv);
         }
     }

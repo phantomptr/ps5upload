@@ -54,6 +54,13 @@ class WaitingRoom
     // Opens the room (now, for kOpenForUs) / closes it.
     void arm() noexcept;
     void disarm() noexcept;
+    // Its stretch ran out (armed, then the time passed): the screen offers it again with △
+    // instead of opening it again by itself.
+    bool lapsed() const noexcept
+    {
+        const std::uint64_t until = armed_until_.load();
+        return until && until <= net::now_us();
+    }
     View view() noexcept;
     // An invite handed over (and its routes probed), oldest first; false when none.
     bool take(invite::Invite &out) noexcept;

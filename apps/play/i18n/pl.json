@@ -520,5 +520,6 @@
   "talk_latched": "Gdy mój mikrofon jest włączony",
   "pm_give_p1": "Oddaj Gracza 1",
   "pm_take_p1": "Odbierz Gracza 1",
-  "pm_move_to": "Przenieś na Gracza %d"
+  "pm_move_to": "Przenieś na Gracza %d",
+  "released_note": "Wychodzisz. Pozostali na tej PS5 grają dalej."
 }

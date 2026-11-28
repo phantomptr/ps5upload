@@ -520,5 +520,6 @@
   "talk_latched": "Selama mik saya aktif",
   "pm_give_p1": "Berikan Pemain 1",
   "pm_take_p1": "Ambil kembali Pemain 1",
-  "pm_move_to": "Pindah ke Pemain %d"
+  "pm_move_to": "Pindah ke Pemain %d",
+  "released_note": "Anda keluar. Yang lain di PS5 ini tetap bermain."
 }

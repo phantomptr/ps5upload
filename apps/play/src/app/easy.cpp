@@ -428,7 +428,15 @@ void App::easy_frame(std::uint64_t now) noexcept
         room_.set_bridge(own_ps5upload(own, sizeof own, &own_port));
         if (screen_ == Screen::home && !busy)
         {
-            if (!room_paused_)
+            // Open for its stretch, then offered again with △ (not opened again by itself: the
+            // hub keeps a room only while someone may use it).
+            if (!room_paused_ && room_.lapsed())
+            {
+                room_.disarm();
+                room_paused_ = true;
+                dirty_ = true;
+            }
+            else if (!room_paused_)
                 room_.arm();
         }
         else

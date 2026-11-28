@@ -337,6 +337,7 @@
   "pm_give_p1": "Give Player 1",
   "pm_take_p1": "Take Player 1 back",
   "pm_move_to": "Move to Player %d",
+  "released_note": "You left. The others on this PS5 play on.",
   "ov_duck": "Game sound while others talk",
   "duck_off": "Off",
   "duck_little": "A little quieter",
