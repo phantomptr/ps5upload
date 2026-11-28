@@ -28,6 +28,12 @@
  * read (webui_settings_load returned 0). Call once, before webui_start. */
 void webui_api_settings_init(const webui_settings_t *s, int saved);
 
+/* One of the page's routes called from inside the helper (the queue runner, webui_queue.h), as
+ * the page would call it: the same checks, the same jobs. `body` is the JSON request; the reply's
+ * body goes into `reply` (cut to cap - 1, NUL-terminated). The HTTP status, or -1 (no such route,
+ * or the call could not be made). */
+int webui_api_call(const char *path, const char *body, char *reply, size_t cap);
+
 /* Starts the :9180 server with the saved LAN setting (call after webui_api_settings_init). 0 when
  * it runs, -1 when it could not start (logged). */
 int webui_api_server_start(void);

@@ -92,6 +92,22 @@ describe("applyConsoleTasks", () => {
     expect(new Date(rows()[0].createdAt).getTime()).toBeGreaterThanOrEqual(before);
   });
 
+  it("#982: what waits in the console's queue shows as queued, read-only, and its row goes once it starts", () => {
+    applyConsoleTasks(HOST, [info({ id: "queue:5", state: "queued", kind: "pkg_install", name: "c.pkg", bytes_total: 0, files_total: 0, cancellable: false })]);
+    let [t] = rows();
+    expect(t.status).toBe("queued");
+    expect(t.detail).toBe("In the PS5's queue");
+    expect(taskCapabilities(t).canCancel).toBe(false);
+    // Read again, still waiting: one row.
+    applyConsoleTasks(HOST, [info({ id: "queue:5", state: "queued", kind: "pkg_install", name: "c.pkg", cancellable: false })]);
+    expect(rows()).toHaveLength(1);
+    // It started: the queue no longer lists it, its job does; the waiting row goes.
+    applyConsoleTasks(HOST, [info({ id: "ab12", kind: "pkg_install", name: "c.pkg" })]);
+    [t] = rows();
+    expect(rows()).toHaveLength(1);
+    expect(t.payload.consoleTaskId).toBe("ab12");
+  });
+
   it("keeps each console's tasks to itself", () => {
     applyConsoleTasks(HOST, [info()]);
     applyConsoleTasks("192.0.2.99", []);

@@ -67,6 +67,7 @@ import {
 } from "./move";
 import { extractLeftSomething, extractOpensDest, stillAsking } from "./askGuard";
 import { rateText, RateLine } from "../ui/rate";
+import { addToQueue } from "../queue/queue";
 import { batchOptions, currentBatch, startBatch, stopBatch, useBatch, waitJob, type BatchProgress } from "./batch";
 import {
   askConflict,
@@ -147,7 +148,7 @@ export type FilesAsk =
   | { kind: "upload" }
   /** On the console itself: how to upload here from a phone (its address, or LAN access to switch on). */
   | { kind: "phoneupload" }
-  | { kind: "pick"; op: "copy" | "move"; names: string[] }
+  | { kind: "pick"; op: "copy" | "move" | "queue"; names: string[] }
   | { kind: "info"; name: string }
   /** `edit`: straight into the text editor. */
   | { kind: "view"; name: string; type: ViewKind; edit?: boolean }
@@ -377,7 +378,9 @@ export interface FilesViewProps {
   pwOver?: PwAsk | null;
   onPwOverCancel?: () => void;
   onMkdir: (name: string) => void;
-  onPicked: (op: "copy" | "move", names: string[], destDir: string) => void;
+  onPicked: (op: "copy" | "move" | "queue", names: string[], destDir: string) => void;
+  /** Add the package at `path` to the console's queue (#982). */
+  onQueueInstall?: (path: string, name: string) => void;
   /** Open `dir` in Files with `name` focused (a search result); null name: the folder itself. */
   onReveal?: (dir: string, name: string | null) => void;
   /** Create an empty file named so in the folder shown (then it opens in the editor). */
@@ -393,6 +396,13 @@ export interface FilesViewProps {
   /** A share was added or edited (the dialog closed). */
   onShareSaved?: (s: SmbShare, added: boolean) => void;
   onShareRemove?: (id: string) => void;
+}
+
+/** Why an item could not be added to the console's queue (#982). */
+export function queueErrorText(e: unknown): string {
+  if (e instanceof ApiError && e.code === "queue_full") return t("cw_queue_full");
+  if (e instanceof ApiError && (e.status === 404 || e.code === "not_found")) return t("cw_queue_unsupported");
+  return filesErrorText(e) ?? String(e);
 }
 
 /** `line` · 45% · 1.2 GB / 2.6 GB, when the batch reports its bytes (a network-share copy, unpack). */
@@ -436,7 +446,7 @@ export function sheetActions(names: string[], entries: Entry[], pinned: boolean 
   if (names.length !== 1) return ["clipcopy", "cut", "copy", "move", "bulkrename", "fixperm", "delete"];
   const e = entries.find((x) => x.name === names[0]);
   const out: SheetAction[] = [];
-  if (e && e.kind === "file" && isPkg(e.name)) out.push("install");
+  if (e && e.kind === "file" && isPkg(e.name)) out.push("install", "queue");
   if (e && e.kind === "file" && isPayload(e.name)) out.push("loadpayload");
   if (e && e.kind !== "dir" && viewKind(e.name)) out.push("view");
   // Any small file opens in the text editor (a .cfg, .conf, .sh…); a binary one says it cannot.
@@ -454,7 +464,7 @@ export function sheetActions(names: string[], entries: Entry[], pinned: boolean 
 
 /** On a network share only Copy works: into the clipboard (to paste on the console) or Copy to… a console folder. */
 export function smbSheetActions(): SheetAction[] {
-  return ["clipcopy", "copy"];
+  return ["clipcopy", "copy", "queue"];
 }
 
 /** `names` as bulk rename items, in the order the list shows them (numbering follows it). */
@@ -771,6 +781,10 @@ function askView(p: FilesViewProps) {
                 return p.onAsk({ kind: "unpack", name });
               case "install":
                 return p.onAsk({ kind: "pkg", name });
+              case "queue":
+                // From a share: a copy into a console folder, picked first. A package here: its install.
+                if (isSmbPath(path)) return p.onAsk({ kind: "pick", op: "queue", names: a.names });
+                return p.onQueueInstall?.(joinPath(path, name), name);
               case "loadpayload":
                 return p.onAsk({ kind: "payload", name });
               case "extract":
@@ -937,7 +951,7 @@ function askView(p: FilesViewProps) {
     case "pick":
       return (
         <PathPicker
-          title={t(a.op === "copy" ? "cw_files_copy_to" : "cw_files_move_to")}
+          title={t(a.op === "move" ? "cw_files_move_to" : a.op === "queue" ? "cw_queue_add" : "cw_files_copy_to")}
           subtitle={namesTitle(a.names)}
           volumes={p.volumes ?? []}
           shares={isSmbPath(path) ? undefined : (p.shares ?? undefined)}
@@ -1719,9 +1733,22 @@ export function Files({ ctx }: { ctx: SectionContext }) {
   );
 
   const onPicked = useCallback(
-    (op: "copy" | "move", names: string[], destDir: string) => {
+    (op: "copy" | "move" | "queue", names: string[], destDir: string) => {
       setAsk(null);
       if (path == null) return;
+      if (op === "queue") {
+        // Into the console's queue (#982): each item a copy of its own, run one after another.
+        if (isSmbPath(destDir)) return;
+        void (async () => {
+          try {
+            for (const n of names) await addToQueue({ kind: "copy", src: joinPath(path, n), dest: joinPath(destDir, n), name: n });
+            setMessage({ tone: "info", text: t("cw_queue_added_n", { n: names.length }) });
+          } catch (e) {
+            setMessage({ tone: "error", text: queueErrorText(e) });
+          }
+        })();
+        return;
+      }
       const kinds = new Map(dir.entries.map((e) => [e.name, e.kind]));
       const items = () => names.map((n) => ({ path: joinPath(path, n), dir: kinds.get(n) === "dir" }));
       if (isSmbPath(path)) {
@@ -2437,6 +2464,13 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         remote={remote}
         onOpenSettings={ctx.hasSection("settings") ? () => ctx.openSection("settings") : undefined}
         onPicked={onPicked}
+        onQueueInstall={(pkg, name) => {
+          setAsk(null);
+          addToQueue({ kind: "install", src: pkg, name }).then(
+            () => setMessage({ tone: "info", text: t("cw_queue_added", { name }) }),
+            (e: unknown) => setMessage({ tone: "error", text: queueErrorText(e) }),
+          );
+        }}
         onReveal={onReveal}
         shares={shares}
         onShareSaved={onShareSaved}

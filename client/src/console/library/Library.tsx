@@ -3,8 +3,7 @@ import { Check, Copy, Download, FolderOpen, Gamepad2, HousePlus, Layers, Refresh
 import { formatBytes } from "../../lib/format";
 import { ApiError, call } from "../api";
 import { errorText, isDrive, volumeLabel, type Message, type Volume } from "../home/Home";
-import { installMessage, installPhaseText, installStoppable, kindText } from "../files/pkg";
-import { watchOp } from "../files/opJob";
+import { kindText } from "../files/pkg";
 import { startFolderSize, type ListPage } from "../files/folderSize";
 import { listShares, smbCallErrorText, watchSmbJob, type SmbJob } from "../files/smb";
 import { loadFullImage, loadImage, useLazyImage } from "../games/covers";
@@ -12,18 +11,18 @@ import { assemble, loadInfo, loadSources } from "../games/model";
 import { onNavAction } from "../nav";
 import type { SectionContext } from "../sections";
 import { t } from "../strings";
-import { rateText, trackJob } from "../ui/rate";
+import { RateLine } from "../ui/rate";
+import { addToQueue, cancelQueued, itemFor, unfinished, useQueue, type Queue } from "../queue/queue";
+import { itemLine } from "../queue/QueueList";
 import { Modal } from "../ui/Modal";
 import { compareVersions, filterGroups, gameSize, groupEntries, newestUpdate, type Format, type GameGroup, type Part, type Role } from "./group";
 import {
   CONSOLE_SOURCE,
   LIB_DIR,
-  STAGE_DIR,
   copyDest,
   displayName,
   entriesOf,
   readScan,
-  stagePath,
   startScan,
   type Entry,
   type LibScan,
@@ -149,6 +148,9 @@ export interface LibraryViewProps {
   onInstall: (e: Entry) => void;
   onCopy: (e: Entry, drive: string) => void;
   onRegister: (path: string, name: string) => void;
+  /** The console's queue (#982): each part shows its own item, never another game's. */
+  queue: Queue;
+  onCancelQueued: (id: number) => void;
   /** Show the folder holding `path` in Files (null: Files cannot be opened from here). */
   onShowInFiles: ((path: string) => void) | null;
 }
@@ -165,9 +167,14 @@ const parentOf = (path: string) => {
 
 function PartRow({ g, part, first, p, onCopyPick }: { g: GameGroup; part: Part; first: boolean; p: LibraryViewProps; onCopyPick: (e: Entry) => void }) {
   const e = part.entry;
+  // A scan or a registration holds the buttons; a copy or install of another game never does (#982).
   const busy = p.task !== null;
   const onShare = e.source !== CONSOLE_SOURCE;
-  const registerPath = !onShare && e.kind === "folder" ? e.path : p.copied?.key === e.key ? p.copied.path : null;
+  // This part's own item in the queue (its copy or install), and nobody else's.
+  const item = itemFor(p.queue, e.key);
+  const queued = item != null && unfinished(item);
+  const copiedTo = item?.kind === "copy" && item.state === "done" && e.kind === "folder" ? item.dest : null;
+  const registerPath = !onShare && e.kind === "folder" ? e.path : (copiedTo ?? (p.copied?.key === e.key ? p.copied.path : null));
   const counted = p.sizes.get(e.key);
   const size = e.size > 0 ? formatBytes(e.size) : counted ? (counted.done ? formatBytes(counted.bytes) : t("cw_lib_size_counting", { size: formatBytes(counted.bytes) })) : "—";
   const meta = [e.version ? `v${e.version}` : "", size, e.sourceName].filter(Boolean).join(" · ");
@@ -183,15 +190,29 @@ function PartRow({ g, part, first, p, onCopyPick }: { g: GameGroup; part: Part; 
         </span>
         <span className="cw-libpart-meta">{meta}</span>
         <span className="cw-libpart-path cw-mono cw-dim">{e.path}</span>
+        {item ? (
+          <span className={`cw-libpart-meta${item.state === "failed" ? " cw-field-error" : ""}`} role="status" data-queue-state={item.state}>
+            {itemLine(p.queue, item)}
+            {item.state === "running" && !item.cancel ? (
+              <RateLine id={item.job ? `q:${item.job}` : `q:${item.id}`} done={item.bytes_done} total={item.bytes_total} elapsedS={item.elapsed_s} prefix=" · " />
+            ) : null}
+          </span>
+        ) : null}
       </div>
       <span className="cw-libpart-actions">
-        {e.kind === "pkg" ? (
+        {queued && item && !item.cancel ? (
+          <button type="button" className="cw-focusable cw-button is-danger" data-nav-default={def()} data-action="queue-cancel" onClick={() => p.onCancelQueued(item.id)}>
+            <Square aria-hidden />
+            <span>{t(item.state === "running" ? "cw_lib_stop" : "cw_queue_remove")}</span>
+          </button>
+        ) : null}
+        {e.kind === "pkg" && !queued ? (
           <button type="button" className="cw-focusable cw-button is-primary" data-nav-default={def()} disabled={busy} onClick={() => p.onInstall(e)}>
             <Download aria-hidden />
             <span>{t("cw_lib_install")}</span>
           </button>
         ) : null}
-        {onShare && e.kind !== "pkg" ? (
+        {onShare && e.kind !== "pkg" && !queued ? (
           <button type="button" className="cw-focusable cw-button is-primary" data-nav-default={def()} disabled={busy} onClick={() => onCopyPick(e)}>
             <Copy aria-hidden />
             <span>{t("cw_lib_copy_here")}</span>
@@ -443,8 +464,6 @@ export function LibraryView(p: LibraryViewProps) {
 
 /* ---- state ---- */
 
-const pct = (done: number, total: number) => (total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : 0);
-
 const consoleSource = (): LibSource => ({ id: CONSOLE_SOURCE, name: t("cw_lib_this_console") });
 
 /**
@@ -546,102 +565,33 @@ async function scanAll(): Promise<void> {
   void loadInstalledIds();
 }
 
-/** `line` with the speed, elapsed time and time left of job `id` (#981). */
-function withRate(line: string, id: string, done: number, total: number): string {
-  const v = trackJob(id, Date.now(), done, total);
-  const r = rateText(v, v.elapsedSeconds);
-  return r ? `${line} · ${r}` : line;
-}
-
-/** Copies `src` (on a share) to `dest`; true when it finished. */
-async function copyIn(src: string, dest: string, name: string): Promise<boolean> {
-  const { job } = await call<{ job: string }>("/api/smb/copy", { src, dest });
-  const end = await watchSmbJob(job, {
-    stopped,
-    onStatus: (st) =>
-      patch({
-        task: {
-          key: "copy",
-          text: withRate(t("cw_lib_copying", { name, pct: pct(st.bytes_done, st.bytes_total), size: formatBytes(st.bytes_total) }), `lib-copy:${job}`, st.bytes_done, st.bytes_total),
-          stoppable: true,
-        },
-      }),
-  });
-  if (end.end === "done") return true;
-  if (end.end === "cancelled") throw new ApiError(409, "cancelled");
-  if (end.end === "gone") throw new ApiError(502, "smb_job_lost");
-  throw new ApiError(502, end.status.error ?? "io_error");
-}
-
+/** An install goes into the console's queue (#982): it runs when the ones before it are done, with
+ *  the page open or not. One on a share is copied into the staging folder first (by the helper). */
 async function install(e: Entry): Promise<void> {
-  if (lib.task) return;
-  stopAsked = false;
   const name = displayName(e);
-  patch({ message: null, task: { key: "install", text: t("cw_pkg_phase_starting"), stoppable: true } });
-  let path = e.at;
-  let staged = false;
   try {
-    if (e.source !== CONSOLE_SOURCE) {
-      await call("/api/fs/mkdir", { path: STAGE_DIR });
-      path = stagePath();
-      staged = true;
-      await copyIn(e.at, path, name);
-    }
-    patch({ task: { key: "install", text: t("cw_pkg_phase_starting"), stoppable: true } });
-    let job: string;
-    try {
-      const r = await call<{ job: string }>("/api/pkg/install", staged ? { path, remove_after: true } : { path });
-      job = r.job;
-    } catch (err) {
-      // refused before it started: the copy is ours to remove
-      if (staged) await call("/api/fs/delete", { path }).catch(() => undefined);
-      throw err;
-    }
-    // Stop counts only while the package is being copied: once the console's installer has it, it cannot be stopped.
-    let phase: string | null = null;
-    const end = await watchOp(job, {
-      stopped: () => stopped() && installStoppable(phase),
-      onStatus: (s) => {
-        phase = s.message;
-        patch({
-          task: {
-            key: "install",
-            text: withRate(`${installPhaseText(s.message) ?? t("cw_pkg_phase_starting")} · ${pct(s.bytes_done, s.bytes_total)}%`, `lib-install:${job}`, s.bytes_done, s.bytes_total),
-            stoppable: installStoppable(s.message),
-          },
-        });
-      },
-    });
-    const line = installMessage(end, name, errorText);
-    patch({ task: null, message: line ?? lib.message });
-    void loadInstalledIds();
+    await addToQueue({ kind: "install", src: e.at, name, key: e.key });
+    patch({ message: { tone: "info", text: t("cw_queue_added", { name }) } });
   } catch (err) {
-    if (err instanceof ApiError && err.code === "cancelled") patch({ task: null, message: { tone: "info", text: t("cw_pkg_stopped") } });
-    else patch({ task: null, message: installMessage({ end: "error", error: err }, name, failText) ?? lib.message });
+    patch({ message: { tone: "error", text: queueAddError(err) } });
   }
 }
 
+/** A copy from a share into `drive`, through the queue as an install is. */
 async function copy(e: Entry, drive: string): Promise<void> {
-  if (lib.task) return;
-  stopAsked = false;
   const name = displayName(e);
-  patch({ message: null, task: { key: "copy", text: t("cw_lib_copying", { name, pct: 0, size: formatBytes(e.size) }), stoppable: true } });
-  const dest = copyDest(drive, e);
   try {
-    await call("/api/fs/mkdir", { path: dest.slice(0, dest.lastIndexOf("/")) });
-    await copyIn(e.at, dest, name);
-    patch({
-      task: null,
-      ...(e.kind === "folder" ? { copied: { key: e.key, path: dest } } : {}),
-      message: { tone: "info", text: t(e.kind === "folder" ? "cw_lib_copied_folder" : "cw_lib_copied", { path: dest }) },
-    });
+    await addToQueue({ kind: "copy", src: e.at, dest: copyDest(drive, e), name, key: e.key });
+    patch({ message: { tone: "info", text: t("cw_queue_added", { name }) } });
   } catch (err) {
-    let message: Message;
-    if (err instanceof ApiError && err.code === "cancelled") message = { tone: "info", text: t("cw_lib_copy_stopped") };
-    else if (err instanceof ApiError && err.code === "exists") message = { tone: "error", text: t("cw_lib_err_exists", { path: dest }) };
-    else message = { tone: "error", text: failText(err) };
-    patch({ task: null, message });
+    patch({ message: { tone: "error", text: queueAddError(err) } });
   }
+}
+
+function queueAddError(err: unknown): string {
+  if (err instanceof ApiError && err.code === "queue_full") return t("cw_queue_full");
+  if (err instanceof ApiError && (err.status === 404 || err.code === "not_found")) return t("cw_queue_unsupported");
+  return failText(err) || (err instanceof ApiError ? err.code : String(err));
 }
 
 async function register(path: string, name: string): Promise<void> {
@@ -762,6 +712,7 @@ export function Library({
   }, []);
 
   const showInFiles = ctx?.canOpen("files") ? (path: string) => ctx.openSection("files", { path }) : null;
+  const { queue } = useQueue();
 
   return (
     <div ref={root}>
@@ -788,6 +739,10 @@ export function Library({
         onInstall={(e) => void install(e)}
         onCopy={(e, d) => void copy(e, d)}
         onRegister={(path, name) => void register(path, name)}
+        queue={queue}
+        onCancelQueued={(id) =>
+          void cancelQueued(id).catch((err: unknown) => patch({ message: { tone: "error", text: failText(err) || String(err) } }))
+        }
         onShowInFiles={showInFiles}
       />
     </div>

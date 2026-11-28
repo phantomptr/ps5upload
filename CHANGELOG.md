@@ -6,6 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Minion queue (#982)**
+- **Queue game copies and installs on the PS5.** In Minion, Install and Copy to the PS5 in the Library, and Add to queue in Files (a package, or anything on a network share), add to a queue that runs one item after another, with Minion closed too. Home shows the queue: what runs now with its speed and time left, then what waits in order, with Remove, Move to top, Pause and Clear finished. A failure doesn't stop the rest; it stays listed with the reason. An install waits while the PS5 installs something else. The queue is kept on the PS5: if the helper restarts during an install, the queue pauses and says so.
+- A game's page shows only its own copy or install, and other games can be copied or installed while one runs. The app lists what waits in the PS5's queue too.
+
 **Transfer speed everywhere (#981)**
 - **Minion shows how fast a copy goes.** A copy from a network share (NAS), a copy or move on the console, an extract, an install, an upload from your phone, a check and a conversion now show the current speed (MiB/s), the time elapsed and about how long is left, next to the percentage. "Stalled" appears when nothing has moved for 15 seconds.
 - In the app, the same figures for a download through Files or Games, a library move, a link download, a decompress or extract, an archive unpack, the console backup, a restore to the home screen, the app update and the speed test. A task started on the console counts its time from when it started there. The Activity panel says "Stalled" too, and a staged install's speed no longer reads nothing and then jumps.

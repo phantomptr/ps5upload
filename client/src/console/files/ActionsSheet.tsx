@@ -22,8 +22,7 @@ import {
   Star,
   StarOff,
   Trash2,
-  type LucideIcon,
-} from "lucide-react";
+  type LucideIcon, ListPlus } from "lucide-react";
 import { t } from "../strings";
 import { Modal } from "../ui/Modal";
 import { SHOW_ON_PC_ITEM } from "./handoff";
@@ -48,6 +47,8 @@ export type SheetAction =
   | "hex"
   | "unpack"
   | "install"
+  /** Add to the console's queue (#982): a package's install, or a copy from a share. */
+  | "queue"
   | "loadpayload"
   | "extract"
   | "showpc"
@@ -77,6 +78,7 @@ const ITEMS: Record<SheetAction, { icon: LucideIcon; key: string }> = {
   hex: { icon: Binary, key: "cw_files_vw_as_hex" },
   unpack: { icon: FileArchive, key: "cw_files_unpack" },
   install: { icon: PackagePlus, key: "cw_pkg_install" },
+  queue: { icon: ListPlus, key: "cw_queue_add" },
   loadpayload: { icon: Rocket, key: "cw_payload_load" },
   extract: { icon: PackageOpen, key: "cw_files_extract" },
   showpc: SHOW_ON_PC_ITEM,

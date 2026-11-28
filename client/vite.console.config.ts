@@ -17,7 +17,8 @@
  *   learned to delete a game's folder or image (the page was 2.8 KiB over; gzip had room), and from
  *   784 to 800 KiB when Extract learned to delete the archive as it unpacks (0.1 KiB over; gzip had
  *   room). The gzip cap went from 224 to 228 KiB when every transfer learned its speed, elapsed time
- *   and time left (#981; 1.5 KiB over).
+ *   and time left (#981; 1.5 KiB over). The raw cap went from 800 to 816 KiB when the console's queue
+ *   landed (#982; 0.3 KiB over).
  * - Strings: every other locale is emitted next to the page as strings/<code>.json (minified, cw_*
  *   keys only); payload/Makefile gzips each into the ELF (build/webui_strings.c) and the helper
  *   serves them at GET /strings/<code>.json. The page fetches them with ?v=<hash of these files>
@@ -41,7 +42,7 @@ import react from "@vitejs/plugin-react";
 import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
-const RAW_BUDGET = 800 * 1024; // 784 until Extract could delete the archive as it unpacks
+const RAW_BUDGET = 816 * 1024; // 784 until Extract could delete the archive as it unpacks, 800 until #982
 const GZIP_BUDGET = 228 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences, 224 until #981
 const TOKENS_ID = "virtual:pc-tokens.css";
 

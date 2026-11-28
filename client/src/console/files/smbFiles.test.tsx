@@ -160,7 +160,7 @@ describe("network shares in Files", () => {
     );
 
     const sheet = elements(FilesView(props({ ask: { kind: "sheet", names: ["big.bin"] } }))).find((e) => e.type === ActionsSheet)!;
-    expect(sheet.props.actions).toEqual(["clipcopy", "copy"]);
+    expect(sheet.props.actions).toEqual(["clipcopy", "copy", "queue"]);
     // Copy to… picks a console folder: the picker starts at the console's drives.
     const pick = elements(FilesView(props({ ask: { kind: "pick", op: "copy", names: ["big.bin"] } }))).find((e) => e.type === PathPicker)!;
     expect(pick.props.start).toBeNull();

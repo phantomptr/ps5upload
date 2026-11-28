@@ -1235,6 +1235,13 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-tasks-selftest
 	@echo "✓ the apps see what the page started, how it ended and that it was cancelled, and nothing a PC started"
+	@echo "Running console page queue self-test (host build, #982)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o $(SELFTEST_DIR)/ps5upload-console-queue-selftest \
+		$(PAYLOAD_DIR)/tests/console_queue_selftest.c $(PAYLOAD_DIR)/src/console_queue.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-console-queue-selftest
+	@echo "✓ the console's queue runs in order, one at a time; cancel, move to top, failures go on, a restart pauses after an install"
 	@echo "Running helper log levels self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-plog-selftest \

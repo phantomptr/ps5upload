@@ -21,6 +21,8 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(8);
 const SMB_KEEP_S: i64 = 5 * 60;
 /// What an id of the SMB daemon's job starts with, here and in cancel.
 const SMB_PREFIX: &str = "smb:";
+/// Items waiting in the page's queue carry this in front of the queue's id (#982).
+const QUEUE_PREFIX: &str = "queue:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsoleTask {
@@ -28,7 +30,8 @@ pub struct ConsoleTask {
     pub id: String,
     /// `copy`, `move`, `delete`, `chmod`, `verify`, `unpack`, `extract`, `pkg_install`, `other`.
     pub kind: String,
-    /// `running`, `done`, `failed`, `cancelled`, or `gone` (it ended and nobody saw how).
+    /// `running`, `done`, `failed`, `cancelled`, `gone` (it ended and nobody saw how), or
+    /// `queued` (waiting in the page's queue, #982).
     pub state: String,
     /// The file or folder it works on; may be empty.
     #[serde(default)]
@@ -159,7 +162,47 @@ pub fn parse_reply(reply: &Value) -> Vec<ConsoleTask> {
     if let Some(jobs) = reply.get("smb_jobs").and_then(Value::as_array) {
         out.extend(jobs.iter().filter_map(|j| smb_task(j, now)));
     }
+    if let Some(items) = reply
+        .get("queue")
+        .and_then(|q| q.get("items"))
+        .and_then(Value::as_array)
+    {
+        out.extend(items.iter().filter_map(queued_task));
+    }
     out
+}
+
+/// One item waiting in the console page's queue (#982), state `queued`: the apps show what waits
+/// there. The running item is already listed as its job, and how items ended as theirs, so only
+/// the waiting ones are taken. Read-only: the page's queue is changed on the page.
+fn queued_task(j: &Value) -> Option<ConsoleTask> {
+    if str_of(j, "state") != "pending" {
+        return None;
+    }
+    let id = j.get("id").and_then(Value::as_u64)?;
+    let kind = match str_of(j, "kind") {
+        "copy" => "copy",
+        "install" => "pkg_install",
+        _ => return None,
+    };
+    let name = str_of(j, "name");
+    Some(ConsoleTask {
+        id: format!("{QUEUE_PREFIX}{id}"),
+        kind: kind.to_string(),
+        state: "queued".to_string(),
+        name: if name.is_empty() {
+            last_name(str_of(j, "src"))
+        } else {
+            name.to_string()
+        },
+        files_done: 0,
+        files_total: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        age_s: 0,
+        elapsed_s: None,
+        cancellable: false,
+    })
 }
 
 fn unix_now() -> i64 {
@@ -247,6 +290,32 @@ mod tests {
         assert_eq!(t[0].age_s, 3);
         assert!(!t[1].cancellable);
         assert!(t[2].cancellable);
+    }
+
+    #[test]
+    fn what_waits_in_the_page_queue_is_listed_read_only() {
+        let v = json!({"now":1,"tasks":[],"smb_jobs":[],"queue":{"paused":false,"items":[
+            {"id":3,"kind":"copy","state":"done","src":"smb://n/a","name":"A"},
+            {"id":4,"kind":"install","state":"running","src":"/data/b.pkg","name":"B"},
+            {"id":5,"kind":"install","state":"pending","src":"smb://n/Games/c.pkg","name":""},
+            {"id":6,"kind":"copy","state":"pending","src":"smb://n/d","name":"D"},
+            {"id":7,"kind":"other","state":"pending","src":"x"},
+        ]}});
+        let t = parse_reply(&v);
+        assert_eq!(t.len(), 2);
+        assert_eq!(
+            (
+                t[0].id.as_str(),
+                t[0].kind.as_str(),
+                t[0].state.as_str(),
+                t[0].name.as_str()
+            ),
+            ("queue:5", "pkg_install", "queued", "c.pkg")
+        );
+        assert_eq!((t[1].id.as_str(), t[1].kind.as_str()), ("queue:6", "copy"));
+        assert!(!t[0].cancellable && !t[1].cancellable);
+        // a helper without the queue: nothing more
+        assert!(parse_reply(&json!({"now":1,"tasks":[]})).is_empty());
     }
 
     #[test]
