@@ -1123,7 +1123,7 @@ void App::draw_frame(Canvas &c, const char *title) noexcept
 {
     c.copy_from(bg_);
     if (title)
-        c.text(Font::title, kLeft, kTop, title, col::text);
+        c.text(Font::title, kLeft, kTop, title, col::text, ui::kW - 2 * kLeft);
 }
 
 void App::draw_hints(Canvas &c, const int *glyphs, const S *labels, int n, int y) noexcept
@@ -1145,11 +1145,15 @@ void App::draw_row(Canvas &c, int x, int y, int w, int h, bool sel, const char *
     const int th = ui::font_height(Font::body);
     const int ty = sub && *sub ? y + h / 2 - th + 6 : y + (h - th) / 2;
     const int vw = value ? Canvas::text_width(Font::body, value) : 0;
-    c.text(Font::body, x + 32, ty, title, col::text, w - 64 - (vw ? vw + 40 : 0));
+    // A right-to-left language mirrors the row: the value on the left, the words on the right.
+    const bool rtl = ui::i18n::right_to_left();
+    const int box = w - 64 - (vw ? vw + 40 : 0);
+    const int tx = rtl && vw ? x + 32 + vw + 40 : x + 32;
+    c.text(Font::body, tx, ty, title, col::text, box);
     if (sub && *sub)
-        c.text(Font::small, x + 32, y + h / 2 + 8, sub, col::muted, w - 64 - (vw ? vw + 40 : 0));
+        c.text(Font::small, tx, y + h / 2 + 8, sub, col::muted, box);
     if (value)
-        c.text(Font::body, x + w - 32 - vw, y + (h - th) / 2, value, sel ? col::accent : col::muted);
+        c.text(Font::body, rtl ? x + 32 : x + w - 32 - vw, y + (h - th) / 2, value, sel ? col::accent : col::muted);
 }
 
 void App::draw_home(Canvas &c) noexcept
@@ -1157,7 +1161,7 @@ void App::draw_home(Canvas &c) noexcept
     draw_frame(c, nullptr);
     c.image(logo_, 1480, 330);
     c.text(Font::big, kLeft, 120, tr(S::app_name), col::text);
-    c.text(Font::body, kLeft + 4, 220, tr(S::tagline), col::muted);
+    c.text(Font::body, kLeft + 4, 220, tr(S::tagline), col::muted, 1060);
     const S titles[] = {S::home_join, S::home_host, S::home_settings, S::home_exit};
     const S subs[] = {S::home_join_sub, S::home_host_sub, S::home_settings_sub, S::app_name};
     for (int i = 0; i < 4; ++i)

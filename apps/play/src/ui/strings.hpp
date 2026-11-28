@@ -33,20 +33,20 @@ namespace play::ui
     X(pick_title_guest, "Which computer is your friend's game on?")                                             \
     X(pick_title_host, "Which computer runs PS5Upload for this PS5?")                                           \
     X(pick_looking, "Looking for PS5Upload on this network…")                                                   \
-    X(pick_none, "No PS5Upload found yet. Make sure PS5Upload is open on the computer, and that \"PS5Upload Play can find this computer\" is on in PS5Upload › Settings › Play Together. You can also type its address.") \
+    X(pick_none, "No PS5Upload found yet. Make sure PS5Upload is open on the computer, and that \"PS5Upload Play can find this computer\" is on in PS5Upload › Settings › App › Play Together. You can also type its address.") \
     X(pick_found, "On this network")                                                                            \
     X(pick_used, "Used before")                                                                                 \
     X(pick_tailnet, "Over Tailscale")                                                                           \
-    X(pick_tailnet_fail, "Couldn't reach %s over Tailscale (%s). Is Tailscale on in PS5Upload › Settings?")      \
+    X(pick_tailnet_fail, "Couldn't reach %s over Tailscale (%s). Is Tailscale on in PS5Upload › Settings › App?")      \
     X(pick_type, "Type an address")                                                                             \
     X(pick_type_sub, "The address PS5Upload shows, like 192.168.1.20:19113")                                    \
     X(way_title, "Join a game on %s")                                                                           \
     X(way_code, "Enter a code")                                                                                 \
-    X(way_code_sub, "Your friend reads it out from PS5Upload › Play Together")                                  \
+    X(way_code_sub, "Your friend reads it out from PS5Upload › Play › Play Together")                                  \
     X(way_nearby, "Ask to join without a code")                                                                 \
     X(way_nearby_sub, "Works when one Play Together is open on that computer")                                  \
     X(code_title, "Enter your friend's code")                                                                   \
-    X(code_help, "Six letters and numbers, like KMX-4R7. Your friend sees it in PS5Upload › Play Together.")    \
+    X(code_help, "Six letters and numbers, like KMX-4R7. Your friend sees it in PS5Upload › Play › Play Together.")    \
     X(code_join, "Join")                                                                                        \
     X(addr_title, "Type the computer's address")                                                                \
     X(addr_help, "PS5Upload shows it on its Play Together screen. Add :port if it is not 19113.")               \
@@ -99,7 +99,7 @@ namespace play::ui
     X(host_pair_title, "Pair this PS5 with PS5Upload")                                                          \
     X(host_pair_text, "PS5Upload Play needs your OK once before it can show and change Play Together from here.") \
     X(host_pair_button, "Show a pairing code")                                                                  \
-    X(host_pair_code_text, "On your computer, open PS5Upload › Play › Play Together › Pair PS5Upload Play and type this code.") \
+    X(host_pair_code_text, "On your computer, open Play › Play Together in PS5Upload, find the PS5Upload Play card, choose Pair and type this code.") \
     X(host_pair_left, "The code works for %d:%02d more.")                                                       \
     X(host_pair_gone, "The code ran out. Show a new one.")                                                      \
     X(host_auth_dropped, "PS5Upload no longer knows this PS5's pairing. Pair again.")                           \
@@ -167,7 +167,7 @@ namespace play::ui
     X(set_about, "About")                                                                                       \
     X(about_version, "Version %s")                                                                              \
     X(about_music, "Music: an original piece made for PS5Upload Play.")                                         \
-    X(about_credits, "Uses JetBrains Mono (SIL OFL 1.1), Opus (BSD) and the QR Code generator library by Project Nayuki (MIT).") \
+    X(about_credits, "Uses the JetBrains Mono and Noto Sans fonts (SIL OFL 1.1), Opus (BSD) and the QR Code generator library by Project Nayuki (MIT).") \
     X(about_license, "PS5Upload Play is free software under the GNU GPL v3.")
 
 enum class S : int

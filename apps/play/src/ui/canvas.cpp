@@ -557,8 +557,9 @@ int Canvas::text(Font f, int x, int y, const char *s, std::uint32_t c, int max_w
     int total = 0;
     for (int i = 0; i < n; ++i)
         total += p[i].width;
+    // A right-to-left line in a box of known width starts from the box's right edge.
     if (max_w <= 0 || total <= max_w)
-        return draw_line(f, x, y, s, p, 0, n, rtl, c);
+        return draw_line(f, rtl && max_w > 0 ? x + max_w - total : x, y, s, p, 0, n, rtl, c);
     // Too long: as many pieces as fit (a plain piece cut by characters), then "…".
     const int room = max_w - fc.cw;
     int used = 0, k = 0;
@@ -625,7 +626,11 @@ int Canvas::text_wrap(Font f, int x, int y, int max_w, const char *s, std::uint3
         int end = j;
         while (end > i + 1 && p[end - 1].run_id < 0 && p[end - 1].len == 1 && s[p[end - 1].at] == ' ')
             --end;
-        draw_line(f, x, y + lines * (fc.ch + gap), s, p, i, end - i, rtl, c);
+        int lw = 0;
+        for (int m = i; m < end; ++m)
+            lw += p[m].width;
+        // right to left: each line from the right edge
+        draw_line(f, rtl ? x + max_w - lw : x, y + lines * (fc.ch + gap), s, p, i, end - i, rtl, c);
         ++lines;
         i = j;
     }
