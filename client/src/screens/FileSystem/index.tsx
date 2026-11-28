@@ -7,7 +7,7 @@ import { rememberDestination } from "../../lib/moveTo";
 import { LinkToFolder } from "./LinkToFolder";
 import { MoveToDialog, type MoveItem } from "./MoveToDialog";
 import { ExtractDialog, extractDest, type ExtractAfter, type ExtractChoice } from "./ExtractDialog";
-import { extractCause, isExtractableArchive, needsPassword } from "../../lib/archiveName";
+import { extractCause, isExtractableArchive, needsPassword, partlyFreed } from "../../lib/archiveName";
 import { extractedNext } from "../../lib/extractNext";
 import { SendToConsoleDialog } from "./SendToConsoleDialog";
 import { RenameFromTitleDialog } from "./RenameFromTitleDialog";
@@ -2308,6 +2308,7 @@ export default function FileSystemScreen() {
         merge: choice.merge,
         replace: choice.replace,
         top: choice.top,
+        ...(after.freeArchive ? { free: true } : {}),
       });
       task.done();
       // Another folder than the archive's: offer it again next time, under Recent.
@@ -2339,6 +2340,10 @@ export default function FileSystemScreen() {
         extra.push(tr("fs_extract_kept_archive", undefined, "The archive was kept, since not every entry came out."));
       }
       if (deleted) extra.push(tr("fs_extract_deleted", undefined, "The archive was deleted."));
+      if (after.freeArchive && out.partsFreed > 0)
+        extra.push(
+          tr("fs_extract_freed", { size: formatBytes(out.bytesFreed) }, `The archive was deleted as it unpacked (${formatBytes(out.bytesFreed)} freed).`),
+        );
       // What came out decides the next step: packages to install, or a game folder to register.
       // Not for Extract here: the folder held other things before.
       const next = choice.here ? { packages: 0, game: false } : await extractedNext(addr, into);
@@ -2362,7 +2367,10 @@ export default function FileSystemScreen() {
       void refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("cancelled")) {
+      // Part of the archive is gone (it was deleted as it unpacked): never a quiet stop, and the
+      // folder with everything unpacked so far is one click away.
+      const gone = partlyFreed(msg);
+      if (msg.includes("cancelled") && !gone) {
         task.done();
         void refresh();
       } else if (needsPassword(msg)) {
@@ -2380,7 +2388,10 @@ export default function FileSystemScreen() {
         pushNotification(
           "error",
           withConsolePrefix(host, tr("fs_extract_failed", { name: entry.name }, `Couldn't extract ${entry.name}`)),
-          { body: humanizePs5Error(msg) || msg },
+          {
+            body: humanizePs5Error(msg) || msg,
+            ...(gone ? { link: `/files?path=${encodeURIComponent(gone.folder)}` } : {}),
+          },
         );
         void refresh();
       }

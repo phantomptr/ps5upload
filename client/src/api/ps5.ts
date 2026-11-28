@@ -26,7 +26,7 @@ import { WORDED_ERROR_CODES } from "../lib/payloadErrors";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { isTauriEnv } from "../lib/tauriEnv";
-import { toExtractResult, type ExtractResult } from "../lib/archiveName";
+import { toExtractResult, toFreePlan, type ExtractResult, type FreePlan } from "../lib/archiveName";
 import { invoke } from "../lib/invokeLogged";
 import { randomHexId } from "../lib/randomId";
 import { APPINFO_VERSION_KEYS, installedAppVersion } from "../lib/versionNumbers";
@@ -1535,6 +1535,9 @@ export interface FsExtractOptions {
   /** Top-level entries of the archive put under another name (`to`), or left out (`to` empty):
    *  "Extract here" with Keep both or Skip existing (#891). */
   top?: { from: string; to: string }[];
+  /** Delete the archive as it is unpacked (opt-in: it can't be used again). A set of parts goes
+   *  part by part, anything else once everything is out. */
+  free?: boolean;
 }
 
 /** An archive's top-level names, read on the console without extracting anything. */
@@ -1544,6 +1547,9 @@ export interface ExtractListing {
   dirs: string[];
   /** More names than the console could report (the rest are not known). */
   more: boolean;
+  /** Asked with `free`: how the archive would be deleted as it unpacks (null: the console is
+   *  too old to say). */
+  free?: FreePlan | null;
 }
 
 /** Extract an archive on the console (.zip, .7z, .rar, tar.*, the first volume of a split one)
@@ -1562,6 +1568,7 @@ export async function fsExtract(
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
   if (opts.top && opts.top.length > 0) body.top = opts.top;
+  if (opts.free) body.free = true;
   // Thousands of files take far longer than a minute (#712): followed to the end, not timed out.
   return toExtractResult(await fsLongOp("/api/ps5/fs/extract", body));
 }
@@ -1574,16 +1581,22 @@ export async function fsExtractList(
   transferAddr: string,
   path: string,
   dir: string,
-  opts: { password?: string } = {},
+  opts: { password?: string; free?: boolean } = {},
 ): Promise<ExtractListing> {
   const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
   const body: Record<string, unknown> = { addr: toMgmtAddr(transferAddr), path, dest: dir, list: true, op_id: opId };
   if (opts.password) body.password = opts.password;
+  if (opts.free) body.free = true;
   const r = await fsLongOp("/api/ps5/fs/extract", body);
   if (r.listed !== true) throw new Error("fs_extract_list_unsupported");
   const names = (v: unknown) =>
     Array.isArray(v) ? v.filter((n): n is string => typeof n === "string" && n !== "") : [];
-  return { top: names(r.top), dirs: names(r.top_dirs), more: r.top_more === true };
+  return {
+    top: names(r.top),
+    dirs: names(r.top_dirs),
+    more: r.top_more === true,
+    ...(opts.free ? { free: toFreePlan(r.free) } : {}),
+  };
 }
 
 export interface FsDirEntry {
