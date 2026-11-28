@@ -11,6 +11,11 @@ PS5Upload Play is free software under the GNU General Public License v3 (see `LI
 - **libSceVideodec2 structure layouts and call order** (`src/ps5/sys.hpp`, `src/ps5/video.cpp`):
   follow the PS5 VLC port's `ps5/modules/ps5vdec.c` (GPL-2.0-or-later,
   https://github.com/ZiZc3/VLC).
+- **libSceAudioIn call signatures and constants** (`src/ps5/mic.cpp`, `src/ps5/mic.hpp`): our own
+  code; the argument order, port types and formats follow the shadPS4 emulator's
+  `src/core/libraries/audio/audioin.h` (GPL-2.0-or-later, https://github.com/shadps4-emu/shadPS4),
+  checked against the call sequences in renan-marcel/PS5_PayloadSDK PR #1 (GPL-3.0-or-later) and
+  ThatRetiredDude/TokenStation5 PR #19 (GPL-3.0-or-later). No code was copied.
 - **Font baking** (`tools/make-font.py`) and **asset checks** (`tools/assets/check-assets.py`):
   adapted from PS5Term's `tools/generate-font-atlas.py` and `tools/validate-assets.sh`
   (GPL-3.0-or-later).
