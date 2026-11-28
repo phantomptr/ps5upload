@@ -265,7 +265,7 @@ test("the app on a TV: Join Play Together from the first screen, and play with t
     "Playing at Ann's · You are Player 2",
     { timeout: 30_000 },
   );
-  expect(hellos[0]).toEqual({ name: "Ben", invite: INVITE });
+  expect(hellos[0]).toMatchObject({ name: "Ben", invite: INVITE });
 
   // On a TV the game fills the screen at once, and has the focus: the remote's arrows play.
   const stage = page.getByTestId("join-stage-view");

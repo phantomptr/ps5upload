@@ -1,10 +1,10 @@
 import { writeClipboard } from "../../lib/clipboard";
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Gamepad2, RefreshCw, Share2, Smartphone, UserMinus, Users, X } from "lucide-react";
+import { Check, Copy, Gamepad2, RefreshCw, Share2, Smartphone, Users, X } from "lucide-react";
 
 import { Button, Callout, Toggle } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
-import { delayTone, formatCode, playerColor } from "../../lib/joinProtocol";
+import { formatCode, playerColor } from "../../lib/joinProtocol";
 import { useTr } from "../../state/lang";
 import { RP_BITRATES, useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore } from "../../state/rpQuality";
@@ -12,6 +12,8 @@ import { PictureHereToggle, PlayOnTvNote } from "./PictureHere";
 import { FriendsPs5s } from "./FriendsPs5s";
 import { QrCode } from "./PhonePads";
 import {
+  friendsIn,
+  guestTier,
   inviteOn,
   joinApi,
   linkGrade,
@@ -22,6 +24,7 @@ import {
   slowFriend,
   streamSeatFriend,
   type CodecWarning,
+  type JoinAsk,
   type JoinGuest,
   type JoinHostState,
   type NetPeer,
@@ -29,6 +32,16 @@ import {
 import { InternetHint, netInviteNote, NetworkChoice, routerNote, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
 import { clock } from "../../lib/clockText";
 import { tierLabel } from "../../join/routeTier";
+import { PingBars } from "../../components/PingBars";
+import { RoomChatBox, type ChatBoxLine } from "../../components/RoomChatBox";
+import { peopleIn } from "../../lib/room/room";
+import { useLangStore } from "../../state/lang";
+import { PlayerMenu } from "./PlayRoom/PlayerMenu";
+import { RoomHeader } from "./PlayRoom/RoomHeader";
+import { HostVoice } from "./PlayRoom/HostVoice";
+import { useRoomNotice } from "./PlayRoom/RoomNotice";
+import { RoomSettings, viaText } from "./PlayRoom/RoomSettings";
+import { useRoomActions, type RoomActions } from "./PlayRoom/useRoomActions";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -95,13 +108,6 @@ export function guestStatusText(tr: Tr, g: JoinGuest): string {
       return tr("pt_status_playing", undefined, "Playing");
   }
 }
-
-const TONE = {
-  good: "text-[var(--color-good)]",
-  fair: "text-[var(--color-warn)]",
-  slow: "text-[var(--color-bad)]",
-  none: "text-[var(--color-muted)]",
-} as const;
 
 const CHIP: Record<JoinGuest["status"], string> = {
   asking: "bg-[var(--color-warn-soft)] text-[var(--color-warn)]",
@@ -192,9 +198,19 @@ function seatNoteText(tr: Tr, note: string): string {
     : tr("pt_seat_note", undefined, "Their chosen profile couldn't be used, so the TV asks who they are.");
 }
 
-function PlayerCard({ addr, player, guest }: { addr: string; player: number; guest: JoinGuest | null }) {
+function PlayerCard({
+  player,
+  guest,
+  actions,
+  menu,
+}: {
+  player: number;
+  guest: JoinGuest | null;
+  actions: RoomActions;
+  /** What the player menu may offer (room size, seats taken, permissions). */
+  menu: Parameters<typeof PlayerMenu>[0]["options"];
+}) {
   const tr = useTr();
-  const tone = delayTone(guest?.rttMs);
   const onSeat = !!guest && guest.streamSeat && guest.status !== "left";
   const way = guest ? guestWayText(tr, guest) : null;
   return (
@@ -212,9 +228,35 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
       </div>
       {guest ? (
         <>
-          <div className="truncate text-sm font-semibold" data-testid="pt-player-name">
-            {friendName(tr, guest.name)}
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span
+              className={`min-w-0 truncate text-sm font-semibold ${guest.room.speaking ? "rounded px-1 ring-2 ring-[var(--color-good)]" : ""}`}
+              data-testid="pt-player-name"
+              data-speaking={guest.room.speaking ? "1" : undefined}
+            >
+              {friendName(tr, guest.name)}
+            </span>
+            {guest.room.tag && (
+              <span className="shrink-0 font-mono text-xs text-[var(--color-muted)]" data-testid="pt-player-tag">
+                {guest.room.tag}
+              </span>
+            )}
+            {guest.room.muted.voice && (
+              <span className="shrink-0 text-xs" title={tr("room_muted_voice", undefined, "Voice muted")} data-testid="pt-player-muted-voice">
+                🔇
+              </span>
+            )}
+            {guest.status !== "left" && (
+              <span className="ms-auto shrink-0">
+                <PlayerMenu guest={guest} name={friendName(tr, guest.name)} actions={actions} options={menu} />
+              </span>
+            )}
           </div>
+          {guest.room.source && guest.room.source !== "invite" && (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="pt-player-source" data-source={guest.room.source}>
+              {viaText(tr, guest.room.source)}
+            </p>
+          )}
           {onSeat && (
             <p className="text-xs text-[var(--color-muted)]" data-testid="pt-player-stream-seat">
               {tr(
@@ -253,7 +295,8 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 {tr("pt_on_ps5", undefined, "On a PS5")}
               </span>
             )}
-            {/* How good their connection is, in a word (apps/play/docs/ROUTES.md). */}
+            {/* How good their connection is: bars, the word and ms, one table everywhere
+                (design 6.1, apps/play/docs/ROUTES.md). */}
             {guest.tier && guest.status !== "left" && (
               <span
                 className={`text-xs ${guest.tier === "poor" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}
@@ -264,9 +307,13 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
               </span>
             )}
             {guest.rttMs != null && guest.status !== "left" && (
-              <span className={`text-xs tabular-nums ${TONE[tone]}`} data-testid="pt-player-delay" data-tone={tone}>
-                {Math.round(guest.rttMs)} ms
-              </span>
+              <PingBars
+                compact
+                tier={guestTier(guest)}
+                ms={guest.rttMs}
+                testId="pt-player-delay"
+                detail={guest.behind ? tr("pt_player_behind", undefined, "Connection can't keep up") : undefined}
+              />
             )}
             {guest.behind && guest.status === "playing" && (
               <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-behind">
@@ -320,18 +367,6 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
               {codecWarningText(tr, guest.codecWarning)}
             </p>
           )}
-          {guest.status !== "left" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              leftIcon={<UserMinus size={14} />}
-              onClick={() => void joinApi.kick(addr, player)}
-              className="self-start"
-              data-testid="pt-kick"
-            >
-              {tr("pt_kick", undefined, "Remove")}
-            </Button>
-          )}
         </>
       ) : (
         <div className="text-sm text-[var(--color-muted)]">{tr("pt_free", undefined, "Free")}</div>
@@ -364,7 +399,15 @@ export function PlayTogetherPanel({
   onPhones: () => void;
 }) {
   const tr = useTr();
+  const lang = useLangStore((s) => s.lang);
   const pictureHere = useRemotePlayStore((s) => s.pictureHere);
+  const notice = useRoomNotice();
+  const actions = useRoomActions(addr, onState, peopleIn(state.guests));
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
   const [failed, setFailed] = useState(false);
   // Why opening failed (`old_helper` shows the update callout; others are named in the text).
   const [why, setWhy] = useState<string | null>(null);
@@ -484,7 +527,7 @@ export function PlayTogetherPanel({
   const share = async () => {
     if (!link) return;
     try {
-      await navigator.share({ title: tr("pt_button", undefined, "Play Together"), text: tr("pt_share_text", undefined, "Join my game on my PS5"), url: link });
+      await navigator.share({ title: tr("pt_button", undefined, "Play Room"), text: tr("pt_share_text", undefined, "Join my game on my PS5"), url: link });
     } catch {
       // Closed without sharing.
     }
@@ -507,11 +550,21 @@ export function PlayTogetherPanel({
       className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
       data-testid="pt-panel"
     >
-      <div className="flex items-center gap-2">
-        <Users size={16} />
-        <h3 id="pt-panel-title" className="flex-1 text-sm font-semibold">
-          {tr("pt_title", undefined, "Play Together")}
-        </h3>
+      <div className="flex items-start gap-2">
+        <Users size={16} className="mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <RoomHeader
+            state={state}
+            actions={actions}
+            lang={lang}
+            now={now}
+            onRules={notice.show}
+            onClose={() => {
+              void joinApi.close(addr).then((r) => r.state && onState(r.state));
+              onClose();
+            }}
+          />
+        </div>
         <button
           type="button"
           onClick={onClose}
@@ -521,13 +574,15 @@ export function PlayTogetherPanel({
           <X size={16} />
         </button>
       </div>
-      <p className="text-sm text-[var(--color-muted)]">
-        {tr(
-          "pt_intro",
-          undefined,
-          "Friends play along on your PS5 as Player 2, 3 and 4, each with their own controller, from their own phone, tablet or computer.",
-        )}
-      </p>
+      {state.open && friendsIn(state).length === 0 && (
+        <p className="text-sm text-[var(--color-muted)]" data-testid="room-empty">
+          {tr(
+            "room_empty",
+            undefined,
+            "Share your invite, or make the room Friends or Public so people can find it.",
+          )}
+        </p>
+      )}
 
       {!helperOk && (
         <div data-testid="pt-helper-old">
@@ -539,7 +594,7 @@ export function PlayTogetherPanel({
             {tr(
               "pt_helper_old_body",
               undefined,
-              "The helper running on the PS5 is older than Play Together. Send the new one, then open this again.",
+              "The helper running on the PS5 is older than Play Rooms. Send the new one, then open this again.",
             )}
           </Callout>
         </div>
@@ -552,7 +607,7 @@ export function PlayTogetherPanel({
                 undefined,
                 "A reverse proxy on the engine's computer is in the way. On the engine, set PS5UPLOAD_ALLOW_HOST to this page's name, and PS5UPLOAD_TRUSTED_PROXY to the proxy's address.",
               )
-            : tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
+            : tr("pt_unavailable", undefined, "Your Play Room could not start. Check that the engine is up to date.")}
           {why && why !== "host_not_local" ? ` (${why})` : ""}
         </p>
       )}
@@ -690,7 +745,7 @@ export function PlayTogetherPanel({
                   : tr(
                       "pt_wifi_only_setting",
                       undefined,
-                      "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Together.",
+                      "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Room.",
                     )}
               </p>
             )}
@@ -711,15 +766,16 @@ export function PlayTogetherPanel({
               />
             )}
           </Step>
-          <Step n={2} title={tr("pt_step_allow", undefined, "Allow")}>
+          <Step n={2} title={tr("room_asks", { n: state.asks.length }, `Asks (${state.asks.length})`)}>
             <p className="text-xs text-[var(--color-muted)]">
-              {tr("pt_step_allow_body", undefined, "When a friend asks, Allow appears over the picture. Only people you allow can play.")}
+              {tr("room_asks_body", undefined, "When someone asks, Let in appears over the picture too. Only people you let in can play.")}
             </p>
             {state.asks.length > 0 && (
               <ul className="space-y-1.5" data-testid="pt-asks">
                 {state.asks.map((a) => (
-                  <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
+                  <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm" data-testid="pt-ask-row">
                     <span className="min-w-0 flex-1 truncate font-medium">{friendName(tr, a.name)}</span>
+                    <AskFacts ask={a} />
                     {a.onPs5 && (
                       <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-xs font-medium" data-testid="pt-ask-ps5">
                         {tr("pt_on_ps5", undefined, "On a PS5")}
@@ -730,11 +786,17 @@ export function PlayTogetherPanel({
                         {codecWarningText(tr, a.codecWarning)}
                       </span>
                     )}
-                    <Button size="sm" variant="primary" onClick={() => void joinApi.decide(addr, a.id, true)}>
-                      {tr("pt_allow", undefined, "Allow")}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void joinApi.decide(addr, a.id, false)}>
-                      {tr("pt_deny", undefined, "No")}
+                    {a.room?.group && a.room.group > 1 ? (
+                      <Button size="sm" variant="primary" onClick={() => void actions.allowGroup(a.id)} data-testid="pt-ask-allow-group">
+                        {tr("room_let_all_in", undefined, "Let all from that PS5 in")}
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="primary" onClick={() => void joinApi.decide(addr, a.id, true)} data-testid="pt-ask-allow">
+                        {tr("room_let_in", undefined, "Let in")}
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => void joinApi.decide(addr, a.id, false)} data-testid="pt-ask-deny">
+                      {tr("room_say_no", undefined, "Say no")}
                     </Button>
                   </li>
                 ))}
@@ -768,10 +830,38 @@ export function PlayTogetherPanel({
       {helperOk && !failed && (
         <ul className="flex flex-wrap gap-2" data-testid="pt-players">
           {playerSlots(state).map(({ player, guest }) => (
-            <PlayerCard key={player} addr={addr} player={player} guest={guest} />
+            <PlayerCard
+              key={player}
+              player={player}
+              guest={guest}
+              actions={actions}
+              menu={{
+                size: state.room.known ? state.room.size : 1 + state.settings.maxPlayers,
+                taken: friendsIn(state).map((g) => g.player),
+                streamSeatAllowed: state.settings.streamSeat,
+                pictureHere,
+                voice: state.room.known && state.room.voice !== "off",
+                chat: state.room.known && state.room.chat !== "off",
+              }}
+            />
           ))}
         </ul>
       )}
+
+      {helperOk && !failed && state.room.known && <HostVoice voiceMode={state.room.voice} ensureNotice={() => notice.ask("voice")} />}
+
+      {helperOk && !failed && state.room.known && (
+        <RoomChatBox
+          lines={hostChatLines(state)}
+          mode={state.room.chat}
+          publicRoom={state.room.visibility === "public"}
+          rude={state.room.visibility === "public"}
+          onSend={(m) => actions.chat(m)}
+          ensureNotice={() => notice.ask("chat")}
+        />
+      )}
+
+      {helperOk && !failed && <RoomSettings state={state} actions={actions} askNotice={() => notice.ask("public")} />}
 
       {/* Friends who joined from PS5Upload Play before: an invite to their TV in one click. */}
       {helperOk && !failed && <FriendsPs5s addr={addr} open={state.open} />}
@@ -894,7 +984,7 @@ export function PlayTogetherPanel({
               onState({ ...state, settings: { ...state.settings, streamSeat: on } });
               void joinApi.settings(addr, { stream_seat: on }).then((s) => s && onState(s));
             }}
-            label={tr("pt_stream_seat", undefined, "A friend can play as me on Player 1 (when this device shows no picture)")}
+            label={tr("room_friends_may_p1", undefined, "Friends may get Player 1 (when this device shows no picture)")}
             hint={tr("pt_stream_seat_hint", undefined, "Off: friends always get their own controller and pick a user on the TV.")}
           />
         </div>
@@ -925,21 +1015,30 @@ export function PlayTogetherPanel({
         >
           {tr("pt_phones_link", undefined, "Use a phone as your controller, or let someone watch")}
         </Button>
-        {state.open && (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => {
-              void joinApi.close(addr).then((r) => r.state && onState(r.state));
-              onClose();
-            }}
-            data-testid="pt-close"
-          >
-            {tr("pt_close", undefined, "Close Play Together")}
-          </Button>
-        )}
       </div>
+      {notice.dialog}
     </div>
+  );
+}
+
+/** The host's chat as the box shows it. */
+export function hostChatLines(state: JoinHostState): ChatBoxLine[] {
+  return state.room.chatLog.map((l) => ({ n: l.n, from: l.from, mine: l.host, quick: l.quick, text: l.text, times: l.x }));
+}
+
+/** "Jo · 9C11 · from Rooms · password ✓ · about 70 ms" (design 5). */
+function AskFacts({ ask }: { ask: JoinAsk }) {
+  const tr = useTr();
+  const r = ask.room;
+  if (!r) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--color-muted)]" data-testid="pt-ask-facts">
+      {r.tag && <span className="font-mono">{r.tag}</span>}
+      {r.source && r.source !== "invite" && <span data-testid="pt-ask-source">{viaText(tr, r.source)}</span>}
+      {r.passwordOk === true && <span data-testid="pt-ask-password">{tr("room_password_ok", undefined, "password ✓")}</span>}
+      {r.group && r.group > 1 && <span>{tr("room_group_n", { n: r.group }, `${r.group} players`)}</span>}
+      {r.rttHint != null && <PingBars compact estimate tier={null} ms={r.rttHint} testId="pt-ask-ping" />}
+    </span>
   );
 }
 
@@ -994,7 +1093,7 @@ export function JoinAsks({
         onClick={() => void joinApi.decide(addr, a.id, true)}
         data-testid="pt-allow"
       >
-        {tr("pt_allow", undefined, "Allow")}
+        {tr("room_let_in", undefined, "Let in")}
       </button>
       <button
         type="button"
@@ -1002,7 +1101,7 @@ export function JoinAsks({
         onClick={() => void joinApi.decide(addr, a.id, false)}
         data-testid="pt-deny"
       >
-        {tr("pt_deny", undefined, "No")}
+        {tr("room_say_no", undefined, "Say no")}
       </button>
     </div>
   );

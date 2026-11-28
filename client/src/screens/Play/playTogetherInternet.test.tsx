@@ -205,7 +205,7 @@ describe("the settings' checks (as the engine's)", () => {
 describe("what the host is told", () => {
   it("internet invites off, a bad hub address, other refusals", () => {
     expect(netInviteNote(tr, "internet_off", null)?.id).toBe("pt-net-off");
-    expect(netInviteNote(tr, "internet_off", null)?.text).toContain("Settings › App › Play Together");
+    expect(netInviteNote(tr, "internet_off", null)?.text).toContain("Settings › App › Play Room");
     expect(netInviteNote(tr, "hub_url", null)?.id).toBe("pt-net-hub-url");
     expect(netInviteNote(tr, "no_certificate", null)?.text).toContain("(no_certificate)");
   });
@@ -370,7 +370,7 @@ describe("the panel", () => {
     const out = panel(wifi);
     expect(out).toContain(`data-testid="pt-url">${engine.invite.url}<`);
     expect(out).toMatch(/data-testid="pt-wifi-only" data-why="setting"/);
-    expect(out).toContain("Settings › App › Play Together");
+    expect(out).toContain("Settings › App › Play Room");
     expect(out).not.toContain("pt-addresses-internet");
   });
 

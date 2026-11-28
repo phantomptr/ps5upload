@@ -207,7 +207,7 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
         </div>
       </Section>
 
-      <Section title={tr("pt_button", undefined, "Play Together")} full>
+      <Section title={tr("pt_button", undefined, "Play Room")} full>
         <PlayTogetherGuestProfiles host={host} />
       </Section>
 

@@ -12,6 +12,7 @@
     "build:vite": "vite build",
     "build:pad": "vite build -c vite.pad.config.ts",
     "build:join": "vite build -c vite.join.config.ts",
+    "build:rooms": "vite build -c vite.rooms.config.ts",
     "build:console": "node ../scripts/build-console-strings.mjs && vite build -c vite.console.config.ts",
     "build": "tauri build",
     "typecheck": "tsc --noEmit",

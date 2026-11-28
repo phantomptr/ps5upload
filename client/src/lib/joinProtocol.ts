@@ -7,6 +7,7 @@
 
 import type { PadState } from "./remotePlayStream";
 import { lanPage } from "../join/lanHint";
+import { parseRoomFragment } from "../join/roomFragment";
 
 /** Why the host's engine did not let a guest in. Anything else reads as "refused". */
 export type RefuseWhy =
@@ -25,6 +26,16 @@ export type RefuseWhy =
   | "slow_down"
   /** A resume to the stream's controller, which the host needed back, with no controller free. */
   | "seat_taken"
+  /** Play Rooms (13.0.0): the room isn't taking players, the host isn't there to answer, a wrong
+   *  password (or too many), the room went private, the guest's version is too old, or someone
+   *  in the room already has their name (a suggestion comes with it). */
+  | "locked"
+  | "host_away"
+  | "password"
+  | "locked_out"
+  | "not_listed"
+  | "old"
+  | "name_taken"
   | "refused";
 
 /** How a joined guest's game ended, from the engine (`{"bye": …}`). */
@@ -37,7 +48,9 @@ export type ByeWhy =
   /** The console no longer has this guest's controller (`{"bye": "lost"}`). */
   | "pad_lost"
   /** The host needed their stream's controller back and no other controller was free. */
-  | "seat_taken";
+  | "seat_taken"
+  /** The host removed them from the room (Play Rooms' word for kicked). */
+  | "removed";
 
 /** Why an internet invite's connection could not be made (or was refused), join/rtcTransport. */
 export type NetWhy =
@@ -108,11 +121,156 @@ export type ServerMessage =
   | { kind: "waiting" }
   /** `track`: the pictures come on the internet connection's video track (join/rtcTransport). */
   | { kind: "joined"; player: number; token: string; hevc: boolean; track: boolean; audio: boolean }
-  | { kind: "refused"; why: RefuseWhy }
+  | { kind: "refused"; why: RefuseWhy; triesLeft?: number | null; suggest?: string | null }
   | { kind: "status"; status: JoinStatus }
   | { kind: "feedback"; rumble: [number, number] | null; light: [number, number, number] | null }
   | { kind: "bye"; why: ByeWhy }
-  | { kind: "pong"; t: number };
+  | { kind: "pong"; t: number }
+  /** Play Rooms: the room as this guest sees it (every 2 s), a chat line, who talks, host mutes. */
+  | { kind: "room"; room: GuestRoom }
+  | { kind: "chat"; line: EngineChatLine }
+  | { kind: "chat_history"; lines: EngineChatLine[] }
+  | { kind: "voice"; voice: VoiceStateMsg }
+  | { kind: "muted"; voice: boolean; chat: boolean }
+  | { kind: "comms"; comms: CommsMsg }
+  | { kind: "comms_refused"; refused: CommsRefused }
+  /** A ready check started (seconds to answer). */
+  | { kind: "ready"; leftS: number };
+
+/** A chat line from the engine (API.md "Play Rooms chat and voice"). `x` > 1: the same line again
+ *  from the same person; it replaces the line with this `id`. */
+export interface EngineChatLine {
+  id: number;
+  sid: number | null;
+  from: string;
+  player: number | null;
+  host: boolean;
+  t: number;
+  quick: number | null;
+  text: string | null;
+  x: number;
+}
+
+/** `{"comms": …}`: the room's chat and voice modes and whether this person accepted the notice. */
+export interface CommsMsg {
+  notice: number;
+  accepted: boolean;
+  chat: "off" | "quick" | "on" | null;
+  voice: "off" | "ptt" | "open" | null;
+  caps: string[];
+}
+
+/** One person in the voice state. */
+export interface VoicePerson {
+  sid: number;
+  name: string;
+  player: number | null;
+  host: boolean;
+  muted: boolean;
+  paused: boolean;
+  mic: boolean;
+}
+
+/** `{"voice": …}`: the full state (`full`), or only who speaks. */
+export interface VoiceStateMsg {
+  full: boolean;
+  mode: "off" | "ptt" | "open" | null;
+  you: number | null;
+  mic: boolean;
+  ptt: boolean;
+  paused: "poor" | null;
+  stepped: boolean;
+  kbps: number;
+  frameMs: number;
+  speaking: number[];
+  people: VoicePerson[];
+}
+
+/** `{"comms_refused": …}`. */
+export interface CommsRefused {
+  what: "chat" | "voice" | "mic" | "notice";
+  why: string;
+  notice: number | null;
+  retryMs: number | null;
+}
+
+export function readEngineChatLine(v: unknown): EngineChatLine | null {
+  if (!v || typeof v !== "object") return null;
+  const c = v as Record<string, unknown>;
+  const quick = typeof c.quick === "number" && Number.isInteger(c.quick) ? c.quick : null;
+  const text = typeof c.text === "string" ? c.text : null;
+  if (quick == null && !text) return null;
+  return {
+    id: numOr(c.id) ?? 0,
+    sid: numOr(c.sid),
+    from: typeof c.from === "string" ? c.from.slice(0, 40) : "",
+    player: numOr(c.player),
+    host: c.host === true,
+    t: numOr(c.t) ?? 0,
+    quick,
+    text,
+    x: Math.max(1, numOr(c.x) ?? 1),
+  };
+}
+
+const modeOr = <T extends string>(v: unknown, list: readonly T[]): T | null => (typeof v === "string" && (list as readonly string[]).includes(v) ? (v as T) : null);
+
+/** The room push to a guest (design 10.2): seats, their own ping and the host's PS5 link. */
+export interface GuestRoom {
+  name: string;
+  size: number;
+  players: Array<{ name: string; color: [number, number, number] | null; you: boolean; id: number | null; seat: number | null }>;
+  you: { rttMs: number | null; tier: string | null } | null;
+  hostLink: { rttMs: number | null; tier: string | null } | null;
+  chat: "off" | "quick" | "on" | null;
+  voice: "off" | "ptt" | "open" | null;
+  muted: { voice: boolean; chat: boolean };
+  caps: string[];
+  /** The hub's lobby id, kept with a friend pass for "Alex's room is open". */
+  lobby: string | null;
+  visibility: "private" | "friends" | "public" | null;
+}
+
+const numOr = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const strOr = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+function readLinkish(v: unknown): { rttMs: number | null; tier: string | null } | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  return { rttMs: numOr(o.rtt_ms), tier: strOr(o.tier) };
+}
+
+/** `{"room": …}` to a guest, checked; null when it isn't one. */
+export function readGuestRoom(v: unknown): GuestRoom | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const m = (o.muted ?? {}) as Record<string, unknown>;
+  const chat = o.chat === "text" ? "on" : o.chat === "off" || o.chat === "quick" || o.chat === "on" ? o.chat : null;
+  const voice = o.voice === "off" || o.voice === "ptt" || o.voice === "open" ? o.voice : null;
+  const vis = o.visibility === "private" || o.visibility === "friends" || o.visibility === "public" ? o.visibility : null;
+  return {
+    name: typeof o.name === "string" ? o.name.slice(0, 40) : "",
+    size: Math.max(1, Math.min(8, numOr(o.size) ?? 4)),
+    players: (Array.isArray(o.players) ? o.players : [])
+      .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
+      .slice(0, 8)
+      .map((p) => ({
+        name: typeof p.name === "string" ? p.name.slice(0, 32) : "",
+        color: Array.isArray(p.color) && p.color.length === 3 ? ([byte(p.color[0]), byte(p.color[1]), byte(p.color[2])] as [number, number, number]) : null,
+        you: p.you === true,
+        id: numOr(p.id),
+        seat: numOr(p.seat) ?? numOr(p.player),
+      })),
+    you: readLinkish(o.you),
+    hostLink: readLinkish(o.host_link),
+    chat,
+    voice,
+    muted: { voice: m.voice === true || o.muted === true, chat: m.chat === true },
+    caps: Array.isArray(o.caps) ? o.caps.filter((c): c is string => typeof c === "string") : [],
+    lobby: strOr(o.lobby),
+    visibility: vis,
+  };
+}
 
 const REFUSE: ReadonlySet<string> = new Set([
   "key",
@@ -127,6 +285,13 @@ const REFUSE: ReadonlySet<string> = new Set([
   "slow_down",
   "address",
   "seat_taken",
+  "locked",
+  "host_away",
+  "password",
+  "locked_out",
+  "not_listed",
+  "old",
+  "name_taken",
 ]);
 const BYE: Readonly<Record<string, ByeWhy>> = {
   kicked: "kicked",
@@ -134,6 +299,7 @@ const BYE: Readonly<Record<string, ByeWhy>> = {
   replaced: "replaced",
   lost: "pad_lost",
   seat_taken: "seat_taken",
+  removed: "removed",
 };
 const GUEST_STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
 
@@ -157,7 +323,86 @@ export function readServerMessage(text: string): ServerMessage | null {
   }
   if (v.stage === "refused") {
     const why = String(v.why ?? "");
-    return { kind: "refused", why: REFUSE.has(why) ? (why as RefuseWhy) : "refused" };
+    const nt = v.name_taken as { suggest?: unknown } | undefined;
+    const triesLeft = numOr(v.tries_left);
+    const suggest = strOr(v.suggest) ?? strOr(nt?.suggest);
+    return {
+      kind: "refused",
+      why: REFUSE.has(why) ? (why as RefuseWhy) : "refused",
+      ...(triesLeft != null ? { triesLeft } : {}),
+      ...(suggest ? { suggest } : {}),
+    };
+  }
+  // The hello's name is taken (design 3.5): `{"name_taken": {"suggest": "Sam (2)"}}`.
+  if (v.name_taken && typeof v.name_taken === "object") {
+    return { kind: "refused", why: "name_taken", suggest: strOr((v.name_taken as { suggest?: unknown }).suggest) };
+  }
+  if (v.room && typeof v.room === "object") {
+    const room = readGuestRoom(v.room);
+    if (room) return { kind: "room", room };
+  }
+  if (v.chat && typeof v.chat === "object") {
+    const line = readEngineChatLine(v.chat);
+    if (line) return { kind: "chat", line };
+  }
+  if (Array.isArray(v.chat_history)) {
+    return { kind: "chat_history", lines: v.chat_history.map(readEngineChatLine).filter((l): l is EngineChatLine => !!l).slice(-50) };
+  }
+  if (v.comms && typeof v.comms === "object") {
+    const o = v.comms as Record<string, unknown>;
+    return {
+      kind: "comms",
+      comms: {
+        notice: numOr(o.notice) ?? 1,
+        accepted: o.accepted === true,
+        chat: modeOr(o.chat, ["off", "quick", "on"] as const),
+        voice: modeOr(o.voice, ["off", "ptt", "open"] as const),
+        caps: Array.isArray(o.caps) ? o.caps.filter((c): c is string => typeof c === "string") : [],
+      },
+    };
+  }
+  if (v.comms_refused && typeof v.comms_refused === "object") {
+    const o = v.comms_refused as Record<string, unknown>;
+    const what = modeOr(o.what, ["chat", "voice", "mic", "notice"] as const) ?? "chat";
+    return { kind: "comms_refused", refused: { what, why: typeof o.why === "string" ? o.why : "", notice: numOr(o.notice), retryMs: numOr(o.retry_ms) } };
+  }
+  if (v.voice && typeof v.voice === "object") {
+    const o = v.voice as Record<string, unknown>;
+    const full = "people" in o || "mode" in o;
+    return {
+      kind: "voice",
+      voice: {
+        full,
+        mode: modeOr(o.mode, ["off", "ptt", "open"] as const),
+        you: numOr(o.you),
+        mic: o.mic === "on",
+        ptt: o.ptt === true,
+        paused: o.paused === "poor" ? "poor" : null,
+        stepped: o.stepped === true,
+        kbps: numOr(o.kbps) ?? 24,
+        frameMs: numOr(o.frame_ms) ?? 20,
+        speaking: Array.isArray(o.speaking) ? o.speaking.filter((x): x is number => typeof x === "number") : [],
+        people: (Array.isArray(o.people) ? o.people : [])
+          .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof p.sid === "number")
+          .slice(0, 16)
+          .map((p) => ({
+            sid: p.sid as number,
+            name: typeof p.name === "string" ? p.name.slice(0, 32) : "",
+            player: numOr(p.player),
+            host: p.host === true,
+            muted: p.muted === true,
+            paused: p.paused === true || p.paused === "poor",
+            mic: p.mic === true || p.mic === "on",
+          })),
+      },
+    };
+  }
+  if (v.muted && typeof v.muted === "object") {
+    const o = v.muted as Record<string, unknown>;
+    return { kind: "muted", voice: o.voice === true, chat: o.chat === true };
+  }
+  if (v.ready && typeof v.ready === "object") {
+    return { kind: "ready", leftS: numOr((v.ready as Record<string, unknown>).left_s) ?? 30 };
   }
   if (typeof v.bye === "string") {
     return { kind: "bye", why: Object.prototype.hasOwnProperty.call(BYE, v.bye) ? BYE[v.bye] : "closed" };
@@ -326,6 +571,26 @@ export interface JoinLink {
   /** A Wi-Fi link's engine certificate (`&fp=`, since 12.4): its WebRTC join checks the answer
    *  against it (join/pathRace). */
   fp?: string | null;
+  /** Play Rooms: a room found in Rooms, Friends or Play again (no invite): its hub lobby, how it
+   *  was found, the room key and what the knock carries. */
+  room?: RoomJoin;
+}
+
+/** A room to knock on (design 7.0, 9.3): the same join flow as an invite, the card supplies the
+ *  room instead of an invite key. */
+export interface RoomJoin {
+  /** The hub's lobby room id. */
+  lobby: string;
+  /** The hub's address as a link carries it (`hub.phantomptr.com`). */
+  hub: string;
+  via: "rooms" | "friends" | "nearby" | "again";
+  /** The room key (for sealing a password or a friend pass); null: none. */
+  pk: string | null;
+  password: string | null;
+  /** A friend pass for Play again / Friends. */
+  pass?: string | null;
+  /** The host's tag, for "last time" and hiding. */
+  tag?: string;
 }
 
 /** The link pasted into the app (or scanned), or null when it is not one. */
@@ -356,6 +621,17 @@ export function parseJoinLink(text: string): JoinLink | null {
       net,
       lan,
       ts,
+    };
+  }
+  // A Play Room handed over from the website's Rooms page: knock on its lobby (no invite).
+  const room = parseRoomFragment(u.hash);
+  if (room) {
+    return {
+      origin: `https://${room.hub}`,
+      invite: null,
+      name: room.host,
+      code: null,
+      room: { lobby: room.lobby, hub: room.hub, via: room.via, pk: null, password: null, tag: room.tag },
     };
   }
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
@@ -416,16 +692,6 @@ export function joinSocketUrl(link: Pick<JoinLink, "origin">): string {
   return `${link.origin.replace(/^http/, "ws")}/api/join/ws`;
 }
 
-/** Delay in ms as a colour: under 60 ms good, under 120 ms fair, else slow. */
-export function delayTone(ms: number | null | undefined): "good" | "fair" | "slow" | "none" {
-  if (ms == null || !Number.isFinite(ms)) return "none";
-  if (ms < 60) return "good";
-  if (ms < 120) return "fair";
-  return "slow";
-}
-
-/** A delay a friend notices: the host is told how to make it smoother. */
-export const HIGH_DELAY_MS = 120;
 
 /** The light-bar colour a player number has on a DualSense (Player 1 blue, 2 red, 3 green, 4 pink). */
 export function playerColor(player: number): [number, number, number] {

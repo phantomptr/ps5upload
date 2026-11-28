@@ -5,9 +5,10 @@
 import { useEffect, useState } from "react";
 
 import type { MeshJoin } from "../../api/mesh";
-import { HIGH_DELAY_MS, type GuestState } from "../../lib/joinProtocol";
+import type { GuestState } from "../../lib/joinProtocol";
 import { getEngineUrl } from "../../state/engine";
-import { readTier, type Tier } from "../../join/routeTier";
+import { readTier, slowEnough, tierOfMs, type Tier } from "../../join/routeTier";
+import { engineBody, readRoom, readRoomAsk, readRoomPlayer, roomApi, DEFAULT_ROOM, type RoomAsk, type RoomBody, type RoomInfo, type RoomPlayer } from "../../lib/room/room";
 
 export interface JoinGuest {
   id: number;
@@ -58,6 +59,8 @@ export interface JoinGuest {
   /** Their app said it can't show this stream's picture: "hevc" (no HEVC) or "main10" (no HDR);
    *  null when it can, or it didn't say. */
   codecWarning: CodecWarning;
+  /** The room's facts about them (Play Rooms, 13.0.0): where they came from, tag, mutes. */
+  room: RoomPlayer;
 }
 
 /** A picture a guest's app said it can't show (engine join.rs `codec_warning`). */
@@ -69,6 +72,8 @@ export interface JoinAsk {
   name: string;
   onPs5?: boolean;
   codecWarning?: CodecWarning;
+  /** Where the ask came from, the password check, tag, a ping hint (Play Rooms). */
+  room?: RoomAsk;
 }
 
 /** The engine's `codec_warning`; anything else is null. */
@@ -230,6 +235,8 @@ export interface JoinHostState {
   reason: string | null;
   /** The guest socket friends connect to (`ws`, else made from the invite's address). */
   ws: string | null;
+  /** The Play Room this party is (13.0.0): Private with the defaults from an older engine. */
+  room: RoomInfo;
 }
 
 export const EMPTY_JOIN: JoinHostState = {
@@ -244,6 +251,7 @@ export const EMPTY_JOIN: JoinHostState = {
   helperOk: true,
   reason: null,
   ws: null,
+  room: DEFAULT_ROOM,
 };
 
 const STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
@@ -430,6 +438,7 @@ export function readJoinState(v: unknown): JoinHostState {
       tier: readTier(g.tier),
       onPs5: g.client_kind === "ps5",
       codecWarning: readCodecWarning(g.codec_warning),
+      room: readRoomPlayer(g),
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
@@ -440,6 +449,7 @@ export function readJoinState(v: unknown): JoinHostState {
       name: typeof a.name === "string" ? a.name : "",
       onPs5: a.client_kind === "ps5",
       codecWarning: readCodecWarning(a.codec_warning),
+      room: readRoomAsk(a),
     }));
   const s = (o.settings ?? {}) as Record<string, unknown>;
   return {
@@ -476,6 +486,7 @@ export function readJoinState(v: unknown): JoinHostState {
     helperOk: o.helper_ok !== false,
     reason: typeof o.reason === "string" && o.reason ? o.reason : null,
     ws: typeof o.ws === "string" && /^wss?:\/\//.test(o.ws) ? o.ws : invite ? socketOf(invite.url) : null,
+    room: readRoom(o.room),
   };
 }
 
@@ -563,12 +574,18 @@ export function friendsIn(s: JoinHostState): JoinGuest[] {
   return s.guests.filter((g) => g.status !== "left" && g.status !== "asking");
 }
 
-/** The friend whose delay most needs the host's attention, or null. */
+/** A guest's tier: what their app or page measured, else the engine's round trip alone. */
+export function guestTier(g: Pick<JoinGuest, "tier" | "rttMs">): Tier | null {
+  return g.tier ?? tierOfMs(g.rttMs);
+}
+
+/** The friend whose connection most needs the host's attention, or null: Poor, or Playable and
+ *  falling behind (the one tier table, design 6.1). */
 export function slowFriend(s: JoinHostState): JoinGuest | null {
   let worst: JoinGuest | null = null;
   for (const g of s.guests) {
     if (g.status !== "playing" && g.status !== "picking_user") continue;
-    if (g.rttMs == null || g.rttMs < HIGH_DELAY_MS) continue;
+    if (g.rttMs == null || !slowEnough(guestTier(g), g.behind)) continue;
     if (!worst || g.rttMs > (worst.rttMs ?? 0)) worst = g;
   }
   return worst;
@@ -655,9 +672,9 @@ async function read(addr: string): Promise<JoinHostState | null> {
 }
 
 /** open and close answer with the whole state. */
-async function whole(path: string, addr: string): Promise<JoinReply> {
+async function whole(path: string, addr: string, extra: object = {}): Promise<JoinReply> {
   try {
-    const r = await request(path, { addr });
+    const r = await request(path, { addr, ...extra });
     if (r.ok) return { state: readJoinState(r.json) };
     const found = foundOf(r.json);
     return found ? { error: errorOf(r.json), found } : { error: errorOf(r.json) };
@@ -839,9 +856,28 @@ export function parseStun(text: string): string[] | null {
   return list.every(ok) ? list : null;
 }
 
+/** "Create a Play Room"'s choices, for the next open (state/roomDraft hands them over). */
+let pendingRoom: RoomBody | null = null;
+export function setPendingRoom(room: RoomBody | null): void {
+  pendingRoom = room && Object.keys(room).length ? room : null;
+}
+
 export const joinApi = {
   read,
-  open: (addr: string) => whole("/api/join/open", addr),
+  /** Opens the room; the first open after "Create a Play Room" carries what the host picked
+   *  (`room`; an engine before rooms ignores it). Kept for a retry until an open answers. */
+  open: async (addr: string) => {
+    const room = pendingRoom;
+    const r = await whole("/api/join/open", addr, room ? { room: engineBody(room) } : {});
+    if (r.state && pendingRoom === room) {
+      pendingRoom = null;
+      // Chat and voice modes have their own route (join_comms).
+      if (room && (room.chat || room.voice || room.start_muted !== undefined)) {
+        await roomApi.comms(addr, { chat: room.chat, voice: room.voice, start_muted: room.start_muted });
+      }
+    }
+    return r;
+  },
   close: (addr: string) => whole("/api/join/close", addr),
   /** The open invite (a new one when there is none or it expired); `renew` makes a new one
    *  even then, and the old link and code stop working (#657: without `new` the engine hands

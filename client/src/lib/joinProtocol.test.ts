@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   backoffMs,
-  delayTone,
   encodePadFrame,
   formatCode,
   joinSocketUrl,
@@ -217,10 +216,6 @@ describe("links and timing", () => {
     expect(parseJoinLink(link.replace(lan, encodeURIComponent("http://evil.example/x")))!.origin).toBe("https://hub.example.com");
     // A broken fingerprint is no invite.
     expect(parseJoinLink(link.replace(fp, "AB:CD"))).toBeNull();
-  });
-
-  it("colours a delay", () => {
-    expect([null, 20, 59, 60, 119, 120, 400].map(delayTone)).toEqual(["none", "good", "good", "fair", "fair", "slow", "slow"]);
   });
 
   it("reads a typed short code and shows it in two halves", () => {

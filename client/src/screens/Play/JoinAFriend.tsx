@@ -17,6 +17,8 @@ import { holdPageStill, lockLandscape, setWindowFullscreen, unlockOrientation } 
 import { useConnectionStore } from "../../state/connection";
 import { deviceName, meshFor, nearbyJoins, useMeshStore } from "../../state/mesh";
 import { ownJoinWs } from "./playTogetherState";
+import { RoomOverlay } from "../../join/RoomOverlay";
+import { useRoomNotice } from "./PlayRoom/RoomNotice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -114,6 +116,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
   const session = useJoinStore((s) => s.session);
   const lastLink = useJoinStore((s) => s.link);
   const { confirm, dialog } = useConfirm();
+  const notice = useRoomNotice();
   const [text, setText] = useState(pending ?? "");
   const [codeText, setCodeText] = useState("");
   // The last name used to join, wherever it was typed.
@@ -262,8 +265,26 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
             useJoinStore.getState().clear();
             if (link) useJoinStore.getState().join(link, session.opts.name);
           }}
+          onAgainWith={(o) => {
+            // A room's refusal one more try can fix: the suggested name, or the password again.
+            const link = lastLink;
+            useJoinStore.getState().clear();
+            if (!link) return;
+            const next = o.password && link.room ? { ...link, room: { ...link.room, password: o.password } } : link;
+            useJoinStore.getState().join(next, o.name ?? session.opts.name);
+          }}
           onFullscreen={appFullscreen}
+          roomExtras={
+            <RoomOverlay
+              link={session.room}
+              ownRttMs={null}
+              ownTier={null}
+              ensureNotice={(what) => notice.ask(what)}
+              onRules={notice.show}
+            />
+          }
         />
+        {notice.dialog}
         {dialog}
       </>
     );
@@ -287,7 +308,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
           {tr(
             "join_app_intro",
             undefined,
-            "Paste the link your friend's Play Together shows. You play their PS5 as Player 2, 3 or 4, with your controller or the on-screen one.",
+            "Paste the link your friend's Play Room shows. You play their PS5 as Player 2, 3 or 4, with your controller or the on-screen one.",
           )}
         </p>
         <Input
@@ -310,7 +331,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
               }}
               placeholder={EXAMPLE_LINK}
               leftIcon={<Link2 size={14} />}
-              error={bad === "link" ? tr("join_bad_link_v2", undefined, "That isn't a Play Together invite link.") : undefined}
+              error={bad === "link" ? tr("join_bad_link_v2", undefined, "That isn't a Play Room invite link.") : undefined}
               data-testid="join-link"
             />
           </div>
@@ -365,7 +386,7 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
         </h3>
         {nearby.length === 0 ? (
           <p className="text-xs text-[var(--color-muted)]">
-            {tr("join_nearby_none", undefined, "No one on this network is hosting Play Together right now.")}
+            {tr("join_nearby_none", undefined, "No one on this network is hosting a Play Room right now.")}
           </p>
         ) : (
           <ul className="space-y-2">
@@ -546,7 +567,7 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
           <video ref={video} muted playsInline className="max-h-[70dvh] w-full max-w-md rounded-xl bg-black object-cover" />
           <p className="text-sm text-white/80" data-testid="join-scan-hint">
             {wrong
-              ? tr("join_bad_link_v2", undefined, "That isn't a Play Together invite link.")
+              ? tr("join_bad_link_v2", undefined, "That isn't a Play Room invite link.")
               : tr("join_scan_hint", undefined, "Point the camera at the QR code on your friend's screen.")}
           </p>
         </>

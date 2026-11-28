@@ -15,6 +15,7 @@
 //! The API is the route table in `build_app`, plus the sub-routers it merges.
 
 mod activity;
+// Thanks & Support for PS5Upload Play and Minion: GET /api/support (public, from the client's data).
 mod ampr_emu_api;
 mod ampr_index_api;
 mod ampr_trace;
@@ -153,6 +154,7 @@ mod shared_state;
 mod source_removal;
 mod space_check;
 mod state_io;
+mod support_api;
 mod tailnet_api;
 mod tailnet_discover;
 pub(crate) mod tailnet_engine;
@@ -979,6 +981,8 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // sender's.
         || path == "/share"
         || path == "/api/share/ws"
+        // Thanks & Support (support_api.rs): public names and links for PS5Upload Play on the PS5.
+        || path == "/api/support"
         || peer.is_loopback()
         || allow_rules_contain(&cfg.allowed_ips, peer)
 }
@@ -14609,6 +14613,7 @@ fn build_app_and_mcp(
         // Share: an app's things to a friend (share/mod.rs).
         .route("/share", get(share::page))
         .route("/api/share/ws", get(share::ws))
+        .route("/api/support", get(support_api::support))
         .route("/api/share", get(share::list).post(share::create))
         .route("/api/share/check", post(share::check))
         .route("/api/share/{id}", get(share::get_one).delete(share::cancel))

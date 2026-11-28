@@ -168,7 +168,7 @@ test("Only on my Wi-Fi in the settings: the LAN link and the way to change it", 
   const posts = await fakeEngine(page, () => "internet", "wifi");
   const panel = await openPlayTogether(page);
   await expect(panel.getByTestId("pt-url")).toHaveText(LINK);
-  await expect(panel.getByTestId("pt-wifi-only")).toContainText("Settings › App › Play Together");
+  await expect(panel.getByTestId("pt-wifi-only")).toContainText("Settings › App › Play Room");
   await expect(panel.getByTestId("pt-addresses-internet-support")).toHaveCount(0);
   expect(posts.some((p) => p.path === "/api/join/invite" && (p.body.share || p.body.internet))).toBe(false);
 });
@@ -177,9 +177,9 @@ test("Play together page: one link, nothing to choose; Start and invite from the
   await seedConsole(page);
   const posts = await fakeEngine(page, () => "internet");
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Room" }).click({ timeout: 30_000 });
   const start = page.getByTestId("pt-start");
-  await expect(start).toContainText("No app needed");
+  await expect(start).toContainText("Play your PS5 games with friends");
   await expect(start.getByTestId("pt-start-net-internet-hint")).toContainText("Works from anywhere");
   await expect(start.getByTestId("pt-start-net-internet-support")).toContainText("a donation keeps it going");
   await expect(start.getByTestId("pt-start-net-home")).toHaveCount(0);
@@ -193,7 +193,7 @@ test("Play together page: one link, nothing to choose; Start and invite from the
   await expect.poll(() => posts.map((p) => p.path)).toContain("/api/join/open");
   // The invite takes the focus, and the page stays on Play together.
   await expect(panel).toBeFocused();
-  await expect(page.getByRole("radio", { name: "Play Together" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Play Room" })).toHaveAttribute("aria-checked", "true");
   await expect(page.getByTestId("pt-start")).toHaveCount(0);
 });
 
@@ -201,7 +201,7 @@ test("Play together page: Only on my Wi-Fi is said before the stream; Support op
   await seedConsole(page);
   await fakeEngine(page, () => "internet", "wifi");
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Room" }).click({ timeout: 30_000 });
   await expect(page.getByTestId("pt-start-net-off")).toContainText("Invites work only on your Wi-Fi");
   await expect(page.getByTestId("pt-start-net-off").getByRole("button", { name: "Open settings" })).toBeVisible();
 });
@@ -210,7 +210,7 @@ test("Play together page: Support opens Thanks", async ({ page }) => {
   await seedConsole(page);
   await fakeEngine(page, () => "internet");
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await page.getByRole("radio", { name: "Play Together" }).click({ timeout: 30_000 });
+  await page.getByRole("radio", { name: "Play Room" }).click({ timeout: 30_000 });
   await page.getByTestId("pt-start-net-internet-donate").click();
   await expect(page).toHaveURL(/\/thanks$/);
 });

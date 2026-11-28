@@ -763,10 +763,10 @@ function AppSettingsTab() {
         {/* What the engine and this device do for every console. Each console's own Play
             Together guests and Tailscale are in This PS5. */}
         <GroupHeading>
-          {tr("settings_group_network", undefined, "Play Together and Tailscale")}
+          {tr("settings_group_network", undefined, "Play Room and Tailscale")}
         </GroupHeading>
 
-        <Section title={tr("pt_button", undefined, "Play Together")} full>
+        <Section title={tr("pt_button", undefined, "Play Room")} full>
           <PlayTogetherSettings />
         </Section>
 

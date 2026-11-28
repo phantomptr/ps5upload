@@ -73,6 +73,8 @@ COPY AUTOMATION.md API.md MCP.md ./
 COPY payload payload
 # The built-in Play Together hub serves the website's Share page (src/builtin_hub.rs).
 COPY site/share/index.html site/share/index.html
+# Thanks & Support's names and links (GET /api/support, src/support_api.rs).
+COPY client/src/data/supporters.json client/src/data/support.json client/src/data/
 WORKDIR /build/engine
 # --locked: the image is built from a tag; the lockfile must already satisfy
 # Cargo.toml (a stale lock after a squash merge fails here, not re-resolves).

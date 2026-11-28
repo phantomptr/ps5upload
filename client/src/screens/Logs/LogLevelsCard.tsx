@@ -58,7 +58,7 @@ export default function LogLevelsCard() {
     cleanup: tr("logs_cat_cleanup", undefined, "Clean-up"),
     files: tr("logs_cat_files", undefined, "Files"),
     convert: tr("logs_cat_convert", undefined, "Conversions"),
-    together: tr("logs_cat_together", undefined, "Play Together"),
+    together: tr("logs_cat_together", undefined, "Play Room"),
     golive: tr("logs_cat_golive", undefined, "Go live"),
     mesh: tr("logs_cat_mesh", undefined, "Mesh and Drive"),
     ui: tr("logs_cat_ui", undefined, "App screens"),

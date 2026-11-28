@@ -29,6 +29,9 @@ import type { NetPath } from "./netPath";
 import type { JoinTransport } from "./rtcTransport";
 import { TrackPlayer } from "./trackPlayer";
 import { classify, RttMeter, type Tier } from "./routeTier";
+import { RoomLink } from "./roomLink";
+import { deviceId, rememberPlayed } from "../lib/room/played";
+import { ROOM_CAPS, ROOM_PROTO } from "../lib/room/rooms";
 
 export interface JoinSnapshot {
   stage: JoinStage;
@@ -71,6 +74,28 @@ export interface JoinSessionOptions {
   /** An internet invite (its words for a dropped connection are the internet's); absent: it is
    *  one when it has a transport. A Wi-Fi link's WebRTC join is not. */
   internet?: boolean;
+  /** Play Rooms: how this guest found the room, for a knock in the hello on the home network or
+   *  Tailscale (the internet's knock goes through the hub first, join/rtcTransport). */
+  knock?: { via: string; sealed?: string } | null;
+  /** The host's device tag when the room card gave it. */
+  hostTag?: string;
+}
+
+/** What a 13.0 guest adds to its hello (design 10.2, 10.5): its device id (the tag hosts see),
+ *  the room protocol and what it can do. Older engines ignore all of it. */
+export function roomHello(knock: JoinSessionOptions["knock"] = null): Record<string, unknown> {
+  let device: string | null = null;
+  try {
+    device = deviceId();
+  } catch {
+    // No storage or no crypto here: no tag, the host sees the name only.
+  }
+  return {
+    ...(device ? { device } : {}),
+    proto: ROOM_PROTO,
+    caps: [...ROOM_CAPS],
+    ...(knock ? { knock } : {}),
+  };
 }
 
 /** How often the way is read again while joined (ICE may move to another pair). */
@@ -166,6 +191,9 @@ export class JoinSession {
   private listeners = new Set<() => void>();
   private cleanups: Array<() => void> = [];
   private meter = new RttMeter();
+  /** The room as this guest sees it (Play Rooms: seats, pings, chat, voice). */
+  readonly room = new RoomLink();
+  private notedPlayed = false;
 
   constructor(readonly opts: JoinSessionOptions) {
     this.snap = {
@@ -186,6 +214,28 @@ export class JoinSession {
       invite: opts.invite,
       code: opts.code ?? null,
       name: opts.name,
+      helloExtra: roomHello(opts.knock ?? null),
+      onRoom: (r) => {
+        this.room.onRoom(r);
+        // Played with this host: their lobby id for "Alex's room is open", the round trip for
+        // "last time" (this device only, lib/room/played).
+        if (!this.notedPlayed && r.lobby && this.snap.stage.kind === "joined") {
+          this.notedPlayed = true;
+          try {
+            rememberPlayed({ lobby: r.lobby, host: this.snap.host ?? r.name, tag: this.opts.hostTag ?? "", rttMs: r.you?.rttMs ?? this.snap.rttMs });
+          } catch {
+            // No storage here: nothing remembered.
+          }
+        }
+      },
+      onChat: (m) => this.room.onChat(m),
+      onChatHistory: (l) => this.room.onChatHistory(l),
+      onComms: (c) => this.room.onComms(c),
+      onCommsRefused: (r) => this.room.onRefused(r),
+      onVoiceState: (m) => this.room.onVoiceState(m),
+      onMuted: (m) => this.room.onMuted(m),
+      onReady: (left) => this.room.onReady(left),
+      onVoice: (d) => this.room.onVoice?.(d),
       WebSocketImpl: opts.transport,
       readPad: devicePad,
       onStage: (stage) => {
@@ -219,6 +269,8 @@ export class JoinSession {
       },
       onLight: (light) => this.set({ light }),
     });
+    this.room.sendJson = (m) => this.client.sendJson(m);
+    this.room.sendBinary = (b) => this.client.sendBinary(b);
   }
 
   /** The picture's player, made on first use (needs a document). An internet invite's may take

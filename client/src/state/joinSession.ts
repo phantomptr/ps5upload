@@ -12,6 +12,9 @@ import { urlPath } from "../join/netPath";
 import { joinTries, raceTransport } from "../join/pathRace";
 import { holdWhileJoined, JoinSession } from "../join/session";
 import { hubSocketUrl, rtcTransport, type JoinSocket } from "../join/rtcTransport";
+import { knockHello } from "../lib/room/knock";
+import { deviceId } from "../lib/room/played";
+import { APP_VERSION } from "../lib/room/version";
 import { getEngineUrl } from "./engine";
 import { useJoinPresence } from "./joinPresence";
 
@@ -48,8 +51,23 @@ export const useJoinStore = create<JoinStoreState>((set, get) => ({
     const log = (m: string) => console.info(`[join] ${m}`);
     const engineUrl = getEngineUrl();
     const rtc = typeof RTCPeerConnection !== "undefined";
-    const net = link.net ?? null;
-    const transport = rtc
+    // A room found in Rooms / Friends / Play again: knock on its lobby through the hub, then join
+    // over WebRTC as an internet invite does (no fingerprint to pin: the answer's own is taken).
+    const room = link.room ?? null;
+    const net = room ? { room: room.lobby, key: "", fp: "", hub: room.hub } : (link.net ?? null);
+    const transport = room
+      ? rtc
+        ? rtcTransport(net!, {
+            video: true,
+            log,
+            knock: {
+              hello: knockHello({ via: room.via, name, device: deviceId(), client: "app", ver: APP_VERSION }),
+              secret: room.password || room.pass ? { ...(room.password ? { pw: room.password } : {}), ...(room.pass ? { pass: room.pass } : {}) } : null,
+              pk: room.pk,
+            },
+          })
+        : null
+      : rtc
       ? raceTransport(
           () =>
             joinTries({
@@ -75,6 +93,7 @@ export const useJoinStore = create<JoinStoreState>((set, get) => ({
       code: link.code ?? null,
       name,
       host: link.name,
+      ...(link.room?.tag ? { hostTag: link.room.tag } : {}),
       keysLive: () => useJoinPresence.getState().onScreen,
     });
     set({ session: s, link });

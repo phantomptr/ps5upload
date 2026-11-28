@@ -179,6 +179,7 @@ import {
 } from "../lib/statusSchedule";
 import { onStatusRecheck } from "../lib/statusRecheck";
 import { useConfirm } from "../components/ConfirmDialog";
+import { FriendsGuardHost } from "./FriendsGuard";
 
 // The Convert queue builds through the Convert pipeline wherever the user is in the app.
 installConvertRunner();
@@ -1947,6 +1948,8 @@ export default function AppShell() {
       {/* v5 Toaster — critical-toast overlay. Mounted last so it
           sits above all other chrome in DOM order. */}
       <Toaster />
+      {/* Play Rooms: "friends are playing, stop anyway?" for every engine call, and the window's close. */}
+      <FriendsGuardHost />
       <HelperUpdatePromptHost />
       <SignInNeededHost />
       <WakePasscodeHost />
@@ -1978,7 +1981,7 @@ function TopBarActions() {
         message: tr(
           "topbar_reload_confirm_body",
           undefined,
-          "Reloading restarts the app window. A Remote Play stream or Play Together session ends, and running tasks disappear from this window until the app finds them again.",
+          "Reloading restarts the app window. A Remote Play stream or Play Room ends, and running tasks disappear from this window until the app finds them again.",
         ),
         confirmLabel: tr("topbar_reload_page", undefined, "Reload page"),
         destructive: true,

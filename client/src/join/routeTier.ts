@@ -95,3 +95,45 @@ export function tierLabel(tr: Tr, t: Tier): string {
       return tr("join_tier_poor", undefined, "Poor");
   }
 }
+
+/** Bars for a tier (design 6.1): Excellent 4, Good 3, Playable 2, Poor 1, nothing known 0. */
+export function barsOf(t: Tier | null): number {
+  switch (t) {
+    case "excellent":
+      return 4;
+    case "good":
+      return 3;
+    case "playable":
+      return 2;
+    case "poor":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/** A round trip as shown everywhere: whole ms, "<1 ms" below one (null: nothing). */
+export function msText(ms: number | null | undefined): string | null {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
+  return ms < 1 ? "<1 ms" : `${Math.round(ms)} ms`;
+}
+
+/** The tier a round trip alone gives (cards, estimates). */
+export function tierOfMs(ms: number | null | undefined): Tier | null {
+  return ms == null ? null : classify({ rttMs: ms });
+}
+
+/** A tier as one of three colours (the dot or text beside the ms): green, amber, red; "none"
+ *  with no reading. Replaces the old 60/120 ms delay colours. */
+export function toneOfTier(t: Tier | null): "good" | "fair" | "slow" | "none" {
+  if (t === "excellent" || t === "good") return "good";
+  if (t === "playable") return "fair";
+  if (t === "poor") return "slow";
+  return "none";
+}
+
+/** The "connection is slow" callout fires at Poor, or Playable with a fall-behind (design 6.1;
+ *  it was a flat 120 ms before rooms). */
+export function slowEnough(t: Tier | null, behind: boolean): boolean {
+  return t === "poor" || (t === "playable" && behind);
+}

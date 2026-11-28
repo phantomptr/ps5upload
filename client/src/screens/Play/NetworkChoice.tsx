@@ -21,14 +21,14 @@ export function netInviteNote(
       text: tr(
         "pt_wifi_only_setting",
         undefined,
-        "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Together.",
+        "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Room.",
       ),
     };
   if (why === "hub_url")
     return {
       id: "pt-net-hub-url",
       tone: "warn",
-      text: tr("pt_net_hub_url", undefined, "The invite service address in Settings › Play Together isn't a wss:// address."),
+      text: tr("pt_net_hub_url", undefined, "The invite service address in Settings › Play Room isn't a wss:// address."),
     };
   if (why)
     return {
