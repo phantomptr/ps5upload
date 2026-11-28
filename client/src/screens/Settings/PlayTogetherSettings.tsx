@@ -276,6 +276,21 @@ export function PlayTogetherSettings() {
           )}
         />
       </div>
+      <div data-testid="pt-set-play-discovery">
+        <Toggle
+          checked={net.playDiscovery}
+          onChange={(on) => {
+            setNet({ ...net, playDiscovery: on });
+            void save({ play_discovery: on });
+          }}
+          label={tr("pt_set_play_discovery", undefined, "PS5Upload Play can find this computer")}
+          hint={tr(
+            "pt_set_play_discovery_hint",
+            undefined,
+            "PS5Upload Play on your PS5 looks for this computer on your home network. Off: type this computer's address in the app instead.",
+          )}
+        />
+      </div>
       <details className="text-sm" data-testid="pt-set-advanced">
         <summary className="cursor-pointer select-none text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]">
           {tr("pt_set_advanced", undefined, "Advanced")}

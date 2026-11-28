@@ -6,6 +6,7 @@ import { Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { InternetHint } from "./NetworkChoice";
 import { joinApi } from "./playTogetherState";
+import { PlayAppPairing } from "./PlayAppPairing";
 
 /**
  * Play › Play together before a stream: what it is, the console, where the invite works, and one
@@ -27,7 +28,13 @@ export function PlayTogetherStart({ host, ...rest }: Omit<PlayTogetherStartViewP
       alive = false;
     };
   }, [host]);
-  return <PlayTogetherStartView {...rest} invites={host ? invites : undefined} />;
+  return (
+    <div className="space-y-3">
+      <PlayTogetherStartView {...rest} invites={host ? invites : undefined} />
+      {/* PS5Upload Play on the PS5: pair it here with the code it shows on the TV. */}
+      <PlayAppPairing />
+    </div>
+  );
 }
 
 /** What Start and invite does: start this console's stream, first stop the stream of another

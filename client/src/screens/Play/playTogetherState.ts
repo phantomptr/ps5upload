@@ -174,6 +174,8 @@ export interface NetSettings {
   /** Internet friends' picture as a video track (the data channel when off, or for a page or
    *  engine without it). */
   videoTrack: boolean;
+  /** PS5Upload Play can find this computer on the home network (UDP 19261). */
+  playDiscovery: boolean;
 }
 
 export interface JoinHostState {
@@ -210,7 +212,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", pageBase: null, stun: [], sources: null, builtInHub: null, upnp: true, port: null, videoTrack: true },
+  settings: { blockSystemButtons: true, maxPlayers: 3, streamSeat: false, internetInvites: null, invites: null, hubUrl: "", pageBase: null, stun: [], sources: null, builtInHub: null, upnp: true, port: null, videoTrack: true, playDiscovery: true },
   netPeers: [],
   seatNext: false,
   nextProfile: null,
@@ -432,6 +434,7 @@ export function readJoinState(v: unknown): JoinHostState {
       upnp: s.upnp !== false,
       port: typeof s.port === "number" ? s.port : null,
       videoTrack: s.video_track !== false,
+      playDiscovery: s.play_discovery !== false,
     },
     netPeers: readPeers((o.internet as Record<string, unknown> | null | undefined)?.peers ?? (inv?.internet as Record<string, unknown> | null | undefined)?.peers),
     seatNext: o.seat_next === true,
@@ -679,6 +682,7 @@ export interface NetSettingsBody {
   upnp?: boolean;
   port?: number;
   video_track?: boolean;
+  play_discovery?: boolean;
 }
 
 /** Where the guest pages are by default, and the hub that only takes those pages' origin
