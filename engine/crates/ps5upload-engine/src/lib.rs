@@ -116,6 +116,7 @@ mod play_discovery;
 mod pldmgr_api;
 mod profile_image;
 mod ps2_saves;
+mod public_limit;
 mod queue_api;
 mod remote;
 mod remote_download;
@@ -959,6 +960,9 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // …and the checks socket a guest's app measures each way to this engine with before it
         // joins and, gently, while it plays (join_route.rs): echoes only, no guest state.
         || path == "/api/join/probe"
+        // …and a Play Room's preview (Details before joining, join_room_api.rs): what the host
+        // chose to show, never an address; rate-limited per address.
+        || path == "/api/join/preview"
         // …and PS5Upload Play on a PS5 joining a friend's internet room through this engine
         // (join_net/bridge.rs): it must be reachable from LAN peers (the PS5). It reaches only
         // the hub in the settings and the engine answering there, checked against the link's
@@ -14478,6 +14482,12 @@ fn build_app_and_mcp(
         .route("/api/join/invite", post(join::invite))
         .route("/api/join/decide", post(join::decide))
         .route("/api/join/kick", post(join::kick))
+        .route("/api/join/room", post(join::room))
+        .route("/api/join/unblock", post(join::unblock))
+        .route("/api/join/mute", post(join::mute))
+        .route("/api/join/seat", post(join::seat))
+        .route("/api/join/preview", get(join::preview))
+        .route("/api/join/rooms", get(join::rooms_proxy))
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))

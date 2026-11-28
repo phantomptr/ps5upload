@@ -1323,8 +1323,12 @@ pub(crate) mod bus {
     use axum::extract::ws::Message;
     use tokio::sync::mpsc;
 
-    /// Voice bundles queued per guest (3 × 20 ms); the oldest is dropped past it.
+    /// Voice bundles queued per guest (3 × 20 ms); past it a bundle is dropped, never waited for.
     pub(crate) const VOICE_QUEUE: usize = 3;
+    /// A guest's voice frame: `[6][seq u16][level u8][Opus]` (design 7A.1).
+    pub(crate) const KIND_VOICE: u8 = 6;
+    /// The largest voice frame taken from a guest.
+    pub(crate) const VOICE_MAX: usize = 512;
     /// Chat lines queued per guest.
     pub(crate) const CHAT_QUEUE: usize = 16;
 

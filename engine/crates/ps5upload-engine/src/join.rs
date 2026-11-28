@@ -104,8 +104,6 @@ const HOST_GRACE: Duration = Duration::from_secs(5);
 const HOST_RESTART_WINDOW: Duration = Duration::from_secs(60);
 /// Guests at most (the PS5 takes four controllers; Player 1 is the host's).
 pub(crate) const MAX_GUESTS: u8 = 3;
-/// Guests waiting for the host's answer at once.
-const MAX_PENDING: usize = 4;
 /// How long a guest waits for the host's answer.
 const ASK_WAIT: Duration = Duration::from_secs(90);
 /// A guest must say hello this soon after connecting.
@@ -1751,6 +1749,8 @@ impl Party {
         g.away_since = None;
         if let Some(c) = g.conn.take() {
             let bye = match why {
+                // Play Rooms pages say "<host> removed you from the room."
+                "kicked" if g.meta.proto.is_some() => Some("removed"),
                 "kicked" => Some("kicked"),
                 "closed" => Some("closed"),
                 "lost" => Some("lost"),
@@ -2214,6 +2214,14 @@ impl Party {
                     "client_app": g.client.app,
                     "client_v": g.client.v,
                     "codec_warning": g.codec_warning,
+                    // Play Rooms: how they came, their device tag, the host's mutes, a stranger
+                    // from the public list, their rooms protocol.
+                    "came": g.meta.via().word(),
+                    "tag": g.meta.tag,
+                    "muted": self.room.muted.get(&g.id).copied().unwrap_or_default(),
+                    "from_rooms": g.meta.stranger(),
+                    "proto": g.meta.proto,
+                    "caps": g.meta.caps,
                 })
             })
             .collect();
@@ -2233,7 +2241,13 @@ impl Party {
                 "client_app": a.client.app,
                 "client_v": a.client.v,
                 "codec_warning": a.client.codec_warning(live_codec(&self.console)),
+                "came": a.meta.via().word(),
+                "tag": a.meta.tag,
+                "password_ok": a.meta.password_ok,
+                "rtt_hint": a.meta.rtt_hint,
+                "from_rooms": a.meta.stranger(),
             })).collect::<Vec<_>>(),
+            "room": room_api::room_view(self, now),
             "settings": settings_view(&self.settings),
             "max_guests": MAX_GUESTS,
             // "Guests play as" on this console, and the helper's companion that binds them.
@@ -2255,7 +2269,7 @@ impl Party {
             "state": g.state(),
             "rtt_ms": g.stats.rtt_now(),
             "host": self.host_name,
-            "block_system": self.settings.block_system_buttons && g.playing,
+            "block_system": (self.settings.block_system_buttons || g.meta.stranger()) && g.playing,
             // On the stream's own controller: they play as the host's PS5 user, nothing to pick.
             "stream_seat": g.on_seat(),
             // The profile the host gave them (they play as it, nothing to pick), or null.
@@ -2272,7 +2286,7 @@ impl Party {
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
             // The session's picture may not show on their app ("hevc", "main10").
             "codec_warning": g.codec_warning,
-        }}))
+        }, "room": room_api::guest_room(self, id, Instant::now())}))
     }
 
     /// What a bug report carries: counts, stages and health, never a name, invite key, code or
@@ -3086,6 +3100,16 @@ pub(crate) trait GuestSocket: Send + 'static {
     ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
         self.send(m)
     }
+    /// A knock on the room's lobby (join_net/lobby.rs): the session decides and seats, then ends
+    /// with `{"stage": "knocked", "token"}`; the guest plays on its data channel with that token.
+    fn knock_only(&self) -> bool {
+        false
+    }
+    /// The guest's client id in the room's lobby on the hub (limits and blocks key on it).
+    fn hub_cid(&self) -> Option<String> {
+        self.net()
+            .and_then(|n| crate::join_net::lobby::cid_of(&n.room, &n.gid))
+    }
 }
 
 impl GuestSocket for WebSocket {
@@ -3359,9 +3383,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         who: crate::join_room::Who {
             tag_sha256: tag.map(|t| t.1),
             addr: Some(ip),
-            cid: socket
-                .net()
-                .and_then(|n| crate::join_net::lobby::cid_of(&n.room, &n.gid)),
+            cid: socket.hub_cid(),
         },
     };
     let knock_password = hello.knock_field("password");
@@ -3559,6 +3581,26 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
     let friend = (hello.remember && !by_again && hello.resume.is_none())
         .then(|| crate::join_friends::issue(&console, &name, inbox))
         .flatten();
+    if friend.is_some() {
+        crate::join_net::lobby::changed();
+    }
+    // A knock on the lobby: seated and waiting for its data channel (the resume window), which
+    // says hello with this token.
+    if socket.knock_only() {
+        let token = with_party(&host_key(&console), |p| {
+            p.guests
+                .iter()
+                .find(|g| g.id == id && g.active())
+                .map(|g| g.token.clone())
+        })
+        .flatten();
+        let v = match token {
+            Some(t) => serde_json::json!({"stage": "knocked", "token": t, "friend": friend}),
+            None => serde_json::json!({"stage": "refused", "why": "closed"}),
+        };
+        let _ = socket.send(say(v)).await;
+        return;
+    }
     play(socket, console, id, ip, client, friend).await;
 }
 
@@ -4504,20 +4546,45 @@ async fn play<S: GuestSocket>(
     let net = socket.net();
     let internet = net.is_some();
     let warning = client.codec_warning(live_codec(&console));
-    let Some((fx, player, token, stats)) = with_party(&key, |p| {
+    let Some((fx, player, token, stats, gname)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
         let g = p.guest_mut(id)?;
         g.ip = Some(ip);
         g.net = net;
         g.client = client.clone();
         g.codec_warning = warning;
-        Some((fx, g.player, g.token.clone(), g.stats.clone()))
+        Some((
+            fx,
+            g.player,
+            g.token.clone(),
+            g.stats.clone(),
+            g.name.clone(),
+        ))
     })
     .flatten() else {
         let _ = socket.send(refused("closed")).await;
         return;
     };
     apply(&console, fx);
+    // The room's lower-priority queues (chat and voice: crate::join_room::bus), below the
+    // picture and sound.
+    let (voice_tx, mut voice_rx) = mpsc::channel::<Message>(crate::join_room::bus::VOICE_QUEUE);
+    let (chat_tx, mut chat_rx) =
+        mpsc::channel::<serde_json::Value>(crate::join_room::bus::CHAT_QUEUE);
+    crate::join_room::bus::register(
+        &key,
+        id,
+        crate::join_room::bus::Queues {
+            voice: voice_tx,
+            chat: chat_tx,
+        },
+    );
+    let from = crate::join_room::bus::From {
+        room: key.clone(),
+        guest: id,
+        player,
+        name: gname,
+    };
     let spect = SPECTATOR_BASE | gen;
     let feed = crate::rp_stream_api::add_player(
         spect,
@@ -4566,6 +4633,11 @@ async fn play<S: GuestSocket>(
     if let Some(f) = friend {
         joined["friend"] = serde_json::Value::String(f);
     }
+    // The room's lobby on the hub (Friends lookups, Play again over the internet), and what this
+    // engine's rooms can do.
+    joined["lobby"] = crate::join_net::lobby::lobby_id().into();
+    joined["proto"] = crate::join_room::PROTO.into();
+    joined["caps"] = crate::join_room::caps().into();
     let ended = socket.send(say(joined)).await.is_err();
     let mut tick = tokio::time::interval(STATUS_EVERY);
     let mut left = false;
@@ -4599,6 +4671,12 @@ async fn play<S: GuestSocket>(
                 }
             },
             inc = socket.recv() => match inc {
+                Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::join_room::bus::KIND_VOICE) => {
+                    // A voice frame: to the room's voice (the host's mutes are checked there).
+                    if b.len() <= crate::join_room::bus::VOICE_MAX {
+                        let _ = crate::join_room::bus::from_guest(&from, crate::join_room::bus::FromGuest::Voice(b.to_vec()));
+                    }
+                }
                 Some(Ok(Message::Binary(b))) => {
                     if let Some((_seq, st)) = parse_pad(&b, client.raw_pad) {
                         stats.pad_frames.fetch_add(1, Ordering::Relaxed);
@@ -4608,6 +4686,15 @@ async fn play<S: GuestSocket>(
                     }
                 }
                 Some(Ok(Message::Text(t))) => {
+                    // Room messages (chat, mic, ready…): to the room's handlers, after the host's
+                    // mutes; the core's own keys below.
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
+                        if let Some(back) = crate::join_room::bus::from_guest(&from, crate::join_room::bus::FromGuest::Text(v)) {
+                            if socket.send(say(back)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                     #[derive(serde::Deserialize)]
                     struct In {
                         #[serde(default)] ping: Option<serde_json::Value>,
@@ -4705,6 +4792,13 @@ async fn play<S: GuestSocket>(
                 }
                 None => video = None,
             },
+            // Voice below the picture (a full queue drops at the sender, never waits: bus::voice_to).
+            v = voice_rx.recv() => if let Some(m) = v {
+                if socket.send(m).await.is_err() { break }
+            },
+            c = chat_rx.recv() => if let Some(v) = c {
+                if socket.send(say(v)).await.is_err() { break }
+            },
             _ = tick.tick() => {
                 let skipped = stats.skipped.load(Ordering::Relaxed);
                 behind_for = if skipped != skipped_seen { BEHIND_FOR_TICKS } else { behind_for.saturating_sub(1) };
@@ -4734,6 +4828,7 @@ async fn play<S: GuestSocket>(
         }
     }
     crate::rp_stream_api::remove_spectator(spect);
+    crate::join_room::bus::unregister(&key, id);
     crate::log_at!(Debug, "together", 
         "join: Player {player} on {console} socket {gen} closed ({}): rtt now {:?} ms, {} pictures skipped, {} pad frames",
         if left { "left" } else { "disconnected" },
@@ -4752,6 +4847,10 @@ async fn play<S: GuestSocket>(
     .unwrap_or_default();
     apply(&console, fx);
 }
+
+#[path = "join_room_api.rs"]
+pub(crate) mod room_api;
+pub use room_api::{close, kick, mute, preview, room, rooms_proxy, seat, unblock};
 
 // ── Host API ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -5256,23 +5355,12 @@ pub(crate) async fn open_party(addr: &str) -> Result<(), OpenErr> {
         with_party(&key, |p| p.invite(false, now));
         crate::log_at!(Info, "together", "join: Play Together open on {addr}");
         spawn_watch(key);
+        crate::join_net::lobby::changed();
     }
     Ok(())
 }
 
 /// `POST /api/join/close {addr}`: every guest out, invites void.
-pub async fn close(
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    Json(b): Json<AddrBody>,
-) -> Response {
-    if let Some(r) = guard(&peer, &headers) {
-        return r;
-    }
-    close_party(&b.addr);
-    Json(state_json(&b.addr)).into_response()
-}
-
 /// Closes Play Together on `addr`: every guest out, invites void. Whether one was open.
 pub(crate) fn close_party(addr: &str) -> bool {
     let key = host_key(addr);
@@ -5280,6 +5368,8 @@ pub(crate) fn close_party(addr: &str) -> bool {
     let fx = with_parties(|m| m.remove(&key).map(|mut p| p.close(now)));
     let was = fx.is_some();
     apply(addr, fx.unwrap_or_default());
+    crate::join_room::bus::forget_room(&key);
+    crate::join_net::lobby::changed();
     was
 }
 
@@ -5428,19 +5518,6 @@ pub struct PlayerBody {
     #[serde(alias = "console", alias = "host")]
     addr: String,
     player: u8,
-}
-
-/// `POST /api/join/kick {addr, player}`: let a guest go (their token stops working).
-pub async fn kick(
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    Json(b): Json<PlayerBody>,
-) -> Response {
-    if let Some(r) = guard(&peer, &headers) {
-        return r;
-    }
-    let ok = kick_player(&b.addr, b.player);
-    Json(serde_json::json!({ "ok": ok })).into_response()
 }
 
 /// Lets Player `player` on `addr` go (their token stops working). Whether one was in.
@@ -5856,6 +5933,12 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/join/invite", post(invite))
         .route("/api/join/decide", post(decide))
         .route("/api/join/kick", post(kick))
+        .route("/api/join/room", post(room))
+        .route("/api/join/unblock", post(unblock))
+        .route("/api/join/mute", post(mute))
+        .route("/api/join/seat", post(seat))
+        .route("/api/join/preview", get(preview))
+        .route("/api/join/rooms", get(rooms_proxy))
         .route("/api/join/playing", post(playing))
         .route("/api/join/settings", post(set_settings))
         .route("/api/join/profiles", get(profiles))
