@@ -24,64 +24,30 @@
 use super::*;
 use crate::join_room::{self as jr, Block, Muted, Visibility};
 
-/// The host confirmed an action that ends friends' play.
-pub(crate) fn confirmed(headers: &HeaderMap, query: Option<&str>, body: bool) -> bool {
-    body || headers
-        .get("x-confirm-friends")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        || query.is_some_and(|q| {
-            q.split('&')
-                .any(|kv| kv == "confirm_friends=1" || kv == "confirm_friends=true")
-        })
-}
-
-/// Names of the guests in on `console` ("Friend" for one who gave none).
-pub(crate) fn friends_in(console: &str) -> Vec<String> {
-    with_party(&host_key(console), |p| {
-        p.guests
-            .iter()
-            .filter(|g| g.active())
-            .map(|g| crate::join_names::effective(&g.name).to_string())
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-pub(crate) fn friends_playing_json(console: &str, friends: Vec<String>) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(serde_json::json!({
-            "error": "friends_playing",
-            "friends": friends,
-            "console": console,
-            "message": "Friends are playing on this PS5. Close the room anyway?",
-        })),
-    )
-        .into_response()
-}
-
 #[derive(serde::Deserialize)]
 pub struct CloseBody {
     #[serde(alias = "console", alias = "host")]
-    addr: String,
-    #[serde(default)]
-    confirm_friends: bool,
+    pub(crate) addr: String,
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    pub(crate) confirm_friends: bool,
 }
 
-/// `POST /api/join/close`: closes the room; asks first while friends are in.
+/// `POST /api/join/close`: closes the room; asks first while friends are in (the engine's
+/// "friends playing" guard, together_guard.rs: 409 `friends_playing` with their names).
 pub async fn close(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    uri: axum::http::Uri,
+    Query(cq): Query<crate::together_guard::ConfirmQuery>,
     Json(b): Json<CloseBody>,
 ) -> Response {
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
-    let friends = friends_in(&b.addr);
-    if !friends.is_empty() && !confirmed(&headers, uri.query(), b.confirm_friends) {
-        return friends_playing_json(&b.addr, friends);
+    let friends = friends_playing(&b.addr);
+    if let Some(r) =
+        crate::together_guard::check(Some(&b.addr), &headers, b.confirm_friends || cq.yes())
+    {
+        return r;
     }
     close_party(&b.addr);
     let mut v = state_json(&b.addr);
@@ -399,11 +365,11 @@ pub(crate) fn guest_room(p: &Party, id: u64, now: Instant) -> Option<serde_json:
 #[derive(serde::Deserialize)]
 pub struct KickBody {
     #[serde(alias = "console", alias = "host")]
-    addr: String,
-    player: u8,
+    pub(crate) addr: String,
+    pub(crate) player: u8,
     /// "room": not back in this room; "always": not on this computer either.
     #[serde(default)]
-    block: Option<String>,
+    pub(crate) block: Option<String>,
 }
 
 /// `POST /api/join/kick {addr, player, block?}`.
@@ -818,6 +784,9 @@ pub async fn preview(
     Query(q): Query<PreviewQuery>,
 ) -> Response {
     let now = Instant::now();
+    if let Some(r) = crate::public_limit::PREVIEW.gate(peer.ip()) {
+        return r;
+    }
     if !peer.ip().is_loopback() {
         let r = PREVIEWS
             .lock()

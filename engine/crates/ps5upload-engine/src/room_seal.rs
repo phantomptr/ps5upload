@@ -202,6 +202,7 @@ pub(crate) fn challenge() -> Option<String> {
 
 /// What a guest does (the web page and the apps do the same; here for tests and the engine's
 /// own bridge): seals `pw`/`pass` for `gid` to the room key `pk` with `challenge`.
+#[cfg(test)]
 pub(crate) fn seal(
     pk: &str,
     gid: &str,

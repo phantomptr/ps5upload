@@ -45,6 +45,8 @@ use crate::join_room::{self as jr, Listed, Visibility};
 /// What a knock settled for one guest of the lobby (by hub room and gid).
 #[derive(Clone, Debug)]
 pub(crate) struct Approved {
+    /// How they came (for the debug view of the lobby).
+    #[allow(dead_code)]
     pub via: jr::Via,
     pub at: Instant,
 }

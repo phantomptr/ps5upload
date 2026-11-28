@@ -39,13 +39,7 @@ async fn open_party(console: &str) -> serde_json::Value {
 
 async fn close_party(console: &str) {
     let (ci, h) = local();
-    close(
-        ci,
-        h,
-        Json(AddrBody {
-            addr: console.into(),
-        }),
-    )
+    close(ci, h, Query(Default::default()), Json(CloseBody { addr: console.into(), confirm_friends: true }))
     .await;
 }
 

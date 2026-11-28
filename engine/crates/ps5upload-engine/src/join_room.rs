@@ -1318,6 +1318,8 @@ pub(crate) fn host_tag() -> String {
 /// and one chat queue per guest connection beside the picture and sound: the guest's writer takes
 /// input-related replies first, then the picture and sound, then voice (oldest dropped when
 /// full, never waiting behind video), then chat.
+// The hook points chat and voice (join_chat.rs / join_voice.rs) call; some are used only by them.
+#[allow(dead_code)]
 pub(crate) mod bus {
     use super::*;
     use axum::extract::ws::Message;

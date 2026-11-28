@@ -2971,12 +2971,14 @@ pub async fn ws(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
+    // Upgrades per client on a gentle bucket first (crate::public_limit), then the per-minute
+    // tries.
+    if let Some(r) = crate::public_limit::GUEST_WS.gate(peer.ip()) {
+        return r;
+    }
     if !connect_allowed(peer.ip(), Instant::now()) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many tries, wait a minute",
-        )
-            .into_response();
+        // Slow down, with Retry-After (our pages and apps wait it out silently).
+        return crate::public_limit::slow_down(20);
     }
     let ip = peer.ip();
     upgrade
@@ -3017,11 +3019,8 @@ pub async fn signal(
         SIGNALS_PER_MIN
     };
     if !SIGNALS.allow(ip, limit, Instant::now()) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many tries, wait a minute",
-        )
-            .into_response();
+        // Slow down, with Retry-After (our pages and apps wait it out silently).
+        return crate::public_limit::slow_down(20);
     }
     upgrade
         .max_message_size(crate::join_net::local_signal::FRAME_MAX)
@@ -3089,6 +3088,9 @@ pub async fn bridge(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
+    if let Some(r) = crate::public_limit::APP.gate(peer.ip()) {
+        return r;
+    }
     crate::join_net::bridge::upgrade(upgrade, peer.ip())
 }
 
@@ -3980,10 +3982,15 @@ fn taken_names(p: &Party) -> Vec<String> {
 }
 
 /// The host's device is away: no host page is attached to the console's Remote Play session (the
-/// phone slept, the desktop closed), so nobody can answer an ask now.
-fn host_device_away(_console: &str) -> bool {
-    false
+/// phone slept, the desktop closed), so nobody can answer an ask now. A host who only moved to
+/// another screen for a while still gets asks: away counts from [`HOST_AWAY_AFTER`].
+fn host_device_away(console: &str) -> bool {
+    crate::rp_stream_api::host_away(console).is_some_and(|d| d >= HOST_AWAY_AFTER)
 }
+
+/// No host page for this long: the host's device is away (asks answer `host_away`, the room's
+/// card is withdrawn).
+const HOST_AWAY_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// A PS5 this computer knows (its own household): "trusted household PS5s" may get in without
 /// asking when the host opted in.
@@ -4894,7 +4901,9 @@ async fn play<S: GuestSocket>(
 
 #[path = "join_room_api.rs"]
 pub(crate) mod room_api;
-pub use room_api::{close, kick, mute, preview, room, rooms_proxy, seat, unblock};
+pub use room_api::{
+    close, kick, mute, preview, room, rooms_proxy, seat, unblock, CloseBody, KickBody,
+};
 
 // ── Host API ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -10364,9 +10373,10 @@ mod tests {
             kick(
                 ci,
                 h,
-                Json(PlayerBody {
+                Json(KickBody {
                     addr: console.into(),
                     player: 2,
+                    block: None,
                 }),
             )
             .await,
@@ -10387,8 +10397,10 @@ mod tests {
             close(
                 ci,
                 h,
-                Json(AddrBody {
+                Query(Default::default()),
+                Json(CloseBody {
                     addr: console.into(),
+                    confirm_friends: true,
                 }),
             )
             .await,
@@ -10506,8 +10518,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10607,8 +10621,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10661,8 +10677,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -10993,8 +11011,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;
@@ -11098,8 +11118,10 @@ mod tests {
         close(
             ci,
             h,
-            Json(AddrBody {
+            Query(Default::default()),
+            Json(CloseBody {
                 addr: console.into(),
+                confirm_friends: true,
             }),
         )
         .await;

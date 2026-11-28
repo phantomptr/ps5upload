@@ -90,6 +90,7 @@ pub(crate) fn compare_key(name: &str) -> String {
 }
 
 /// True when `a` and `b` read as the same name.
+#[cfg(test)]
 pub(crate) fn same_name(a: &str, b: &str) -> bool {
     let (a, b) = (compare_key(a), compare_key(b));
     !a.is_empty() && a == b

@@ -636,8 +636,6 @@ fn live() -> Option<Arc<Live>> {
 /// How long the host has had no page attached to `console`'s session (a phone asleep, the desktop
 /// closed). None: a page is attached, or no session runs for that console. Play Rooms answers an
 /// ask with `host_away` from this.
-// Its caller (the rooms code) lands separately.
-#[allow(dead_code)]
 pub(crate) fn host_away(console: &str) -> Option<Duration> {
     live()
         .filter(|l| same_console(&l.host, console) && !l.stop.load(Ordering::Relaxed))
