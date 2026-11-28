@@ -153,6 +153,7 @@ mod tailnet_guest;
 pub(crate) mod tailnet_system;
 mod telemetry;
 mod title_restore_api;
+mod together_guard;
 mod trophy_fix_routes;
 mod uninstall_source;
 mod unpack_packs;

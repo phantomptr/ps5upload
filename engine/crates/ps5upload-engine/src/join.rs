@@ -2298,6 +2298,50 @@ pub(crate) fn needs_session(console: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// The friends in on `console` now (each guest's name, "Friend" when they gave none), for the
+/// "friends playing" guard (together_guard.rs). Empty: nobody would be cut off.
+pub(crate) fn friends_playing(console: &str) -> Vec<String> {
+    with_party(&host_key(console), |p| friend_names(p)).unwrap_or_default()
+}
+
+/// [`friends_playing`] on every console with a Play Together open: `(console, names)`, only the
+/// consoles where someone is in.
+pub(crate) fn friends_playing_any() -> Vec<(String, Vec<String>)> {
+    with_parties(|m| {
+        m.values()
+            .map(|p| (p.console.clone(), friend_names(p)))
+            .filter(|(_, names)| !names.is_empty())
+            .collect()
+    })
+}
+
+fn friend_names(p: &Party) -> Vec<String> {
+    p.guests
+        .iter()
+        .filter(|g| g.active())
+        .map(|g| match g.name.trim() {
+            "" => "Friend".to_string(),
+            n => n.to_string(),
+        })
+        .collect()
+}
+
+/// A party with one guest named `name` in (Player 2, playing), for other modules' tests.
+#[cfg(test)]
+pub(crate) fn test_party_with_guest(console: &str, name: &str) {
+    let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+    let Some(id) = p
+        .admit(name, vpad::FIRST_SLOT, Instant::now())
+        .map(|g| g.id)
+    else {
+        return;
+    };
+    if let Some(g) = p.guest_mut(id) {
+        g.playing = true;
+    }
+    with_parties(|m| m.insert(host_key(console), p));
+}
+
 /// A party with an invite out, for other modules' tests.
 #[cfg(test)]
 pub(crate) fn test_open_party(console: &str) {
