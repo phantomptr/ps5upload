@@ -85,6 +85,7 @@ mod install;
 mod join;
 mod join_friends;
 mod join_net;
+mod join_route;
 mod link;
 mod link_drops;
 mod link_lz4;
@@ -952,6 +953,14 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // …and an internet invite's signalling straight to this engine (join_net/local_signal),
         // for this engine's own rooms only: the guest still checks the certificate and the key.
         || path == "/api/join/signal"
+        // …and the checks socket a guest's app measures each way to this engine with before it
+        // joins and, gently, while it plays (join_route.rs): echoes only, no guest state.
+        || path == "/api/join/probe"
+        // …and PS5Upload Play on a PS5 joining a friend's internet room through this engine
+        // (join_net/bridge.rs): it must be reachable from LAN peers (the PS5). It reaches only
+        // the hub in the settings and the engine answering there, checked against the link's
+        // fingerprint; a few at once per address.
+        || path == "/api/join/bridge"
         // A friend receiving a Share (share/mod.rs) on the home network: the page and its
         // socket, which serves only what the sender allowed. The rest of /api/share is the
         // sender's.
@@ -14454,7 +14463,12 @@ fn build_app_and_mcp(
         .route("/join", get(join::page))
         .route("/api/join/ws", get(join::ws))
         .route("/api/join/relay", get(join::relay))
+        .route("/api/join/bridge", get(join::bridge))
         .route("/api/join/signal", get(join::signal))
+        // Play Together routes (join_route.rs): the checks socket a guest measures its ways with,
+        // and what the host and an agent read about each guest's way.
+        .route("/api/join/probe", get(join_route::probe))
+        .route("/api/join/routes", get(join::routes))
         .route("/api/join", get(join::get_state))
         .route("/api/join/open", post(join::open))
         .route("/api/join/close", post(join::close))
@@ -15394,6 +15408,9 @@ mod loopback_guard_tests {
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/join"));
         assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
         assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/signal"));
+        assert!(loopback_allows(&c, ip("100.101.2.3"), "/api/join/probe"));
+        // PS5Upload Play on a PS5 joining an internet room through this engine.
+        assert!(loopback_allows(&c, ip("192.168.1.40"), "/api/join/bridge"));
         // The host's side of Play Together stays on this computer.
         for p in [
             "/api/join",
@@ -15405,9 +15422,12 @@ mod loopback_guard_tests {
             "/api/join/playing",
             "/api/join/settings",
             "/api/join/relay",
+            "/api/join/routes",
+            "/api/join/probe/x",
             "/api/join/ws/x",
             "/api/join/wsx",
             "/api/join/signal/x",
+            "/api/join/bridge/x",
             "/join/../api/join/open",
             "/joinx",
             "/join/x",

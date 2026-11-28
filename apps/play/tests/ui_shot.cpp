@@ -217,6 +217,19 @@ int main(int argc, char **argv)
     f.guest.move_first = true;
     std::snprintf(f.guest.host_user, sizeof f.guest.host_user, "Sam");
     shot("playing-move", App::Screen::playing, f);
+    // the way to the host (docs/ROUTES.md): just changed, then Poor
+    f.guest.move_first = false;
+    f.guest.route = 1;
+    f.guest.tier = 3;
+    f.guest.route_rtt_ms = 23;
+    f.guest.route_changed_us = 900000;
+    shot("playing-way", App::Screen::playing, f);
+    f.guest.route = 0;
+    f.guest.tier = 1;
+    f.guest.route_rtt_ms = 120;
+    f.guest.route_changed_us = 0;
+    shot("playing-poor", App::Screen::playing, f);
+    f.guest.route = -1;
     f.host.phase = CompanionView::pairing;
     std::snprintf(f.host.pair_display, sizeof f.host.pair_display, "PQR-STU");
     f.host.pair_left_s = 251;
@@ -238,6 +251,8 @@ int main(int argc, char **argv)
     d.guests[0].player = 2;
     d.guests[0].rtt_ms = 6;
     std::snprintf(d.guests[0].name, sizeof d.guests[0].name, "Jo");
+    std::snprintf(d.guests[0].route, sizeof d.guests[0].route, "tailscale");
+    std::snprintf(d.guests[0].tier, sizeof d.guests[0].tier, "good");
     std::snprintf(d.invites, sizeof d.invites, "anywhere");
     std::snprintf(d.keep_awake, sizeof d.keep_awake, "transfers");
     d.helper_present = 1;

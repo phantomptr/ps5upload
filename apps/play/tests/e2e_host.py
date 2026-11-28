@@ -252,6 +252,72 @@ check(any(m.get("t") == "leave" for m in r["hub_host_msgs"]), "the room is left 
 sent = [m for m in r["hub_host_msgs"] if m.get("t") == "signal"]
 check(len(sent) == 4 - 1 and all(set(m["data"]) <= {"invite_ok", "why"} for m in sent),
       "the app only ever answers (small messages)")
+# 11. Ways (docs/ROUTES.md). The stand-in's other ways in (--proxy) add a round trip, or stop
+# passing anything (a black hole) from some second on.
+def ways(name, *extra):
+    p, port, rep = engine(name, *extra)
+    return p, port, rep, open(os.path.join(work, name + ".port.ways")).read().split()
+
+
+def route_line(out):
+    line = out.split("route way=", 1)[1].split("\n")[0] if "route way=" in out else ""
+    return dict(kv.split("=") for kv in ("way=" + line).split()) if line else {}
+
+
+# 11a. At connect the better tier wins over the shorter kind: the home network at 150 ms is Poor,
+# Tailscale at ~0 ms Excellent. The other way stays a backup, checked gently, no bursts in play.
+p, port, rep, (slow,) = ways("ways_pick", "--seconds", "12", "--lifetime", "14", "--proxy", "150")
+out = run("join", "127.0.0.1", str(port), "ABCDEF", "--seconds", "8", "--way", f"lan:{slow}",
+          "--way", f"tailscale:{port}")
+r = finish(p, rep)
+rl = route_line(out)
+check("picked tailscale" in out and rl.get("way") == "tailscale", "the better tier wins at connect")
+st = [s for s in r["stats"] if "route" in s]
+check(st and st[-1]["route"] == "tailscale" and st[-1]["tier"] == "excellent"
+      and st[-1].get("backups") == 1 and st[-1].get("backup_tier") == "poor", "the host hears the way, tier, backup")
+check(len(r["probe_checks"]) <= 10 + 8 // 2 + 2, f"backups checked gently ({len(r['probe_checks'])} checks)")
+check(all(b < 2 for b in r["bursts"]) and len(r["bursts"]) <= 2, "bursts only at connect")
+
+# 11b. The way in use goes dark mid-game: the guest joins again on the backup with its token
+# beside the old socket, the stand-in hands it the seat, and pictures go on.
+p, port, rep, (dark,) = ways("ways_lost", "--seconds", "14", "--lifetime", "16", "--proxy", "0:4")
+out = run("join", "127.0.0.1", str(port), "ABCDEF", "--seconds", "10", "--way", f"lan:{dark}",
+          "--way", f"tailscale:{port}")
+r = finish(p, rep)
+rl = route_line(out)
+check("picked lan" in out, "both Excellent: the home network first")
+check(rl.get("way") == "tailscale" and rl.get("switches") == "1" and rl.get("why") == "lost",
+      "a dark way is left for the backup")
+check(r["replaced"] == 1 and [("resume" in h) for h in r["hellos"]] == [False, True], "resumed beside the old socket")
+check(out.count("joined as player 2") == 2 and "phase reconnecting" not in out, "no reconnect screen on a change of way")
+res = dict(kv.split("=") for kv in out.split("result ", 1)[1].split("\n")[0].split()) if "result " in out else {}
+# The stand-in sends a picture every 16 ms at most: before the way goes dark (4 s after its start,
+# the join takes ~0.5 s) at most ~225 can arrive, so more than 250 means pictures came after the
+# change. (A fixed 300 was at the edge: 278-315 measured on a Mac, either side of the line.)
+check(int(res.get("pictures", 0)) > 250, "pictures go on after the change")
+check(any(s.get("route") == "tailscale" and s.get("route_switches") == 1 for s in r["stats"]), "the host hears the change")
+
+# 11c. Nothing direct answers: through this home's PS5Upload (the bridge) with the invite's room
+# and certificate; a bridge that fails says why.
+room, fp = "AAAAAAAAAAAAAAAAAAAAAh", "AB:CD:EF"
+p, port, rep, (dark,) = ways("ways_bridge", "--seconds", "6", "--lifetime", "9", "--proxy", "0:0.001")
+out = run("join", "127.0.0.1", str(port), "ABCDEF", "--seconds", "3", "--way", f"lan:{dark}",
+          "--bridge", f"{port}:{room}:{fp}")
+r = finish(p, rep)
+check(route_line(out).get("way") == "internet" and "phase joined" in out, "the bridge when nothing direct answers")
+check(r["bridges"] == [{"v": 1, "room": room, "fp": fp}], "the bridge is asked for the invite's room and certificate")
+p, port, rep, (dark,) = ways("ways_bridge_fail", "--lifetime", "8", "--proxy", "0:0.001", "--bridge-fail", "no_direct")
+out = run("join", "127.0.0.1", str(port), "ABCDEF", "--seconds", "3", "--way", f"lan:{dark}",
+          "--bridge", f"{port}:{room}:{fp}")
+finish(p, rep)
+check("failed (no_direct)" in out and "phase failed" in out, "a failed bridge ends the try with its reason")
+
+# 11d. An engine without the checks socket: timed by its answer, joined all the same.
+p, port, rep = engine("ways_old", "--seconds", "4", "--no-probe")
+out = run("join", "127.0.0.1", str(port), "ABCDEF", "--seconds", "2", "--way", f"lan:{port}")
+r = finish(p, rep)
+check(route_line(out).get("way") == "lan" and "phase joined" in out and r["probe_sockets"] == 0,
+      "an engine without the checks socket still joins")
 
 print("e2e:", "all passed" if not failures else f"{failures} failed")
 sys.exit(1 if failures else 0)

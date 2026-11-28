@@ -26379,6 +26379,29 @@
         }
       }
     },
+    "/api/join/bridge": {
+      "get": {
+        "description": "`GET /api/join/bridge`: PS5Upload Play on a PS5 (a native app, no WebRTC) joins a friend's Play\nTogether over the internet through this engine: it sends the invite link's room and\nfingerprint, this engine joins the room on the hub as a WebRTC guest, checks the host engine's\ncertificate against the fingerprint, and then passes the guest socket's messages through\nunchanged (join_net/bridge.rs). Reached from the LAN: the PS5 is another machine. It reaches\nonly the hub in the Play Together settings and the engine that answers there, and at most two\nbridges per address run at once.",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A socket that joins a friend's internet Play Together room as a WebRTC guest for PS5Upload Play",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
+        }
+      }
+    },
     "/api/join/close": {
       "post": {
         "description": "`POST /api/join/close {addr}`: every guest out, invites void.",
@@ -26874,6 +26897,37 @@
         }
       }
     },
+    "/api/join/probe": {
+      "get": {
+        "description": "`GET /api/join/probe`: the checks socket (above).",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many requests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The checks socket (above)",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
+        }
+      }
+    },
     "/api/join/profiles": {
       "get": {
         "description": "`GET /api/join/profiles?addr=`: the profiles signed in on that console (`users`: `{id, name,\nforeground}`, `foreground` the one in front: the host's own), what the host chose for each\nguest's player (`seats`: `{player, user, name, owner}`), and the helper's companion that seats\nguests in them (`companion`: running, starting, no_bind, unavailable, off; null when not asked\nyet). Only signed-in profiles can be chosen (502 `unreachable` when the console does not\nanswer).",
@@ -26984,6 +27038,59 @@
           "access": "loopback",
           "response_schema": "websocket",
           "websocket": true
+        }
+      }
+    },
+    "/api/join/routes": {
+      "get": {
+        "description": "`GET /api/join/routes?addr=`: how each guest on that console is connected and how well\n(join_route.rs): the tiers' lines, each guest's way, tier and what its app measured, and the\nchecks socket's counts. Read-only, this computer (or `PS5UPLOAD_ALLOW_IP`) only.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "query",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "json-unknown"
         }
       }
     },

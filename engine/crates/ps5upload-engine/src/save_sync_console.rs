@@ -222,7 +222,13 @@ pub fn after_removal(hosts: Vec<String>, settings: Settings, state: State) {
     }
     std::thread::spawn(move || {
         let answered: BTreeMap<String, bool> = hosts.iter().map(|h| (h.clone(), true)).collect();
-        publish_to(&hosts, &settings, &state, &answered, crate::save_backup::now_ms());
+        publish_to(
+            &hosts,
+            &settings,
+            &state,
+            &answered,
+            crate::save_backup::now_ms(),
+        );
     });
 }
 

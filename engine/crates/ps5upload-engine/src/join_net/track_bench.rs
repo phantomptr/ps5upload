@@ -72,6 +72,24 @@ pub(super) fn take_session(s: RtcSocket) -> Option<RtcSocket> {
     }
 }
 
+/// Another test's room (bridge.rs): its peers' session ends come to the receiver instead of a
+/// guest session, until [`release_room`].
+pub(crate) fn hold_room(room: &str) -> mpsc::UnboundedReceiver<RtcSocket> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((room.to_string(), tx));
+    rx
+}
+
+pub(crate) fn release_room(room: &str) {
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(r, _)| r != room);
+}
+
 /// The console's stream: its rate, and how its pictures' sizes vary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Shape {

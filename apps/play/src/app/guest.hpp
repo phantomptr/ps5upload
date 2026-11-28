@@ -5,6 +5,7 @@
 #pragma once
 #include "../core/proto.hpp"
 #include "../net/net.hpp"
+#include "../net/route.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -64,6 +65,17 @@ struct GuestView
     std::uint64_t pictures = 0, sounds = 0, pads_sent = 0;
     int delivery_ms = -1; // engine -> app time of the last picture, when the engine times them
     char friend_pass[48] = {}; // the host's engine remembers this PS5 ("Play again"), from joined
+    // The way to the engine (docs/ROUTES.md, guest_route.cpp): its kind (route::Kind, -1 before
+    // one is chosen) and tier (route::Tier), the backups kept and the best one's tier, the
+    // changes so far, and the last change (when, why: "upgrade", "rescue", "lost").
+    std::int8_t route = -1;
+    std::uint8_t tier = 0;
+    bool bridged = false;
+    std::uint8_t backups = 0, backup_tier = 0;
+    int route_rtt_ms = -1, route_jitter_ms = -1, route_loss = -1;
+    int route_switches = 0;
+    std::uint64_t route_changed_us = 0;
+    char route_why[12] = {};
 };
 
 // How a join goes beyond the code (docs/EASY_JOIN.md): an invite link's key, a friend pass, asking
@@ -107,6 +119,9 @@ class Guest
     {
         nudge_.store(true);
     }
+    // The ways to the engine, best checked at connect and kept as backups during play
+    // (docs/ROUTES.md). Set before start(); none: only start()'s address. Copied.
+    void set_routes(const route::Candidate *c, int n) noexcept;
     // Testing: let the socket go as a suspend does (the session then comes back with its token).
     void drop_socket() noexcept
     {
@@ -117,9 +132,27 @@ class Guest
     static void *entry(void *self) noexcept;
     void run() noexcept;
     bool connect_and_hello(bool resume) noexcept;
+    std::size_t make_hello(char *out, std::size_t cap, bool resume, int way) noexcept;
     void handle_text(const char *t, std::size_t n) noexcept;
     void handle_binary(const std::uint8_t *d, std::size_t n) noexcept;
     void set_phase(GuestView::Phase p, const char *why) noexcept;
+
+    // guest_route.cpp: the ways (docs/ROUTES.md)
+    bool route_open(net::WsClient &ws, int way, int *status) noexcept;
+    void route_pick() noexcept;
+    void route_tick(std::uint64_t now) noexcept;
+    bool route_switch(int to, const char *why) noexcept;
+    void route_sent(std::uint32_t id) noexcept;
+    void route_answer(std::uint32_t id) noexcept;
+    void route_picture(std::uint64_t engine_us) noexcept;
+    void route_heard() noexcept;
+    void route_status(const char *t, std::size_t n) noexcept;
+    void route_lost(const char *why) noexcept;
+    void route_stats(char *out, std::size_t cap) noexcept;
+    void route_view() noexcept;
+    void route_stop() noexcept;
+    static void *route_entry(void *self) noexcept;
+    void route_main() noexcept;
 
     GuestSinks &sinks_;
     net::WsClient ws_;
@@ -142,5 +175,14 @@ class Guest
     bool have_offset_ = false;
     std::int64_t offset_us_ = 0;
     std::uint64_t ping_sent_us_ = 0;
+    // the ways (guest_route.cpp); sel_ under route_lock_
+    route::Selector sel_;
+    pthread_mutex_t route_lock_;
+    int n_routes_ = 0;
+    std::atomic<int> switch_to_{-1};
+    std::atomic<bool> route_run_{false};
+    pthread_t route_thread_{};
+    std::int64_t last_skipped_ = -1;
+    int lost_tries_ = 0;
 };
 } // namespace play

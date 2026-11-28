@@ -28,6 +28,7 @@ import { setPadForwardReason } from "../lib/androidPadBridge";
 import type { NetPath } from "./netPath";
 import type { JoinTransport } from "./rtcTransport";
 import { TrackPlayer } from "./trackPlayer";
+import { classify, RttMeter, type Tier } from "./routeTier";
 
 export interface JoinSnapshot {
   stage: JoinStage;
@@ -45,6 +46,9 @@ export interface JoinSnapshot {
   muted: boolean;
   /** Which way the connection goes while joined (join/netPath), when it is known. */
   path: NetPath | null;
+  /** How good it is (join/routeTier, apps/play/docs/ROUTES.md), from this page's round trips;
+   *  null before the first. */
+  tier: Tier | null;
 }
 
 const MUTED_KEY = "ps5upload.join.muted";
@@ -125,6 +129,25 @@ export function pageStats(
   return { ...s, ...(problem ? { problem } : {}), ...(sound ?? {}) };
 }
 
+/** The page's report with the way it plays over and how good that is (engine join.rs PageReport
+ *  `route`, `tier`, `route_rtt_ms`, `route_jitter_ms`; apps/play/docs/ROUTES.md), when known. */
+export function withRoute(
+  stats: Record<string, number | string> | null,
+  path: NetPath | null,
+  meter: RttMeter,
+): Record<string, number | string> | null {
+  if (!stats) return stats;
+  const r = meter.reading();
+  const tier = classify(r);
+  return {
+    ...stats,
+    ...(path ? { route: path } : {}),
+    ...(tier ? { tier } : {}),
+    ...(r.rttMs != null ? { route_rtt_ms: r.rttMs } : {}),
+    ...(r.jitterMs != null ? { route_jitter_ms: r.jitterMs } : {}),
+  };
+}
+
 /** The pad this device is: connected controllers (each through its profile), the keyboard and the
  *  on-screen one, merged. */
 export function devicePad(): PadState {
@@ -142,6 +165,7 @@ export class JoinSession {
   private snap: JoinSnapshot;
   private listeners = new Set<() => void>();
   private cleanups: Array<() => void> = [];
+  private meter = new RttMeter();
 
   constructor(readonly opts: JoinSessionOptions) {
     this.snap = {
@@ -155,6 +179,7 @@ export class JoinSession {
       host: opts.host,
       muted: readMuted(),
       path: null,
+      tier: null,
     };
     this.client = new JoinClient({
       url: opts.url,
@@ -169,11 +194,14 @@ export class JoinSession {
         if (stage.kind === "refused" || stage.kind === "ended") this.teardown();
       },
       onStatus: (status) => this.set({ status, host: status.host ?? this.snap.host }),
-      onRtt: (rttMs) => this.set({ rttMs }),
+      onRtt: (rttMs) => {
+        this.meter.add(rttMs);
+        this.set({ rttMs, tier: classify(this.meter.reading()) });
+      },
       onFrame: (d) => this.picture().onMessage(d),
       // How the picture looks here, for the host's panel and log: none before the first picture,
       // unless the picture fails, which the host then hears about (#720).
-      readStats: () => pageStats(this.player?.stats ?? null, this.snap.problem, this.player?.soundReport() ?? null),
+      readStats: () => withRoute(pageStats(this.player?.stats ?? null, this.snap.problem, this.player?.soundReport() ?? null), this.snap.path, this.meter),
       onCodec: (h, track, audio) => {
         const p = this.picture();
         p.setHevc(h);

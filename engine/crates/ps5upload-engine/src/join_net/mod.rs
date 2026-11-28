@@ -37,7 +37,18 @@
 //! (`&w=1` to watch), a data channel labelled `"pad"`, and on it the messages of `/api/pad/ws`
 //! after a first `{"hello": {"t": key, "name", "d", "w"}}` (the LAN socket's query). A room's
 //! peers get only its own kind's session: a channel with the other label is ignored.
+//!
+//! **The bridge** ([`bridge`], `GET /api/join/bridge`): PS5Upload Play, a native PS5 app with no
+//! WebRTC, joins an internet invite through the PS5Upload engine on its own home network. The app
+//! sends that engine the link's room and fingerprint on a plain WebSocket; the engine joins the
+//! room on the hub as a guest and makes the offer exactly as the guest page does (one `"join"`
+//! data channel, its host and STUN candidates), refuses an answer whose certificate is not the
+//! link's, leaves the hub as soon as the channel is open, and from then on passes the messages of
+//! `/api/join/ws` through unchanged both ways (binary ones in pieces as [`chunk`] says; the host's
+//! pings are answered on the bridge itself). To the host's engine it is one more internet guest; the
+//! app's hello carries the invite key, which the bridge never reads.
 
+pub(crate) mod bridge;
 pub(crate) mod chunk;
 pub(crate) mod crypto;
 pub(crate) mod hub;

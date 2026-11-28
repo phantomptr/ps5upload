@@ -30,7 +30,9 @@ import { pageCss } from "./vite.pageCss";
 // 808: the Home Screen name, icon and manifest tags (engine app_icon.rs).
 // 813: the guest's "nothing moves on that screen?" hint, in every language.
 // 840 (was 829): "Play on my PS5" (join/ps5Handoff.ts, Ps5Page.tsx): 4 KiB of code, its strings in 21 languages 15.
-const RAW_BUDGET = 840 * 1024;
+// 842 (837.6 measured): the connection's tier in a word beside its way (join/routeTier.ts, in every
+// language), about 4 KiB on top of "Play on my PS5".
+const RAW_BUDGET = 842 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
 /** The same page on the website (https://ps5upload.phantomptr.com/join/, .github/workflows/
  *  pages.yml), where internet invites open (#room=…&k=…&fp=…&hub=…, join/rtcTransport.ts). */

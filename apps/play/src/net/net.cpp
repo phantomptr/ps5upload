@@ -334,6 +334,26 @@ bool WsClient::send_text(const char *s) noexcept
     return send(ws::kText, s, std::strlen(s));
 }
 
+void WsClient::adopt(WsClient &other) noexcept
+{
+    close();
+    const std::size_t rest = other.in_len_ > other.in_at_ ? other.in_len_ - other.in_at_ : 0;
+    std::memcpy(in_, other.in_ + other.in_at_, rest);
+    in_at_ = 0;
+    in_len_ = rest;
+    reader_.reset();
+    err_ = "";
+    pthread_mutex_lock(&other.send_lock_);
+    const int fd = other.fd_;
+    other.fd_ = -1;
+    pthread_mutex_unlock(&other.send_lock_);
+    other.in_at_ = other.in_len_ = 0;
+    other.reader_.reset();
+    pthread_mutex_lock(&send_lock_);
+    fd_ = fd;
+    pthread_mutex_unlock(&send_lock_);
+}
+
 WsClient::Got WsClient::next(unsigned timeout_ms) noexcept
 {
     const std::uint64_t until = now_us() + timeout_ms * 1000ull;

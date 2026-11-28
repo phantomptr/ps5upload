@@ -39,6 +39,10 @@ class WsClient
     // Thread-safe (one send at a time). False when the socket is gone.
     bool send(ws::Op op, const void *data, std::size_t len) noexcept;
     bool send_text(const char *s) noexcept;
+    // Takes over `other`'s open connection, with what it has read but not handed out yet (call
+    // right after other.next() gave a whole message). This client's own connection is closed.
+    // Changing way mid-game (docs/ROUTES.md): the new socket was opened and joined beside this one.
+    void adopt(WsClient &other) noexcept;
 
     enum class Got
     {

@@ -7,6 +7,7 @@
 #include "../ui/i18n.hpp"
 #include "log.hpp"
 #include "platform.hpp"
+#include "route_pick.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -86,6 +87,16 @@ void App::start_join_how(const char *code, const JoinExtras &x) noexcept
     guest_->set_extras(x);
     last_extras_ = x;
     friend_saved_ = false;
+    // Every address discovery found for this engine is a way to it (docs/ROUTES.md): the best is
+    // checked at connect, the rest kept as backups. The picked address keeps its socket's path.
+    route::Candidate ways[route::Selector::kMax];
+    pthread_mutex_lock(&disc_lock_);
+    const int n_ways = route_candidates(found_, n_found_, engine_name_, "", addr_, port_, ways, route::Selector::kMax);
+    pthread_mutex_unlock(&disc_lock_);
+    for (int i = 0; i < n_ways; ++i)
+        if (ways[i].port == port_ && !std::strcmp(ways[i].addr, addr_))
+            std::snprintf(ways[i].path, sizeof ways[i].path, "%s", x.path);
+    guest_->set_routes(ways, n_ways);
     guest_->start(addr_, port_, code_, platform::user_name(), version_);
     last_phase_ = -1;
     if (screen_ != Screen::joining)

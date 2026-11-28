@@ -214,7 +214,10 @@ IPv6. It ignores every other message and does no TURN.
   `robots`, `well_known`, `ws_not_websocket`, `other`) and never logged.
 - `GET /metrics`: Prometheus text, counts only (rooms, guests, connections, rooms opened,
   reclaimed, closed and expired, joins, signals, dropped host signals, expired guests, STUN
-  requests, errors by kind, refusals by the limit that fired, stray HTTP requests by class).
+  requests, errors by kind, refusals by the limit that fired, stray HTTP requests by class, guests
+  joined from an app's own client with no Origin (`hub_joins_app_total`: the bridge PS5Upload Play
+  joins through), and guest sockets closed with their open time in all
+  (`hub_guests_left_total`, `hub_guest_connected_ms_total`: the load per join)).
   Kept private: localhost only behind Caddy, or a separate private port (`HUB_METRICS_LISTEN`)
   on Fly.
 

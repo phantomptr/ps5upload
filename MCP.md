@@ -43,7 +43,10 @@ changed for agents:
   across restarts. `internet_invites` still works and means the same: on is anywhere, off is Wi-Fi
   only.
 - `together_status` gives each friend `link.path` (`lan`, `tailscale` or `internet`) and
-  `link.rtt_ms`.
+  `link.rtt_ms`, and `route` with its `tier` (`excellent`, `good`, `playable`, `poor`).
+- `together_routes` (read-only) explains each friend's connection: the tier lines, what their
+  app measured on its way (round trip, jitter, loss), how often it changed way during play, its
+  backups, and the checks socket's counts.
 
 **Finding and checking consoles.** `tailnet_consoles` lists the PS5Upload consoles on this
 device's Tailscale network (or probes one `addr`): tailnet and home address, whether its helper

@@ -279,6 +279,9 @@ async fn ws_handler(
             return (StatusCode::FORBIDDEN, "origin not allowed\n").into_response();
         }
     }
+    // A socket without an Origin is an app's own client (an engine hosting, or joining as the
+    // bridge for PS5Upload Play), not a browser page: counted apart (Metrics::guest_joined).
+    let app = !headers.contains_key(header::ORIGIN);
     let client = client_ip(&shared.config, peer.ip(), &headers);
     let slot = match ConnSlot::take(&shared, IpKey::of(client), v6_site(client)) {
         Ok(s) => s,
@@ -298,7 +301,7 @@ async fn ws_handler(
     ws.max_message_size(hard)
         .max_frame_size(hard)
         .read_buffer_size(READ_BUFFER)
-        .on_upgrade(move |socket| connection(socket, slot))
+        .on_upgrade(move |socket| connection(socket, slot, app))
 }
 
 /// One open connection, counted against the hub's and its client's limits until dropped.
@@ -412,7 +415,7 @@ async fn send_all(sink: &mut Sink, lines: Vec<String>) -> Result<(), ()> {
     Ok(())
 }
 
-async fn connection(socket: WebSocket, slot: ConnSlot) {
+async fn connection(socket: WebSocket, slot: ConnSlot, app: bool) {
     let shared = slot.shared.clone();
     let ip = slot.ip;
     let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
@@ -426,6 +429,8 @@ async fn connection(socket: WebSocket, slot: ConnSlot) {
     };
     let mut role = Role::None;
     let mut last_seen = Instant::now();
+    let opened = Instant::now();
+    let mut guest_since: Option<Instant> = None;
     let cfg = &shared.config;
     let mut ping = tokio::time::interval_at(
         tokio::time::Instant::now() + cfg.ping_interval,
@@ -443,7 +448,14 @@ async fn connection(socket: WebSocket, slot: ConnSlot) {
                 let Some(Ok(msg)) = msg else { break };
                 last_seen = Instant::now();
                 let res = match msg {
-                    Message::Text(t) => handle_text(&shared, &mut role, &me, ip, t.as_str()),
+                    Message::Text(t) => {
+                        let res = handle_text(&shared, &mut role, &me, ip, t.as_str());
+                        if guest_since.is_none() && matches!(role, Role::Guest { .. }) {
+                            guest_since = Some(Instant::now());
+                            shared.metrics.guest_joined(app);
+                        }
+                        res
+                    }
                     Message::Binary(_) => Err(ErrorKind::BadFrame),
                     Message::Ping(_) | Message::Pong(_) => continue,
                     Message::Close(_) => break,
@@ -514,6 +526,9 @@ async fn connection(socket: WebSocket, slot: ConnSlot) {
                 break;
             }
         }
+    }
+    if guest_since.is_some() {
+        shared.metrics.guest_left(opened.elapsed());
     }
     let _ = tokio::time::timeout(SEND_TIMEOUT, sink.close()).await;
     disconnect(&shared, role, conn);

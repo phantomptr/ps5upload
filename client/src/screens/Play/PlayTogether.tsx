@@ -28,6 +28,7 @@ import {
 } from "./playTogetherState";
 import { InternetHint, netInviteNote, NetworkChoice, routerNote, saveNetwork, savedNetwork, splitByNetwork, urlHost, type NetworkKind } from "./NetworkChoice";
 import { clock } from "../../lib/clockText";
+import { tierLabel } from "../../join/routeTier";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -250,6 +251,16 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
             {guest.onPs5 && guest.status !== "left" && (
               <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-xs font-medium" data-testid="pt-player-ps5">
                 {tr("pt_on_ps5", undefined, "On a PS5")}
+              </span>
+            )}
+            {/* How good their connection is, in a word (apps/play/docs/ROUTES.md). */}
+            {guest.tier && guest.status !== "left" && (
+              <span
+                className={`text-xs ${guest.tier === "poor" ? "text-[var(--color-warn)]" : "text-[var(--color-muted)]"}`}
+                data-testid="pt-player-tier"
+                data-tier={guest.tier}
+              >
+                {tierLabel(tr, guest.tier)}
               </span>
             )}
             {guest.rttMs != null && guest.status !== "left" && (

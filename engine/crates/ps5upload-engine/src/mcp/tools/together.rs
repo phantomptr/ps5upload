@@ -43,6 +43,25 @@ pub(super) fn tools() -> Vec<ToolDef> {
             run: route!(path: "/api/join", done: "Play Together on that console."),
         },
         ToolDef {
+            name: "together_routes",
+            title: "Play Together routes",
+            description: "How each Play Together guest on a console is connected and how good \
+                          that is. `tiers` lists the lines between Excellent, Good and Playable \
+                          (round trip ms, jitter ms, loss per thousand, headroom % over the \
+                          stream's bitrate; past Playable is Poor). Per guest: `route` (`lan`: \
+                          the home network, `tailscale`, `internet`), `tier` and `tier_from` \
+                          (`guest`: its app measured it, `engine`: from the round trip and \
+                          whether it keeps up), what its app measured on its way \
+                          (`route_rtt_ms`, `route_jitter_ms`, `route_loss_permille`), \
+                          `route_switches` (times it changed way during play), `backups` (ways \
+                          it keeps checking) and `backup_tier` (the best one's). `probe` counts \
+                          the checks socket's use (sockets, checks, bursts, refusals). Use it to \
+                          tell why a friend's game lags and whether a better way exists.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_required() }), &["console"]),
+            run: route!(path: "/api/join/routes", done: "Play Together routes on that console."),
+        },
+        ToolDef {
             name: "together_open",
             title: "Open Play Together",
             description: "Opens Play Together for the Remote Play session running on a console, \
