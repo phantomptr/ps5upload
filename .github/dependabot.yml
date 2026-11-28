@@ -8,6 +8,7 @@
 #   - client/package.json           (React frontend)
 #   - .github/workflows/*           (GitHub Actions)
 #   - engine/Dockerfile*            (Docker base images)
+#   - engine/crates/ps5upload-hub/Dockerfile (same Rust base image, kept in step)
 #
 # Updates are grouped per-ecosystem to keep PR volume sane; each PR is
 # gated by the same `PR gate` CI check and code-owner review as any other.
@@ -68,7 +69,8 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: "docker"
-    directory: "/engine"
+    # One group for both, so the engine and hub images move to a new Rust together.
+    directories: ["/engine", "/engine/crates/ps5upload-hub"]
     schedule:
       interval: "weekly"
     # A new release waits a few days before it is proposed: most hijacked packages are
