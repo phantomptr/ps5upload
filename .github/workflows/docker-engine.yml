@@ -241,8 +241,9 @@ jobs:
     needs: resolve
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    # 45: the converter's Docker toolchain is built here when engine-ci's cache of it is gone.
-    timeout-minutes: 45
+    # 45: the converter's Docker toolchain is built here when engine-ci's cache of it is gone; +20
+    # for PS5Upload Play's Docker build when its cache is gone too.
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -315,12 +316,41 @@ jobs:
           test -s payload/ps5upload.elf
           test -s payload/installer/ps5upload-installer.elf
 
+      # PS5Upload Play (apps/play), as publish.yml's build-payload builds it: the engine in these
+      # images embeds the zip, so the web UI can install the app on a PS5. Skipped while the app is
+      # not in the tree.
+      - name: Is PS5Upload Play in this tree?
+        id: play
+        run: scripts/play-app-ci.sh present | tee -a "$GITHUB_OUTPUT"
+
+      - name: Restore PS5Upload Play's toolchain
+        id: play-cache
+        if: steps.play.outputs.present == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/play-toolchain.tar
+            apps/play/.deps
+          key: ${{ runner.os }}-${{ runner.arch }}-play-toolchain-${{ hashFiles('apps/play/docker/**', 'apps/play/tooling/**', 'apps/play/tools/**', 'apps/play/Makefile') }}
+
+      - name: Load PS5Upload Play's toolchain image
+        if: steps.play.outputs.present == 'true' && steps.play-cache.outputs.cache-hit == 'true'
+        run: if [ -s "$RUNNER_TEMP/play-toolchain.tar" ]; then docker load -i "$RUNNER_TEMP/play-toolchain.tar"; fi
+
+      - name: Build PS5Upload Play
+        if: steps.play.outputs.present == 'true'
+        timeout-minutes: 30
+        env:
+          DOCKER_BUILDKIT: 1
+        run: scripts/play-app-ci.sh build payload/play
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ps5upload-payload-elves
           path: |
             payload/ps5upload.elf
             payload/installer/ps5upload-installer.elf
+            payload/play/*.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -385,6 +415,10 @@ jobs:
           cp -v /tmp/payload-elves/ps5upload.elf \
                 /tmp/payload-elves/installer/ps5upload-installer.elf \
                 engine/crates/ps5upload-engine/payload/
+          # PS5Upload Play's zip, when this tag has the app (build.rs looks for it here too).
+          for z in /tmp/payload-elves/play/PS5Upload-Play-FAKE99261-*.zip; do
+            [ -f "$z" ] && cp -v "$z" engine/crates/ps5upload-engine/payload/
+          done
           ls -la engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -506,6 +540,10 @@ jobs:
           cp -v /tmp/payload-elves/ps5upload.elf \
                 /tmp/payload-elves/installer/ps5upload-installer.elf \
                 engine/crates/ps5upload-engine/payload/
+          # PS5Upload Play's zip, when this tag has the app (build.rs looks for it here too).
+          for z in /tmp/payload-elves/play/PS5Upload-Play-FAKE99261-*.zip; do
+            [ -f "$z" ] && cp -v "$z" engine/crates/ps5upload-engine/payload/
+          done
           ls -la engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4

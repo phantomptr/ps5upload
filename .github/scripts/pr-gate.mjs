@@ -29,6 +29,7 @@ export const JOB_LANES = {
   "client-frontend": "client",
   "client-e2e": "client",
   docs: "docs_only",
+  "play-app": "play",
 };
 
 /**

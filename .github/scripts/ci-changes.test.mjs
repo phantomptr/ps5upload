@@ -29,6 +29,11 @@ test("CHANGELOG.md with code: the full client lane, and no separate docs job", (
   assert.ok(outputLines(r).includes("docs_only=false"));
 });
 
+test("PS5Upload Play only: its own Docker build", () => {
+  assert.deepEqual(on(["apps/play/src/main.cpp", "apps/play/sce_sys/param.json"]), ["play"]);
+  assert.deepEqual(on(["scripts/check-play-version.mjs"]), ["play", "scripts"]);
+});
+
 test("client only: client, android, and the payload that embeds the console page", () => {
   assert.deepEqual(on(["client/src/screens/Home.tsx", "client/src/i18n/en.ts"]), ["android", "client", "payload"]);
 });
