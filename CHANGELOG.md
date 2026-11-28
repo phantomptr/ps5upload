@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.46
 
 **Installs**
 - **Deleting a package right after installing it from the console gives its space back (#979).** The installer kept the package open for 10 minutes after the install (longer if the PS5 skipped part of it), so the space stayed used after the delete. It now opens the package only while the PS5 is reading it.
