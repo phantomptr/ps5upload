@@ -9,7 +9,8 @@
 //!   `public_needs_anywhere`, `password_short`, `password_long`, `name` (with `why`), 400 `bad`.
 //! * `POST /api/join/kick {addr, player, block?: "room" | "always"}` → `{ok}`.
 //! * `POST /api/join/unblock {addr?, tag}` → `{ok}`.
-//! * `POST /api/join/mute {addr, player?, voice?, chat?, all?}` → `{muted: [{player, voice, chat}]}`.
+//! * Mutes and the chat/voice modes: join_comms.rs (`/api/join/mute`, `/api/join/comms`); the
+//!   room's own settings route hands the modes over too.
 //! * `POST /api/join/seat {addr, player, to: 2-4 | 1 | "back"}` → `{ok, player}`; 409 `not_free`,
 //!   `stranger`, `no_stream_seat`, `no_guest`, `not_on_seat`, `failed`.
 //! * `POST /api/join/close {addr, confirm_friends?}`: with friends in, 409 `friends_playing`
@@ -22,7 +23,7 @@
 //!   `Retry-After`. Never an address.
 
 use super::*;
-use crate::join_room::{self as jr, Block, Muted, Visibility};
+use crate::join_room::{self as jr, Block, Visibility};
 
 #[derive(serde::Deserialize)]
 pub struct CloseBody {
@@ -260,8 +261,24 @@ pub(crate) fn apply_room(b: &RoomBody) -> Result<(), Response> {
             }
         }
     });
+    // Chat and voice follow the room's modes (join_comms.rs enforces them).
+    let consoles: Vec<String> = with_parties(|m| m.values().map(|p| p.console.clone()).collect());
+    for c in consoles {
+        hand_modes(&c, &s.room);
+    }
     crate::join_net::lobby::changed();
     Ok(())
+}
+
+/// The room's chat and voice modes to chat and voice (join_comms.rs).
+pub(crate) fn hand_modes(console: &str, cfg: &jr::RoomCfg) {
+    let public = cfg.visibility == Visibility::Public;
+    crate::join_comms::set_modes(console, |m| {
+        m.chat = cfg.chat();
+        m.voice = cfg.voice();
+        m.start_muted = cfg.start_muted();
+        m.public = public;
+    });
 }
 
 fn game_from(v: &serde_json::Value) -> Option<jr::Game> {
@@ -354,7 +371,6 @@ pub(crate) fn guest_room(p: &Party, id: u64, now: Instant) -> Option<serde_json:
         "you": {"rtt_ms": me.stats.rtt_now(), "tier": tier},
         "chat": cfg.chat(),
         "voice": cfg.voice(),
-        "muted": p.room.muted.get(&id).copied().unwrap_or_default(),
         "locked": p.room.locked,
         "playing_for_min": now.saturating_duration_since(p.room.opened_at).as_secs() / 60,
         "proto": jr::PROTO,
@@ -417,7 +433,6 @@ pub(crate) fn kick_and_block(addr: &str, player: u8, block: Option<bool>) -> boo
             }
             p.room.blocked.push(b);
         }
-        p.room.muted.remove(&id);
         Some(p.leave(id, "kicked", now))
     })
     .flatten();
@@ -453,75 +468,6 @@ pub async fn unblock(
         }
     });
     Json(serde_json::json!({ "ok": ok })).into_response()
-}
-
-#[derive(serde::Deserialize)]
-pub struct MuteBody {
-    #[serde(alias = "console", alias = "host")]
-    addr: String,
-    #[serde(default)]
-    player: Option<u8>,
-    #[serde(default)]
-    voice: Option<bool>,
-    #[serde(default)]
-    chat: Option<bool>,
-    /// Everyone in (Mute all / Unmute all: the voice).
-    #[serde(default)]
-    all: Option<bool>,
-}
-
-/// `POST /api/join/mute`: the host's mutes, enforced in the engine (join_room::bus).
-pub async fn mute(
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    Json(b): Json<MuteBody>,
-) -> Response {
-    if let Some(r) = guard(&peer, &headers) {
-        return r;
-    }
-    let key = host_key(&b.addr);
-    let out = with_party(&key, |p| {
-        let ids: Vec<(u64, u8)> = p
-            .guests
-            .iter()
-            .filter(|g| g.active())
-            .filter(|g| b.all.is_some() || Some(g.player) == b.player)
-            .map(|g| (g.id, g.player))
-            .collect();
-        let mut fx = Vec::new();
-        let mut out = Vec::new();
-        for (id, player) in ids {
-            let mut m = p.room.muted.get(&id).copied().unwrap_or_default();
-            if let Some(all) = b.all {
-                m.voice = all;
-            }
-            if let Some(v) = b.voice {
-                m.voice = v;
-            }
-            if let Some(c) = b.chat {
-                m.chat = c;
-            }
-            if m == Muted::default() {
-                p.room.muted.remove(&id);
-            } else {
-                p.room.muted.insert(id, m);
-            }
-            jr::bus::set_muted(&key, id, m);
-            if let Some(c) = p.guest_mut(id).and_then(|g| g.conn.as_ref()) {
-                fx.push(Effect::Say(
-                    c.tx.clone(),
-                    Out::Text(serde_json::json!({"muted": m})),
-                ));
-            }
-            out.push(serde_json::json!({"player": player, "voice": m.voice, "chat": m.chat}));
-        }
-        (fx, out)
-    });
-    let Some((fx, out)) = out else {
-        return bad(StatusCode::NOT_FOUND, "not_open");
-    };
-    apply(&b.addr, fx);
-    Json(serde_json::json!({ "muted": out })).into_response()
 }
 
 #[derive(serde::Deserialize)]

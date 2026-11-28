@@ -83,11 +83,14 @@ mod image_edit_in_place;
 mod inspect;
 mod install;
 mod join;
+mod join_chat;
+mod join_comms;
 mod join_friends;
 mod join_names;
 mod join_net;
 mod join_room;
 mod join_route;
+mod join_voice;
 mod link;
 mod link_drops;
 mod link_lz4;
@@ -14576,13 +14579,17 @@ fn build_app_and_mcp(
         .route("/api/join/kick", post(join::kick))
         .route("/api/join/room", post(join::room))
         .route("/api/join/unblock", post(join::unblock))
-        .route("/api/join/mute", post(join::mute))
         .route("/api/join/seat", post(join::seat))
         .route("/api/join/preview", get(join::preview))
         .route("/api/join/rooms", get(join::rooms_proxy))
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
+        // Play Rooms chat and voice: the host's settings, mutes, own line and mic (join_comms.rs).
+        .route("/api/join/comms", post(join_comms::set_comms))
+        .route("/api/join/mute", post(join_comms::set_mute))
+        .route("/api/join/chat", post(join_comms::host_chat))
+        .route("/api/join/voice", post(join_comms::host_voice))
         .route("/api/join/friends", get(join_friends::list))
         .route("/api/join/friends/forget", post(join_friends::forget_route))
         .route("/api/join/friends/send", post(join_friends::send))
@@ -15526,6 +15533,10 @@ mod loopback_guard_tests {
             "/api/join/kick",
             "/api/join/playing",
             "/api/join/settings",
+            "/api/join/comms",
+            "/api/join/mute",
+            "/api/join/chat",
+            "/api/join/voice",
             "/api/join/relay",
             "/api/join/routes",
             "/api/join/probe/x",

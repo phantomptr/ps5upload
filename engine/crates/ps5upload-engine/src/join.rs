@@ -2218,7 +2218,6 @@ impl Party {
                     // from the public list, their rooms protocol.
                     "came": g.meta.via().word(),
                     "tag": g.meta.tag,
-                    "muted": self.room.muted.get(&g.id).copied().unwrap_or_default(),
                     "from_rooms": g.meta.stranger(),
                     "proto": g.meta.proto,
                     "caps": g.meta.caps,
@@ -2354,6 +2353,8 @@ pub(crate) fn diag_summary() -> serde_json::Value {
     serde_json::json!({
         "parties": parties,
         "settings": settings(),
+        // Play Rooms chat and voice: counts only (join_comms.rs).
+        "comms": crate::join_comms::diag(),
     })
 }
 
@@ -2783,6 +2784,7 @@ fn spawn_watch(key: String) {
             let Some((fx, keep)) = r else { return };
             apply(&console, fx);
             if !keep {
+                crate::join_comms::room_closed(&console);
                 return;
             }
             keep_companion(&key, &console, now);
@@ -3155,6 +3157,15 @@ pub(crate) trait GuestSocket: Send + 'static {
     fn hub_cid(&self) -> Option<String> {
         self.net()
             .and_then(|n| crate::join_net::lobby::cid_of(&n.room, &n.gid))
+    }
+    /// A Play Rooms voice bundle (join_voice.rs): on an internet guest's unreliable `voice`
+    /// channel when their page opened one, else with the rest (dropped, never waited for, when
+    /// that channel is backed up).
+    fn send_voice(
+        &mut self,
+        m: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send {
+        self.send(m)
     }
 }
 
@@ -4287,20 +4298,11 @@ async fn seat_guest(key: &str, console: &str, name: &str, meta: Meta) -> Admit {
         let seat_free = !stranger && crate::rp_stream_api::stream_seat_free(&console);
         let g = with_party(key, |p| {
             let player = p.next_player(&tried, seat_free)?;
-            let start_muted = p.settings.room.start_muted();
             let g = p.admit(name, player, now)?;
             let gid = g.id;
             let pad_token = g.pad_token.clone();
             if let Some(g) = p.guest_mut(gid) {
                 g.meta = meta.clone();
-            }
-            if start_muted {
-                let m = crate::join_room::Muted {
-                    voice: true,
-                    chat: false,
-                };
-                p.room.muted.insert(gid, m);
-                crate::join_room::bus::set_muted(key, gid, m);
             }
             Some((gid, player, pad_token))
         })
@@ -4597,7 +4599,7 @@ async fn play<S: GuestSocket>(
     let net = socket.net();
     let internet = net.is_some();
     let warning = client.codec_warning(live_codec(&console));
-    let Some((fx, player, token, stats, gname)) = with_party(&key, |p| {
+    let Some((fx, player, token, stats, name)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
         let g = p.guest_mut(id)?;
         g.ip = Some(ip);
@@ -4617,25 +4619,6 @@ async fn play<S: GuestSocket>(
         return;
     };
     apply(&console, fx);
-    // The room's lower-priority queues (chat and voice: crate::join_room::bus), below the
-    // picture and sound.
-    let (voice_tx, mut voice_rx) = mpsc::channel::<Message>(crate::join_room::bus::VOICE_QUEUE);
-    let (chat_tx, mut chat_rx) =
-        mpsc::channel::<serde_json::Value>(crate::join_room::bus::CHAT_QUEUE);
-    crate::join_room::bus::register(
-        &key,
-        id,
-        crate::join_room::bus::Queues {
-            voice: voice_tx,
-            chat: chat_tx,
-        },
-    );
-    let from = crate::join_room::bus::From {
-        room: key.clone(),
-        guest: id,
-        player,
-        name: gname,
-    };
     let spect = SPECTATOR_BASE | gen;
     let feed = crate::rp_stream_api::add_player(
         spect,
@@ -4690,6 +4673,8 @@ async fn play<S: GuestSocket>(
     joined["proto"] = crate::join_room::PROTO.into();
     joined["caps"] = crate::join_room::caps().into();
     let ended = socket.send(say(joined)).await.is_err();
+    // Play Rooms chat and voice (join_comms.rs): after the joined message, on this socket.
+    let mut comms = crate::join_comms::attach(&console, id, &name, Some(player), false);
     let mut tick = tokio::time::interval(STATUS_EVERY);
     let mut left = false;
     let mut pacer = PadPacer::new(Instant::now());
@@ -4700,6 +4685,8 @@ async fn play<S: GuestSocket>(
         if ended {
             break; // the joined message could not go: the socket is gone
         }
+        // Pictures waiting: room voice goes in 40 ms bundles (join_comms.rs).
+        let pictures_waiting = video.as_ref().is_some_and(|r| !r.is_empty());
         tokio::select! {
             biased;
             out = rx.recv() => match out {
@@ -4722,14 +4709,10 @@ async fn play<S: GuestSocket>(
                 }
             },
             inc = socket.recv() => match inc {
-                Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::join_room::bus::KIND_VOICE) => {
-                    // A voice frame: to the room's voice (the host's mutes are checked there).
-                    if b.len() <= crate::join_room::bus::VOICE_MAX {
-                        let _ = crate::join_room::bus::from_guest(&from, crate::join_room::bus::FromGuest::Voice(b.to_vec()));
-                    }
-                }
                 Some(Ok(Message::Binary(b))) => {
-                    if let Some((_seq, st)) = parse_pad(&b, client.raw_pad) {
+                    if comms.on_binary(&b) {
+                        // a voice frame (join_voice.rs)
+                    } else if let Some((_seq, st)) = parse_pad(&b, client.raw_pad) {
                         stats.pad_frames.fetch_add(1, Ordering::Relaxed);
                         if let Some(st) = pacer.offer(Instant::now(), st) {
                             forward_pad(&key, &console, id, gen, st);
@@ -4737,15 +4720,7 @@ async fn play<S: GuestSocket>(
                     }
                 }
                 Some(Ok(Message::Text(t))) => {
-                    // Room messages (chat, mic, ready…): to the room's handlers, after the host's
-                    // mutes; the core's own keys below.
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
-                        if let Some(back) = crate::join_room::bus::from_guest(&from, crate::join_room::bus::FromGuest::Text(v)) {
-                            if socket.send(say(back)).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
+                    comms.on_text(t.as_str());
                     #[derive(serde::Deserialize)]
                     struct In {
                         #[serde(default)] ping: Option<serde_json::Value>,
@@ -4843,12 +4818,13 @@ async fn play<S: GuestSocket>(
                 }
                 None => video = None,
             },
-            // Voice below the picture (a full queue drops at the sender, never waits: bus::voice_to).
-            v = voice_rx.recv() => if let Some(m) = v {
-                if socket.send(m).await.is_err() { break }
-            },
-            c = chat_rx.recv() => if let Some(v) = c {
-                if socket.send(say(v)).await.is_err() { break }
+            // Room voice, then chat: only when no picture is ready (join_comms.rs).
+            m = comms.next(pictures_waiting) => {
+                let sent = match m {
+                    Message::Binary(_) => socket.send_voice(m).await,
+                    m => socket.send(m).await,
+                };
+                if sent.is_err() { break }
             },
             _ = tick.tick() => {
                 let skipped = stats.skipped.load(Ordering::Relaxed);
@@ -4859,6 +4835,12 @@ async fn play<S: GuestSocket>(
                 let status = with_party(&key, |p| {
                     p.is_current(id, gen).then(|| p.guest_status(id)).flatten()
                 });
+                let now = Instant::now();
+                if let Some((n, tier)) = with_party(&key, |p| {
+                    p.guests.iter().find(|g| g.id == id).map(|g| (g.player, g.route_tier(now).1))
+                }).flatten() {
+                    comms.tick(tier, Some(n));
+                }
                 match status.flatten() {
                     Some(v) => if socket.send(say(v)).await.is_err() { break },
                     None => {
@@ -4879,7 +4861,6 @@ async fn play<S: GuestSocket>(
         }
     }
     crate::rp_stream_api::remove_spectator(spect);
-    crate::join_room::bus::unregister(&key, id);
     crate::log_at!(Debug, "together", 
         "join: Player {player} on {console} socket {gen} closed ({}): rtt now {:?} ms, {} pictures skipped, {} pad frames",
         if left { "left" } else { "disconnected" },
@@ -4901,9 +4882,9 @@ async fn play<S: GuestSocket>(
 
 #[path = "join_room_api.rs"]
 pub(crate) mod room_api;
-pub use room_api::{
-    close, kick, mute, preview, room, rooms_proxy, seat, unblock, CloseBody, KickBody,
-};
+pub use room_api::{close, kick, preview, room, rooms_proxy, seat, unblock};
+#[cfg(test)]
+use room_api::{CloseBody, KickBody};
 
 // ── Host API ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -5078,6 +5059,8 @@ fn state_json(console: &str) -> serde_json::Value {
                 .or_else(|| reach.web_base.clone())
                 .map(|b| format!("{}{prefix}/api/join/ws", b.replacen("http", "ws", 1)))
                 .into();
+            // Play Rooms chat and voice under `room` (join_comms.rs); last, it adds to what is there.
+            crate::join_comms::extend_state(&c, &mut v);
             v
         }
         None => serde_json::json!({
@@ -5408,6 +5391,7 @@ pub(crate) async fn open_party(addr: &str) -> Result<(), OpenErr> {
         with_party(&key, |p| p.invite(false, now));
         crate::log_at!(Info, "together", "join: Play Together open on {addr}");
         spawn_watch(key);
+        room_api::hand_modes(addr, &settings().room);
         crate::join_net::lobby::changed();
     }
     Ok(())
@@ -5420,8 +5404,8 @@ pub(crate) fn close_party(addr: &str) -> bool {
     let now = Instant::now();
     let fx = with_parties(|m| m.remove(&key).map(|mut p| p.close(now)));
     let was = fx.is_some();
+    crate::join_comms::room_closed(addr);
     apply(addr, fx.unwrap_or_default());
-    crate::join_room::bus::forget_room(&key);
     crate::join_net::lobby::changed();
     was
 }
@@ -5988,13 +5972,13 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/join/kick", post(kick))
         .route("/api/join/room", post(room))
         .route("/api/join/unblock", post(unblock))
-        .route("/api/join/mute", post(mute))
         .route("/api/join/seat", post(seat))
         .route("/api/join/preview", get(preview))
         .route("/api/join/rooms", get(rooms_proxy))
         .route("/api/join/playing", post(playing))
         .route("/api/join/settings", post(set_settings))
         .route("/api/join/profiles", get(profiles))
+        .merge(crate::join_comms::router())
 }
 
 // ── The helper link ──────────────────────────────────────────────────────────────────────────────
@@ -11127,6 +11111,11 @@ mod tests {
         .await;
         set_seat_profiles(console, Vec::new());
         set_live(console, 0);
+    }
+
+    // Play Rooms chat and voice over guest sockets (join_comms.rs).
+    mod comms_net {
+        include!("join_comms_net_tests.rs");
     }
 
     // Internet invites (join_net): the same session over a WebRTC data channel.

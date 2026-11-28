@@ -492,6 +492,84 @@ carried over), and `GET /api/share/receive/{id}/data/{item}` reads the small dat
 Transfers show in `GET /api/activity` (kinds `share` and `receive`), and each change is an event
 named `share` on `GET /api/events`. Read through MCP, `/api/share` leaves the links out.
 
+## Play Rooms chat and voice
+
+People in a room can type, send quick messages and talk. Everything goes through the host's engine
+over each person's existing connection: a guest's `/api/join/ws` socket (or its internet data
+channel), and the host page's `/api/ps5/rp/ws` socket. Nothing goes through the hub. Nothing is
+recorded or stored: chat lines live in memory for the room's life (the last 50), voice only for the
+60 ms a frame may wait. Bug reports carry counts only.
+
+Nobody sends or gets chat or voice until they accept the responsibility notice. The client sends the
+version it accepted; until then the engine refuses with `"why": "notice"` and the version, and the
+client shows the notice. Rooms with chat and voice off never need it.
+
+**Client → engine** (text JSON; on the host page's socket the mic key is `room_mic`, because `mic`
+there is already the console's own microphone):
+
+| Message | Meaning |
+|---|---|
+| `{"notice": 1}` | The person accepted the notice of this version. |
+| `{"chat": {"quick": 1-16}}` | A quick message by id. Each client shows it in its own language: Ready? · Ready! · GG · One more? · Brb · Wait · Let's go · Thanks · Nice! · Sorry · Pause please · Lag on my side · Can't hear you · Switch seats? · Bye · 👍 |
+| `{"chat": {"text": "…"}}` | Typed text: one line of 1–140 characters, emoji allowed. Links keep their words with dots shown as `·` (never clickable); in a Public room invite codes become `···`. |
+| `{"mic": "on" \| "off" \| "ptt_down" \| "ptt_up"}` | The mic switch (off on every join) and the push-to-talk key. `ptt_down` needs the mic on. |
+| `{"flag": sid}` | "Tell the host": the host's view gets one line, once per person per room. |
+| binary `[0x0A][seq u16 BE][level u8][Opus 1–255 B]` | One voice frame: Opus, voice, mono, wideband, 20 ms (40 ms at 12 kb/s), DTX and in-band FEC on. `level` is 0 (silence) to 255. Send nothing while silent. |
+
+An internet guest's page may open a second data channel labelled `voice` (unordered,
+`maxRetransmits: 0`) and send its frames there; the engine then sends the bundles there too.
+Without it, voice rides the `join` channel and a bundle that would wait behind pictures is dropped.
+
+**Engine → client:**
+
+| Message | Meaning |
+|---|---|
+| `{"comms": {"notice": 1, "accepted": bool, "chat": "off\|quick\|on", "voice": "off\|ptt\|open", "caps": ["chat", "voice"]}}` | On joining and whenever the host changes a setting. |
+| `{"voice": {"mode", "you": sid, "mic": "on\|off", "ptt": bool, "paused": null \| "poor", "stepped": bool, "kbps": 24\|12\|0, "frame_ms": 20\|40\|0, "speaking": [sid], "people": [{"sid", "name", "player", "host", "muted", "paused", "mic"}]}}` | The full voice state, on joining and every change. Encode at `kbps` and `frame_ms`. |
+| `{"voice": {"speaking": [sid]}}` | Only who is speaking changed (at most 4 a second). |
+| `{"muted": {"voice": bool, "chat": bool}}` | The host's mutes on you. |
+| `{"chat": {"id", "sid", "from", "player", "host", "t", "quick" \| "text", "x"?}}` | A line, to everyone who accepted (the sender too). `x` > 1: the same line again from the same person; replace the line with this `id`. |
+| `{"chat_history": [line, …]}` | The last 20 lines, after accepting the notice. |
+| `{"comms_refused": {"what": "chat\|voice\|mic\|notice", "why", "notice"?, "retry_ms"?}}` | `why`: `notice`, `off`, `quick_only`, `muted`, `slow_down` (with `retry_ms`), `empty`, `too_long`, `bad_quick`, `ptt_only`, `mic_off`, `poor`. At most one per reason a second (voice: every 5 s). |
+| `{"flagged": {"by", "by_sid", "who", "who_sid"}}` | Host views only. |
+| binary `[0x0B][n u8]` then `n` × `[sid u8][seq u16 BE][len u8][Opus]` | One bundle per listener: every speaker they hear in this tick. |
+
+`sid` is a speaker id for the room's life (the host is 0); the `people` list names them. The engine
+forwards frames as they came and never mixes: each listener hears at most 3 speakers (a fourth
+waits until one stops) and never themselves, and mixes on their own device. Bundles go every 20 ms,
+or every 40 ms when the listener's route is Playable or pictures are waiting; a bundle goes at once
+when it already holds a frame from everyone the listener hears.
+
+Voice follows each person's route tier: Excellent and Good 24 kb/s at 20 ms, Playable 12 kb/s at
+40 ms, Poor paused both ways. Going back up needs 10 s at the better tier; if the tier fell within
+10 s of voice starting, voice steps down one more level for 30 s (5 minutes the second time). The
+room's voice upload is capped at 0.8 Mb/s, the quietest speaker dropped first. On every link the
+order is controller input, then sound and pictures, then voice, then chat.
+
+Typed lines: a burst of 5, then one every 3 s. Voice frames: a burst of 25, then 60 a second.
+
+**Host routes** (this computer, or `PS5UPLOAD_ALLOW_IP`):
+
+```sh
+# Room settings: chat off | quick | on, voice off | ptt | open, new players start muted.
+curl -s localhost:19113/api/join/comms -H 'content-type: application/json' \
+  -d '{"addr": "192.168.1.20", "chat": "quick", "voice": "ptt", "start_muted": true}'
+# Mute Player 2's voice (or {"sid": 3}, or {"all": true}); "chat": true mutes their chat.
+curl -s localhost:19113/api/join/mute -H 'content-type: application/json' \
+  -d '{"addr": "192.168.1.20", "player": 2, "voice": true}'
+# The host's own quick message, and mic switch ("notice" once, when accepted on this device).
+curl -s localhost:19113/api/join/chat -H 'content-type: application/json' \
+  -d '{"addr": "192.168.1.20", "quick": 3, "notice": 1}'
+curl -s localhost:19113/api/join/voice -H 'content-type: application/json' \
+  -d '{"addr": "192.168.1.20", "mic": "on"}'
+```
+
+Refusals are 409 with `{"error": why, …}` as above (`not_open` when no room is open); `mute`
+answers 404 `no_player` and 409 `host`. `GET /api/join` adds, under `room`, `chat`, `voice`,
+`start_muted`, `notice`, `voice_kbps: {in, out}`, `speaking`, `chat_log` (the last 50 lines) and
+`host_voice`, and on each guest `muted: {voice, chat}` and `voice: {sid, mic, speaking, paused,
+stepped, kbps, in_kbps, out_kbps, frames_in, frames_out, dropped, accepted}`.
+
 ## What the API can't do
 
 The API covers what the engine does. Some things in the app aren't the engine's, so no route reaches

@@ -124,6 +124,9 @@ pub(crate) const DEFAULT_STUN: [&str; 2] = ["stun.cloudflare.com:3478", "stun.l.
 /// Bytes waiting on a guest's channel past which the session stops sending (its pictures then
 /// skip to the next keyframe).
 pub(crate) const HIGH_WATER: usize = 256 * 1024;
+/// Play Rooms voice on the reliable channel (a page without a `voice` channel) is dropped, never
+/// waited for, once this much waits there: it would only arrive late.
+pub(crate) const VOICE_DROP_AT: usize = 16 * 1024;
 /// A peer that left (or failed) stays on the host's panel this long.
 const ENDED_SHOWN: Duration = Duration::from_secs(30);
 
@@ -136,6 +139,9 @@ pub(crate) struct PeerInfo {
     st: Mutex<PeerSt>,
     /// Its channel's back-pressure (set once the driver made it): the link numbers read it.
     flow: std::sync::OnceLock<Arc<Flow>>,
+    /// The guest's page opened a `voice` channel (unordered, no resends): Play Rooms voice goes
+    /// there (join_voice.rs), never behind the pictures on the reliable one.
+    voice: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -283,6 +289,7 @@ impl PeerInfo {
                 ..PeerSt::default()
             }),
             flow: std::sync::OnceLock::new(),
+            voice: std::sync::atomic::AtomicBool::new(false),
         });
         let mut g = PEERS.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -622,6 +629,24 @@ impl crate::join::GuestSocket for RtcSocket {
             Message::Binary(b) => self.up.send(rtc::Cmd::Audio(self.id, b)).map_err(|_| ()),
             _ => Ok(()),
         }
+    }
+
+    async fn send_voice(&mut self, m: Message) -> Result<(), ()> {
+        if self.flow.closed.load(Ordering::Relaxed) {
+            return Err(());
+        }
+        let Message::Binary(b) = m else {
+            return self.send(m).await;
+        };
+        if self.info.voice.load(Ordering::Relaxed) {
+            return self.up.send(rtc::Cmd::Voice(self.id, b)).map_err(|_| ());
+        }
+        // No voice channel: with the rest, unless that is backed up (then the bundle is late
+        // anyway and goes).
+        if self.flow.pending() > VOICE_DROP_AT {
+            return Ok(());
+        }
+        self.send(Message::Binary(b)).await
     }
 
     async fn send_video(&mut self, m: Message) -> Result<(), ()> {

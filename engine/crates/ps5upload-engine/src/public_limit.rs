@@ -25,6 +25,8 @@ pub(crate) const FLOOD_FOR: Duration = Duration::from_secs(30);
 const BLOCK_FIRST: Duration = Duration::from_secs(120);
 const BLOCK_MAX: Duration = Duration::from_secs(30 * 60);
 const CLEAN_FOR: Duration = Duration::from_secs(3600);
+/// No refusal for this long ends a run of refusals (a person who waited as told).
+const CALM_FOR: Duration = Duration::from_secs(10);
 
 /// A bucket's size and refill.
 #[derive(Clone, Copy, Debug)]
@@ -48,8 +50,10 @@ pub(crate) enum Verdict {
 struct Client {
     tokens: f64,
     at: Instant,
-    /// Since when refused without a pause (None: the last one went through).
+    /// Since when refused without a pause of [`CALM_FOR`] (a flood that keeps going), and the
+    /// last refusal.
     refused_since: Option<Instant>,
+    refused_at: Option<Instant>,
     blocked_until: Option<Instant>,
     blocks: u32,
     last_block: Option<Instant>,
@@ -93,6 +97,7 @@ impl Limit {
             tokens: r.burst,
             at: now,
             refused_since: None,
+            refused_at: None,
             blocked_until: None,
             blocks: 0,
             last_block: None,
@@ -113,11 +118,18 @@ impl Limit {
         let dt = now.saturating_duration_since(c.at).as_secs_f64();
         c.tokens = (c.tokens + dt / r.every_s).min(r.burst);
         c.at = now;
+        // Calm for a while since the last refusal: the run of refusals is over.
+        if c
+            .refused_at
+            .is_some_and(|t| now.saturating_duration_since(t) >= CALM_FOR)
+        {
+            c.refused_since = None;
+        }
         if c.tokens >= 1.0 {
             c.tokens -= 1.0;
-            c.refused_since = None;
             return Verdict::Ok;
         }
+        c.refused_at = Some(now);
         let since = *c.refused_since.get_or_insert(now);
         if now.saturating_duration_since(since) >= FLOOD_FOR {
             let d = BLOCK_FIRST

@@ -3,8 +3,8 @@
 //! rules and stores; join.rs (`Party`) owns the room's life and calls in here.
 //!
 //! * **Settings** ([`RoomCfg`], one set for every console like the rest of Play Together's): name,
-//!   visibility (Private / Friends / Public), approvals, chat and voice modes (agent B's
-//!   `join_chat.rs` / `join_voice.rs` read them), watchers, language, region, Nearby, what the
+//!   visibility (Private / Friends / Public), approvals, chat and voice modes (handed to
+//!   join_comms.rs), watchers, language, region, Nearby, what the
 //!   preview shows. Saved as the optional `room` object of `play_together.json`, only the fields
 //!   that differ from the defaults, read field by field (a 12.6 engine skips the key).
 //! * **Secrets** ([`Secrets`], `play_room_secret.json`, mode 0600, never in a bug report): the
@@ -17,10 +17,8 @@
 //!   20 per room in 10 min pauses password knocks and tells the host.
 //! * **Protocol and capabilities** ([`PROTO`], [`CAPS`]): in the hello, the card, the preview and
 //!   the room push; peers two versions back are taken, features degrade by capability.
-//! * **The room bus** ([`bus`]): the hook points chat and voice (agent B) use: each guest's own
-//!   voice and chat queues (below the picture and sound, which keep rp_stream_api's queues; input
-//!   is never queued), messages from guests the core does not handle, and the host's mutes,
-//!   enforced before anything reaches a handler.
+//! * **Chat and voice** live in join_comms.rs; the room keeps their modes with its settings and
+//!   hands them over (`join_comms::set_modes`).
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -40,7 +38,7 @@ pub(crate) const PROTO: u32 = 2;
 pub(crate) const PROTO_WINDOW: u32 = 2;
 /// What this engine's rooms can do, in the hello answer, the card, the preview and the room push.
 /// A feature is used only when both sides list it. `chat`/`voice`/`ready` are added by the modules
-/// that serve them ([`bus::add_caps`]).
+/// that serve them.
 pub(crate) const CAPS: &[&str] = &[
     "rooms",
     "knock",
@@ -52,17 +50,13 @@ pub(crate) const CAPS: &[&str] = &[
     "track",
     "ps5app",
     "names",
+    "chat",
+    "voice",
 ];
 
-/// The capabilities this engine says it has now (the base ones and those modules added).
+/// The capabilities this engine says it has.
 pub(crate) fn caps() -> Vec<String> {
-    let mut v: Vec<String> = CAPS.iter().map(|s| s.to_string()).collect();
-    for c in bus::extra_caps() {
-        if !v.contains(&c) {
-            v.push(c);
-        }
-    }
-    v
+    CAPS.iter().map(|s| s.to_string()).collect()
 }
 
 /// A peer that says protocol `p` (None: a 12.6 page or app, protocol 1) may play here.
@@ -134,24 +128,10 @@ impl Visibility {
     }
 }
 
-/// Room chat (served by join_chat.rs; the engine enforces it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum ChatMode {
-    Off,
-    /// Quick messages only (ids, shown in each person's language).
-    Quick,
-    On,
-}
-
-/// Room voice (served by join_voice.rs; the engine enforces it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum VoiceMode {
-    Off,
-    Ptt,
-    Open,
-}
+/// Room chat and voice modes are chat and voice's own (join_chat.rs, join_comms.rs): the room
+/// keeps the host's choice with its settings and hands it to them (`join_comms::set_modes`).
+pub(crate) use crate::join_chat::ChatMode;
+pub(crate) use crate::join_comms::VoiceMode;
 
 /// Who gets in without the host answering. The host always decides otherwise ("Ask me").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1033,13 +1013,6 @@ pub(crate) struct Game {
     pub picked: bool,
 }
 
-/// The host's mutes on one guest (enforced in the engine, [`bus`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct Muted {
-    pub voice: bool,
-    pub chat: bool,
-}
-
 /// The room's listing on the hub (Friends/Public), as the host's panel shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Listed {
@@ -1072,8 +1045,6 @@ pub(crate) struct RoomRun {
     pub opened_at: Instant,
     pub game: Option<Game>,
     pub blocked: Vec<Block>,
-    /// Host mutes by guest id.
-    pub muted: HashMap<u64, Muted>,
     pub listed: Listed,
     /// Past invites (key, code) and when they stopped, so a lapsed link hears `expired` (a wrong
     /// one `key`, a wrong code `code`). The last few only.
@@ -1091,7 +1062,6 @@ impl RoomRun {
             opened_at: now,
             game: None,
             blocked: Vec::new(),
-            muted: HashMap::new(),
             listed: Listed::Off,
             old_invites: VecDeque::new(),
         }
@@ -1276,13 +1246,9 @@ pub(crate) fn ad(
     if cfg.visibility == Visibility::Private {
         return None;
     }
-    let mut caps = vec!["web", "ps5app"];
-    caps.extend(["preview", "knock", "sealed"]);
-    for c in bus::extra_caps() {
-        if let Some(s) = ["chat", "voice", "ready"].into_iter().find(|x| *x == c) {
-            caps.push(s);
-        }
-    }
+    let caps = [
+        "web", "ps5app", "preview", "knock", "sealed", "chat", "voice",
+    ];
     let host: String = crate::join_names::effective(host)
         .chars()
         .take(24)
@@ -1310,201 +1276,6 @@ pub(crate) fn ad(
 pub(crate) fn host_tag() -> String {
     let id = crate::mesh_api::id_hex().unwrap_or_default();
     tag_hash(&id)[..4].to_ascii_uppercase()
-}
-
-// ── The room bus (hook points for chat and voice) ───────────────────────────────────────────────
-
-/// What chat and voice (join_chat.rs / join_voice.rs) hook into. The core keeps one voice queue
-/// and one chat queue per guest connection beside the picture and sound: the guest's writer takes
-/// input-related replies first, then the picture and sound, then voice (oldest dropped when
-/// full, never waiting behind video), then chat.
-// The hook points chat and voice (join_chat.rs / join_voice.rs) call; some are used only by them.
-#[allow(dead_code)]
-pub(crate) mod bus {
-    use super::*;
-    use axum::extract::ws::Message;
-    use tokio::sync::mpsc;
-
-    /// Voice bundles queued per guest (3 × 20 ms); past it a bundle is dropped, never waited for.
-    pub(crate) const VOICE_QUEUE: usize = 3;
-    /// A guest's voice frame: `[6][seq u16][level u8][Opus]` (design 7A.1).
-    pub(crate) const KIND_VOICE: u8 = 6;
-    /// The largest voice frame taken from a guest.
-    pub(crate) const VOICE_MAX: usize = 512;
-    /// Chat lines queued per guest.
-    pub(crate) const CHAT_QUEUE: usize = 16;
-
-    /// A guest's lower-priority queues.
-    #[derive(Clone)]
-    pub(crate) struct Queues {
-        pub voice: mpsc::Sender<Message>,
-        pub chat: mpsc::Sender<Value>,
-    }
-
-    /// What a guest sent that the core does not handle itself.
-    #[derive(Clone, Debug)]
-    pub(crate) enum FromGuest {
-        /// A text message (`chat`, `mic`, `ready`, …), already checked against the host's mutes.
-        Text(Value),
-        /// A binary voice frame (`[6][seq u16][level u8][Opus]`), from an unmuted guest.
-        Voice(Vec<u8>),
-    }
-
-    /// Who sent it.
-    #[derive(Clone, Debug)]
-    pub(crate) struct From {
-        /// The console's key (`vinput_api::host_key`).
-        pub room: String,
-        pub guest: u64,
-        pub player: u8,
-        pub name: String,
-    }
-
-    pub(crate) type Handler = fn(&From, &FromGuest);
-
-    static QUEUES: Mutex<Option<HashMap<(String, u64), Queues>>> = Mutex::new(None);
-    static HANDLERS: Mutex<Vec<Handler>> = Mutex::new(Vec::new());
-    static CAPS_EXTRA: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    /// The host's mutes per room (console key) and guest id, mirrored from the party.
-    static MUTES: Mutex<Option<HashMap<(String, u64), Muted>>> = Mutex::new(None);
-
-    /// A module that serves `chat`/`voice`/`ready` says so (once, at engine start).
-    pub(crate) fn add_caps(c: &[&str]) {
-        let mut g = CAPS_EXTRA.lock().unwrap_or_else(|e| e.into_inner());
-        for x in c {
-            if !g.iter().any(|y| y == x) {
-                g.push((*x).to_string());
-            }
-        }
-    }
-
-    pub(crate) fn extra_caps() -> Vec<String> {
-        CAPS_EXTRA.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    /// Hears every guest message the core does not handle (once, at engine start).
-    pub(crate) fn on_guest(h: Handler) {
-        let mut g = HANDLERS.lock().unwrap_or_else(|e| e.into_inner());
-        if !g.iter().any(|x| std::ptr::fn_addr_eq(*x, h)) {
-            g.push(h);
-        }
-    }
-
-    /// Text messages the core handles itself (never passed on).
-    const CORE: &[&str] = &["ping", "leave", "keyframe", "stats", "hello"];
-
-    /// A guest's message the core did not handle: dropped when the host muted that kind
-    /// (`muted` tells the guest once), else passed to every handler. Returns what to say back to
-    /// the guest (`{"muted": {...}}`), if anything.
-    pub(crate) fn from_guest(from: &From, m: FromGuest) -> Option<Value> {
-        let mute = muted(&from.room, from.guest);
-        match &m {
-            FromGuest::Voice(_) if mute.voice => return None,
-            FromGuest::Text(v) => {
-                let o = v.as_object()?;
-                if o.keys().all(|k| CORE.contains(&k.as_str())) {
-                    return None;
-                }
-                if mute.chat && o.contains_key("chat") {
-                    return Some(json!({"muted": mute}));
-                }
-                if mute.voice && o.contains_key("mic") {
-                    return Some(json!({"muted": mute}));
-                }
-            }
-            _ => {}
-        }
-        let hs: Vec<Handler> = HANDLERS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        for h in hs {
-            h(from, &m);
-        }
-        None
-    }
-
-    pub(crate) fn register(room: &str, guest: u64, q: Queues) {
-        QUEUES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_or_insert_with(HashMap::new)
-            .insert((room.to_string(), guest), q);
-    }
-
-    pub(crate) fn unregister(room: &str, guest: u64) {
-        if let Some(m) = QUEUES.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            m.remove(&(room.to_string(), guest));
-        }
-    }
-
-    /// The guests (ids) with a connection in `room` now.
-    pub(crate) fn guests(room: &str) -> Vec<u64> {
-        QUEUES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .map(|m| {
-                m.keys()
-                    .filter(|(r, _)| r == room)
-                    .map(|(_, g)| *g)
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn queues(room: &str, guest: u64) -> Option<Queues> {
-        QUEUES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()?
-            .get(&(room.to_string(), guest))
-            .cloned()
-    }
-
-    /// One voice bundle to a guest: never waits; false when their queue is full (dropped) or
-    /// they are not connected.
-    pub(crate) fn voice_to(room: &str, guest: u64, m: Message) -> bool {
-        queues(room, guest).is_some_and(|q| q.voice.try_send(m).is_ok())
-    }
-
-    /// One chat message to a guest (false: not connected, or their queue is full).
-    pub(crate) fn chat_to(room: &str, guest: u64, v: Value) -> bool {
-        queues(room, guest).is_some_and(|q| q.chat.try_send(v).is_ok())
-    }
-
-    /// A chat message to everyone in `room` but `except`.
-    pub(crate) fn chat_all(room: &str, v: &Value, except: Option<u64>) -> usize {
-        guests(room)
-            .into_iter()
-            .filter(|g| Some(*g) != except)
-            .filter(|g| chat_to(room, *g, v.clone()))
-            .count()
-    }
-
-    /// The host's mutes on a guest (chat and voice modules check before forwarding).
-    pub(crate) fn muted(room: &str, guest: u64) -> Muted {
-        MUTES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .and_then(|m| m.get(&(room.to_string(), guest)).copied())
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn set_muted(room: &str, guest: u64, m: Muted) {
-        let mut g = MUTES.lock().unwrap_or_else(|e| e.into_inner());
-        let map = g.get_or_insert_with(HashMap::new);
-        if m == Muted::default() {
-            map.remove(&(room.to_string(), guest));
-        } else {
-            map.insert((room.to_string(), guest), m);
-        }
-    }
-
-    /// The room closed: its mutes go.
-    pub(crate) fn forget_room(room: &str) {
-        if let Some(m) = MUTES.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            m.retain(|(r, _), _| r != room);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1958,48 +1729,9 @@ mod tests {
     }
 
     #[test]
-    fn the_bus_drops_what_the_host_muted() {
-        static HEARD: Mutex<Vec<String>> = Mutex::new(Vec::new());
-        fn h(_: &bus::From, m: &bus::FromGuest) {
-            HEARD.lock().unwrap().push(format!("{m:?}"));
-        }
-        bus::on_guest(h);
-        let from = bus::From {
-            room: "bus-test".into(),
-            guest: 7,
-            player: 2,
-            name: "Mia".into(),
-        };
-        // The core's own messages never go to handlers.
-        assert!(bus::from_guest(&from, bus::FromGuest::Text(json!({"ping": 1}))).is_none());
-        bus::from_guest(&from, bus::FromGuest::Text(json!({"chat": {"quick": 3}})));
-        bus::set_muted(
-            "bus-test",
-            7,
-            Muted {
-                voice: true,
-                chat: true,
-            },
-        );
-        let said = bus::from_guest(&from, bus::FromGuest::Text(json!({"chat": {"quick": 3}})));
-        assert_eq!(said, Some(json!({"muted": {"voice": true, "chat": true}})));
-        assert!(bus::from_guest(&from, bus::FromGuest::Voice(vec![6, 0, 1])).is_none());
-        let heard: Vec<String> = HEARD
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|s| s.contains("quick") || s.contains("Voice"))
-            .cloned()
-            .collect();
-        assert_eq!(heard.len(), 1, "{heard:?}");
-        bus::forget_room("bus-test");
-        assert_eq!(bus::muted("bus-test", 7), Muted::default());
-    }
-
-    #[test]
-    fn caps_and_extra_caps() {
-        bus::add_caps(&["chat"]);
+    fn caps_say_what_the_room_can_do() {
         assert!(caps().iter().any(|c| c == "chat"));
+        assert!(caps().iter().any(|c| c == "voice"));
         assert!(caps().iter().any(|c| c == "preview"));
     }
 }
