@@ -57,7 +57,7 @@ h = r["hellos"][0] if r["hellos"] else {}
 check(h.get("code") == "abc-def" and h.get("name") == "play-cli", "hello carries the code and name")
 caps = h.get("client", {}).get("caps", {})
 check(h.get("client", {}).get("kind") == "ps5" and h.get("client", {}).get("app") == "play", "hello says ps5/play")
-check(caps == {"hevc": True, "main10": False, "raw_pad": True, "timing": True}, "hello caps")
+check(caps == {"hevc": True, "main10": True, "raw_pad": True, "timing": True}, "hello caps (Main10 shown tone-mapped)")
 res = dict(kv.split("=") for kv in out.split("result ", 1)[1].split("\n")[0].split()) if "result " in out else {}
 check(int(res.get("pictures", 0)) > 100 and int(res.get("keyframes", 0)) >= 2, "pictures arrive (timed video)")
 check(int(res.get("sounds", 0)) > 200, "sound frames arrive")

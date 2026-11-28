@@ -119,7 +119,8 @@ bool Guest::connect_and_hello(bool resume) noexcept
         return false;
     }
     char hello[768];
-    const proto::ClientCaps caps{version_, true, false, true, true};
+    // main10: HDR pictures are shown, tone-mapped to SDR (display.cpp, core/hdr.cpp).
+    const proto::ClientCaps caps{version_, true, true, true, true};
     // Coming back: the token, and the code too in case the seat is gone but the invite still works.
     proto::hello(hello, sizeof hello, code_, resume ? token_ : nullptr, name_, caps);
     if (!ws_.send_text(hello))

@@ -7,6 +7,7 @@
 #include "video.hpp"
 
 #include "../app/log.hpp"
+#include "../core/hdr.hpp"
 #include "../core/proto.hpp"
 #include "../net/net.hpp"
 #include "display.hpp"
@@ -163,6 +164,7 @@ void *thread_main(void *) noexcept
 {
     unsigned seen_gen = 0;
     unsigned errors_in_row = 0;
+    int shift = -1; // where a 10-bit picture keeps its bits: found on the first one of a session
     for (;;)
     {
         pthread_mutex_lock(&q_lock);
@@ -193,6 +195,7 @@ void *thread_main(void *) noexcept
         {
             seen_gen = gen;
             errors_in_row = 0;
+            shift = -1;
             const std::uint32_t codec = want_hevc ? kCodecHevc : kCodecAvc;
             if (is_active && (!dec.dec || dec.codec != codec))
                 open_decoder(dec, codec);
@@ -250,9 +253,28 @@ void *thread_main(void *) noexcept
                         ++st.skipped;
                     else
                     {
-                        display::present_nv12(static_cast<const std::uint8_t *>(out.frame_buffer),
-                                              out.frame_pitch_in_bytes, out.frame_width, out.frame_height,
-                                              out.frame_height);
+                        const auto *pic = static_cast<const std::uint8_t *>(out.frame_buffer);
+                        // HEVC Main10 (the console's HDR): 16-bit samples, so twice the bytes
+                        // per row; 8-bit pictures are NV12.
+                        const bool ten = out.frame_pitch && out.frame_pitch_in_bytes == out.frame_pitch * 2;
+                        if (ten != st.ten_bit || !st.shown)
+                            log("video: pictures %ux%u, format %u, pitch %u (%u bytes), %s", out.frame_width,
+                                out.frame_height, out.frame_format, out.frame_pitch, out.frame_pitch_in_bytes,
+                                ten ? "10-bit (HDR, shown in SDR)" : "8-bit");
+                        st.ten_bit = ten;
+                        if (ten)
+                        {
+                            // The chroma plane starts after the coded height (32-row blocks).
+                            const unsigned rows = (out.frame_height + 31) & ~31u;
+                            if (shift < 0)
+                                shift = hdr::shift_of(pic, out.frame_pitch_in_bytes, out.frame_width,
+                                                      out.frame_height);
+                            display::present_hdr10(pic, out.frame_pitch_in_bytes, out.frame_width,
+                                                   out.frame_height, rows, shift);
+                        }
+                        else
+                            display::present_nv12(pic, out.frame_pitch_in_bytes, out.frame_width, out.frame_height,
+                                                  out.frame_height);
                         ++st.shown;
                     }
                     frame_back(dec, out.frame_buffer);

@@ -6,6 +6,7 @@
 #include "display.hpp"
 
 #include "../app/log.hpp"
+#include "../core/hdr.hpp"
 #include "../net/net.hpp"
 #include "sys.hpp"
 
@@ -31,6 +32,7 @@ pthread_mutex_t present_lock = PTHREAD_MUTEX_INITIALIZER;
 std::atomic<std::uint64_t> last_video_us{0};
 Stats st;
 float convert_avg = 0;
+std::uint64_t last_picture_us = 0;
 
 // The tiled layout: address = row part + column part (PS5Term's function, separated).
 std::uint32_t col_xor[kW], col_block[kW];
@@ -77,12 +79,14 @@ struct Job
     {
         copy_ui,
         nv12,
+        hdr10, // 16-bit samples, 10 bits used (HEVC Main10, PQ BT.2020): tone-mapped to SDR
     } kind;
     std::uint8_t *dst;
     const std::uint32_t *ui;
     const std::uint8_t *y, *uv;
     std::size_t pitch;
     unsigned w, h;
+    int shift; // hdr10: where the 10 bits sit in each word (0 low, 6 high)
 };
 Job job;
 unsigned generation = 0, done = 0;
@@ -91,6 +95,63 @@ pthread_cond_t job_start = PTHREAD_COND_INITIALIZER, job_end = PTHREAD_COND_INIT
 // scaling tables for the current picture size
 unsigned map_w = 0, map_h = 0;
 std::uint16_t map_x[kW], map_y[kH];
+
+// HDR to SDR tables (built on the first HDR picture).
+hdr::Tables hdr_tables;
+bool hdr_ready = false;
+
+inline std::uint32_t blend_px(std::uint32_t px, std::uint32_t o) noexcept
+{
+    const std::uint32_t a = o >> 24;
+    if (!a)
+        return px;
+    const std::uint32_t ia = 255 - a;
+    const std::uint32_t r = ((o & 0xff) * a + (px & 0xff) * ia) / 255;
+    const std::uint32_t g = (((o >> 8) & 0xff) * a + ((px >> 8) & 0xff) * ia) / 255;
+    const std::uint32_t b = (((o >> 16) & 0xff) * a + ((px >> 16) & 0xff) * ia) / 255;
+    return r | g << 8 | b << 16;
+}
+
+void rows_hdr10(unsigned y0, unsigned y1) noexcept
+{
+    const bool scale = job.w != kW || job.h != kH;
+    const int sh = job.shift;
+    for (unsigned y = y0; y < y1; ++y)
+    {
+        const unsigned sy = scale ? map_y[y] : y;
+        const std::uint8_t *yr = job.y + static_cast<std::size_t>(sy) * job.pitch;
+        const std::uint8_t *uvr = job.uv + static_cast<std::size_t>(sy / 2) * job.pitch;
+        const bool blend = static_cast<int>(y) < ov_top || static_cast<int>(y) >= static_cast<int>(kH) - ov_bottom;
+        const std::uint32_t *orow = ov + static_cast<std::size_t>(y) * kW;
+        if (!scale)
+        {
+            // full size: one chroma lookup per pixel pair
+            for (unsigned x = 0; x < kW; x += 2)
+            {
+                const hdr::Chroma c = hdr::chroma(hdr::s10(uvr, x, sh), hdr::s10(uvr, x + 1, sh));
+                std::uint32_t p0 = hdr::pixel(hdr_tables, hdr::s10(yr, x, sh), c);
+                std::uint32_t p1 = hdr::pixel(hdr_tables, hdr::s10(yr, x + 1, sh), c);
+                if (blend)
+                {
+                    p0 = blend_px(p0, orow[x]);
+                    p1 = blend_px(p1, orow[x + 1]);
+                }
+                *at(job.dst, x, y) = 0xff000000u | p0;
+                *at(job.dst, x + 1, y) = 0xff000000u | p1;
+            }
+            continue;
+        }
+        for (unsigned x = 0; x < kW; ++x)
+        {
+            const unsigned sx = map_x[x];
+            const hdr::Chroma c = hdr::chroma(hdr::s10(uvr, sx & ~1u, sh), hdr::s10(uvr, sx | 1u, sh));
+            std::uint32_t px = hdr::pixel(hdr_tables, hdr::s10(yr, sx, sh), c);
+            if (blend)
+                px = blend_px(px, orow[x]);
+            *at(job.dst, x, y) = 0xff000000u | px;
+        }
+    }
+}
 
 inline std::uint8_t clamp8(int v) noexcept
 {
@@ -108,6 +169,11 @@ void rows(unsigned part, unsigned parts) noexcept
             for (unsigned x = 0; x < kW; ++x)
                 *at(job.dst, x, y) = src[x];
         }
+        return;
+    }
+    if (job.kind == Job::hdr10)
+    {
+        rows_hdr10(y0, y1);
         return;
     }
     const bool scale = job.w != kW || job.h != kH;
@@ -262,7 +328,10 @@ void present_ui(const std::uint32_t *ui) noexcept
     pthread_mutex_unlock(&present_lock);
 }
 
-void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned h, unsigned luma_rows) noexcept
+namespace
+{
+void present_picture(Job::Kind kind, const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned h,
+                     unsigned luma_rows, int shift) noexcept
 {
     if (!w || !h || w > 4096 || h > 2304)
         return;
@@ -282,7 +351,15 @@ void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned
         map_h = h;
         log("display: pictures are %ux%u (pitch %zu)", w, h, pitch);
     }
-    job.kind = Job::nv12;
+    if (kind == Job::hdr10 && !hdr_ready)
+    {
+        const std::uint64_t tb = net::now_us();
+        hdr::build(hdr_tables);
+        hdr_ready = true;
+        log("display: HDR pictures (10-bit, %s-aligned): shown in SDR, tables made in %.1f ms",
+            shift ? "high" : "low", static_cast<double>(net::now_us() - tb) / 1000.0);
+    }
+    job.kind = kind;
     job.dst = acquire();
     const std::uint64_t t0 = net::now_us();
     job.y = y;
@@ -290,6 +367,7 @@ void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned
     job.pitch = pitch;
     job.w = w;
     job.h = h;
+    job.shift = shift;
     pthread_mutex_lock(&ov_lock);
     if (!ov)
         ov_top = ov_bottom = 0;
@@ -298,8 +376,33 @@ void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned
     flip();
     const float ms = static_cast<float>(net::now_us() - t0) / 1000.0f;
     pthread_mutex_unlock(&present_lock);
-    last_video_us = net::now_us();
+    const std::uint64_t now = net::now_us();
+    // gaps under 0.5 s: a longer one is the stream pausing, not a hitch
+    if (last_picture_us && now - last_picture_us < 500000)
+    {
+        const float gap = static_cast<float>(now - last_picture_us) / 1000.0f;
+        if (gap > 25.0f)
+            ++st.slow;
+        if (gap > st.worst_ms)
+            st.worst_ms = gap;
+    }
+    last_picture_us = now;
+    last_video_us = now;
     convert_avg = convert_avg * 0.95f + ms * 0.05f;
+    if (kind == Job::hdr10)
+        st.hdr = true;
+}
+} // namespace
+
+void present_nv12(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned h, unsigned luma_rows) noexcept
+{
+    present_picture(Job::nv12, y, pitch, w, h, luma_rows, 0);
+}
+
+void present_hdr10(const std::uint8_t *y, std::size_t pitch, unsigned w, unsigned h, unsigned luma_rows,
+                   int shift) noexcept
+{
+    present_picture(Job::hdr10, y, pitch, w, h, luma_rows, shift);
 }
 
 void set_overlay(const std::uint32_t *layer, int top, int bottom) noexcept
@@ -329,7 +432,10 @@ std::uint64_t since_video_us() noexcept
 
 Stats stats() noexcept
 {
+    pthread_mutex_lock(&present_lock);
     Stats s = st;
+    st.worst_ms = 0;
+    pthread_mutex_unlock(&present_lock);
     s.convert_ms = convert_avg;
     return s;
 }
