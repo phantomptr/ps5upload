@@ -21,6 +21,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { forgetPhoneUrl } from "../ui/PhoneHandoff";
 import { formatZone, setConsoleZone, stepZone, timeInZone, ZONE_OFFSETS } from "../time";
 import { TailscaleSection } from "./Tailscale";
+import { UsbNetSection } from "./UsbNet";
 import { DevicesSection } from "./Devices";
 
 /** /api/settings (payload/src/webui_api.c send_settings). */
@@ -490,6 +491,8 @@ export function SettingsView(p: SettingsViewProps) {
       </section>
 
       {p.turnedOff || p.noTailscale ? null : <TailscaleSection />}
+
+      {p.turnedOff ? null : <UsbNetSection />}
 
       {p.turnedOff ? null : <DevicesSection />}
 

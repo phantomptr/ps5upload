@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Pomiń",
   "cw_tour_step": "{n} z {total}",
   "cw_update_later": "Później",
-  "cw_update_ready": "PS5Upload Minion został zaktualizowany. Wczytaj ponownie, aby użyć nowej wersji."
+  "cw_update_ready": "PS5Upload Minion został zaktualizowany. Wczytaj ponownie, aby użyć nowej wersji.",
+  "cw_usbnet_address": "Adres: {ip}",
+  "cw_usbnet_err_change": "Nie udało się zmienić karty USB. Spróbuj ponownie.",
+  "cw_usbnet_experimental": "Eksperymentalne",
+  "cw_usbnet_note": "Własna sieć konsoli dalej działa.",
+  "cw_usbnet_state_failed": "Nie udało się uruchomić karty — odłącz ją i podłącz ponownie",
+  "cw_usbnet_state_no_address": "Czekam na adres",
+  "cw_usbnet_state_no_link": "Nie podłączono kabla",
+  "cw_usbnet_state_none": "Nie podłączono karty",
+  "cw_usbnet_state_off": "Wyłączone",
+  "cw_usbnet_state_paused": "Wstrzymane, gdy PS5 jest w trybie spoczynku",
+  "cw_usbnet_state_ready": "Połączono",
+  "cw_usbnet_state_starting": "Uruchamianie…",
+  "cw_usbnet_state_unsupported": "Ta wersja układu karty nie jest jeszcze obsługiwana",
+  "cw_usbnet_switch": "Używaj karty sieciowej USB",
+  "cw_usbnet_title": "Karta sieciowa USB"
 }

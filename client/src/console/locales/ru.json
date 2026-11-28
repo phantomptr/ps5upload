@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Пропустить",
   "cw_tour_step": "{n} из {total}",
   "cw_update_later": "Позже",
-  "cw_update_ready": "PS5Upload Minion обновлён. Перезагрузите страницу, чтобы использовать новую версию."
+  "cw_update_ready": "PS5Upload Minion обновлён. Перезагрузите страницу, чтобы использовать новую версию.",
+  "cw_usbnet_address": "Адрес: {ip}",
+  "cw_usbnet_err_change": "Не удалось изменить USB-адаптер. Попробуйте ещё раз.",
+  "cw_usbnet_experimental": "Экспериментально",
+  "cw_usbnet_note": "Собственная сеть консоли продолжает работать.",
+  "cw_usbnet_state_failed": "Не удалось запустить адаптер — отключите его и подключите снова",
+  "cw_usbnet_state_no_address": "Ожидание адреса",
+  "cw_usbnet_state_no_link": "Кабель не подключён",
+  "cw_usbnet_state_none": "Адаптер не подключён",
+  "cw_usbnet_state_off": "Выключено",
+  "cw_usbnet_state_paused": "Пауза, пока PS5 в режиме покоя",
+  "cw_usbnet_state_ready": "Подключено",
+  "cw_usbnet_state_starting": "Запуск…",
+  "cw_usbnet_state_unsupported": "Ревизия чипа этого адаптера пока не поддерживается",
+  "cw_usbnet_switch": "Использовать USB-адаптер Ethernet",
+  "cw_usbnet_title": "USB-адаптер Ethernet"
 }

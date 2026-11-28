@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "Bỏ qua",
   "cw_tour_step": "{n} / {total}",
   "cw_update_later": "Để sau",
-  "cw_update_ready": "PS5Upload Minion đã được cập nhật. Hãy tải lại để dùng phiên bản mới."
+  "cw_update_ready": "PS5Upload Minion đã được cập nhật. Hãy tải lại để dùng phiên bản mới.",
+  "cw_usbnet_address": "Địa chỉ: {ip}",
+  "cw_usbnet_err_change": "Không thay đổi được bộ chuyển đổi USB. Hãy thử lại.",
+  "cw_usbnet_experimental": "Thử nghiệm",
+  "cw_usbnet_note": "Mạng riêng của máy chơi game vẫn hoạt động.",
+  "cw_usbnet_state_failed": "Không khởi động được bộ chuyển đổi — hãy rút ra rồi cắm lại",
+  "cw_usbnet_state_no_address": "Đang chờ địa chỉ",
+  "cw_usbnet_state_no_link": "Chưa cắm cáp",
+  "cw_usbnet_state_none": "Chưa cắm bộ chuyển đổi nào",
+  "cw_usbnet_state_off": "Tắt",
+  "cw_usbnet_state_paused": "Tạm dừng khi PS5 ở chế độ nghỉ",
+  "cw_usbnet_state_ready": "Đã kết nối",
+  "cw_usbnet_state_starting": "Đang khởi động…",
+  "cw_usbnet_state_unsupported": "Phiên bản chip của bộ chuyển đổi này chưa được hỗ trợ",
+  "cw_usbnet_switch": "Dùng bộ chuyển đổi Ethernet USB",
+  "cw_usbnet_title": "Bộ chuyển đổi Ethernet USB"
 }

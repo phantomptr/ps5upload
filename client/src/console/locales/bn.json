@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "এড়িয়ে যান",
   "cw_tour_step": "{total}-এর মধ্যে {n}",
   "cw_update_later": "পরে",
-  "cw_update_ready": "PS5Upload Minion আপডেট হয়েছে। নতুন সংস্করণ ব্যবহার করতে আবার লোড করুন।"
+  "cw_update_ready": "PS5Upload Minion আপডেট হয়েছে। নতুন সংস্করণ ব্যবহার করতে আবার লোড করুন।",
+  "cw_usbnet_address": "ঠিকানা: {ip}",
+  "cw_usbnet_err_change": "USB অ্যাডাপ্টার পরিবর্তন করা যায়নি। আবার চেষ্টা করুন।",
+  "cw_usbnet_experimental": "পরীক্ষামূলক",
+  "cw_usbnet_note": "কনসোলের নিজের নেটওয়ার্ক চালু থাকে।",
+  "cw_usbnet_state_failed": "অ্যাডাপ্টার চালু করা যায়নি — খুলে আবার লাগান",
+  "cw_usbnet_state_no_address": "একটি ঠিকানার অপেক্ষায়",
+  "cw_usbnet_state_no_link": "কোনো কেবল লাগানো নেই",
+  "cw_usbnet_state_none": "কোনো অ্যাডাপ্টার লাগানো নেই",
+  "cw_usbnet_state_off": "বন্ধ",
+  "cw_usbnet_state_paused": "PS5 রেস্ট মোডে থাকাকালীন বিরতিতে",
+  "cw_usbnet_state_ready": "সংযুক্ত",
+  "cw_usbnet_state_starting": "চালু হচ্ছে…",
+  "cw_usbnet_state_unsupported": "এই অ্যাডাপ্টারের চিপ সংস্করণ এখনো সমর্থিত নয়",
+  "cw_usbnet_switch": "USB ইথারনেট অ্যাডাপ্টার ব্যবহার করুন",
+  "cw_usbnet_title": "USB ইথারনেট অ্যাডাপ্টার"
 }

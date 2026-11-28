@@ -18,6 +18,7 @@ import { RemovePs5Upload } from "./RemovePs5Upload";
 import { GroupHeading, Section } from "./SettingsLayout";
 import { settingsConsoleId } from "./settingsTabs";
 import { settingsVisibility } from "./visibility";
+import { UsbNetSettings } from "./UsbNetSettings";
 import { helperAutoUpdateGate } from "../../lib/helperAutoUpdate";
 
 /**
@@ -215,6 +216,9 @@ function Ps5SettingsBody({ profile }: { profile: PS5Profile }) {
       <div className="md:col-span-2" id="ps5-tailscale">
         <TailnetPanel host={host} />
       </div>
+
+      {/* A USB Ethernet adapter on the PS5 (experimental): faster transfers than its own port. */}
+      <UsbNetSettings host={host} />
 
       <GroupHeading>{tr("settings_group_uploads", undefined, "Uploads")}</GroupHeading>
 

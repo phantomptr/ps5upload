@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "رد شدن",
   "cw_tour_step": "{n} از {total}",
   "cw_update_later": "بعداً",
-  "cw_update_ready": "PS5Upload Minion به‌روزرسانی شد. برای استفاده از نسخهٔ جدید، دوباره بارگیری کنید."
+  "cw_update_ready": "PS5Upload Minion به‌روزرسانی شد. برای استفاده از نسخهٔ جدید، دوباره بارگیری کنید.",
+  "cw_usbnet_address": "نشانی: {ip}",
+  "cw_usbnet_err_change": "تغییر آداپتور USB ممکن نشد. دوباره تلاش کنید.",
+  "cw_usbnet_experimental": "آزمایشی",
+  "cw_usbnet_note": "شبکهٔ خود کنسول همچنان کار می‌کند.",
+  "cw_usbnet_state_failed": "آداپتور راه‌اندازی نشد — آن را جدا کنید و دوباره وصل کنید",
+  "cw_usbnet_state_no_address": "در انتظار نشانی",
+  "cw_usbnet_state_no_link": "هیچ کابلی وصل نیست",
+  "cw_usbnet_state_none": "هیچ آداپتوری وصل نیست",
+  "cw_usbnet_state_off": "خاموش",
+  "cw_usbnet_state_paused": "در زمان حالت استراحت PS5 متوقف است",
+  "cw_usbnet_state_ready": "وصل است",
+  "cw_usbnet_state_starting": "در حال راه‌اندازی…",
+  "cw_usbnet_state_unsupported": "نسخهٔ تراشهٔ این آداپتور هنوز پشتیبانی نمی‌شود",
+  "cw_usbnet_switch": "استفاده از آداپتور اترنت USB",
+  "cw_usbnet_title": "آداپتور اترنت USB"
 }

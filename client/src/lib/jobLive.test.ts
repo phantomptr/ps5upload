@@ -146,3 +146,25 @@ describe("a console-to-console copy's route (#433)", () => {
     expect(jobLiveFromSnapshot({ route: "carrier pigeon" })).toBeUndefined();
   });
 });
+
+describe("job live notes › USB Ethernet adapter link", () => {
+  it("reads which network a transfer takes, and the adapter's speed", () => {
+    expect(jobLiveFromSnapshot({ link: "usb", link_mbps: 2500 })).toMatchObject({ link: "usb", linkMbps: 2500 });
+    expect(jobLiveFromSnapshot({ link: "usb" })).toMatchObject({ link: "usb" });
+    expect(jobLiveFromSnapshot({ link: "usb", link_mbps: 0 })?.linkMbps).toBeUndefined();
+    const viaConsole = jobLiveFromSnapshot({ link: "console", link_mbps: 2500 });
+    expect(viaConsole?.link).toBe("console");
+    expect(viaConsole?.linkMbps).toBeUndefined();
+  });
+
+  it("carries nothing for a console without an adapter, or a word it does not know", () => {
+    expect(jobLiveFromSnapshot({ link: null, link_mbps: null })).toBeUndefined();
+    expect(jobLiveFromSnapshot({ link: "wifi" })).toBeUndefined();
+    expect(jobLiveFromSnapshot({ bottleneck: "network" })?.link).toBeUndefined();
+  });
+
+  it("keeps the console-to-console route apart from the link", () => {
+    const live = jobLiveFromSnapshot({ route: "direct", link: "usb", link_mbps: 10000 });
+    expect([live?.route, live?.link, live?.linkMbps]).toEqual(["direct", "usb", 10000]);
+  });
+});

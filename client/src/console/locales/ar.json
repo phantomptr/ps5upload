@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "تخطٍّ",
   "cw_tour_step": "{n} من {total}",
   "cw_update_later": "لاحقًا",
-  "cw_update_ready": "تم تحديث PS5Upload Minion. أعد التحميل لاستخدام الإصدار الجديد."
+  "cw_update_ready": "تم تحديث PS5Upload Minion. أعد التحميل لاستخدام الإصدار الجديد.",
+  "cw_usbnet_address": "العنوان: {ip}",
+  "cw_usbnet_err_change": "تعذّر تغيير محوّل USB. حاول مرة أخرى.",
+  "cw_usbnet_experimental": "تجريبي",
+  "cw_usbnet_note": "تظل شبكة الجهاز نفسه تعمل.",
+  "cw_usbnet_state_failed": "تعذّر تشغيل المحوّل — افصله ثم أعد توصيله",
+  "cw_usbnet_state_no_address": "في انتظار عنوان",
+  "cw_usbnet_state_no_link": "لا يوجد كابل موصول",
+  "cw_usbnet_state_none": "لا يوجد محوّل موصول",
+  "cw_usbnet_state_off": "متوقف",
+  "cw_usbnet_state_paused": "متوقف مؤقتًا أثناء وضع الراحة في PS5",
+  "cw_usbnet_state_ready": "متصل",
+  "cw_usbnet_state_starting": "جارٍ البدء…",
+  "cw_usbnet_state_unsupported": "إصدار شريحة هذا المحوّل غير مدعوم بعد",
+  "cw_usbnet_switch": "استخدام محوّل إيثرنت USB",
+  "cw_usbnet_title": "محوّل إيثرنت USB"
 }

@@ -1316,5 +1316,20 @@
   "cw_tour_skip": "건너뛰기",
   "cw_tour_step": "{n} / {total}",
   "cw_update_later": "나중에",
-  "cw_update_ready": "PS5Upload Minion가 업데이트되었습니다. 새 버전을 사용하려면 다시 불러오세요."
+  "cw_update_ready": "PS5Upload Minion가 업데이트되었습니다. 새 버전을 사용하려면 다시 불러오세요.",
+  "cw_usbnet_address": "주소: {ip}",
+  "cw_usbnet_err_change": "USB 어댑터를 변경하지 못했습니다. 다시 시도하세요.",
+  "cw_usbnet_experimental": "실험적",
+  "cw_usbnet_note": "본체 자체 네트워크는 계속 작동합니다.",
+  "cw_usbnet_state_failed": "어댑터를 시작하지 못했습니다. 뽑았다가 다시 꽂아 주세요",
+  "cw_usbnet_state_no_address": "주소를 기다리는 중",
+  "cw_usbnet_state_no_link": "연결된 케이블 없음",
+  "cw_usbnet_state_none": "연결된 어댑터 없음",
+  "cw_usbnet_state_off": "끔",
+  "cw_usbnet_state_paused": "PS5가 휴식 모드인 동안 일시 중지됨",
+  "cw_usbnet_state_ready": "연결됨",
+  "cw_usbnet_state_starting": "시작 중…",
+  "cw_usbnet_state_unsupported": "이 어댑터의 칩 리비전은 아직 지원되지 않습니다",
+  "cw_usbnet_switch": "USB 이더넷 어댑터 사용",
+  "cw_usbnet_title": "USB 이더넷 어댑터"
 }
