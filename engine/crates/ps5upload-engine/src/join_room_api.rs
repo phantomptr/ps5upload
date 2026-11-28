@@ -933,3 +933,119 @@ fn hub_answer(code: u16, body: String, retry: Option<u64>) -> Response {
     }
     r
 }
+
+// ── The hosted-by marker on the console (helper `play.room`, method 203) ────────────────────────
+
+/// The helper keeps a room this long unless told again (`ttl_s`); it is sent on every change and
+/// at least every third of it.
+pub(crate) const MARKER_TTL_S: u64 = 90;
+const MARKER_LOOK: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
+const MARKER_OLD_HELPER: Duration = Duration::from_secs(30 * 60);
+
+fn bars(tier: Option<&str>) -> u8 {
+    match tier {
+        Some("excellent") => 4,
+        Some("good") => 3,
+        Some("playable") => 2,
+        Some("poor") => 1,
+        _ => 0,
+    }
+}
+
+/// The room as the console's helper shows it to Minion and PS5Upload Play (`play.room` R: the
+/// helper's contract in docs/ROOMS_DEVIATIONS.md). Never an address.
+pub(crate) fn marker_json(p: &Party, now: Instant) -> serde_json::Value {
+    let cfg = &p.settings.room;
+    let comms = crate::join_comms::modes(&p.console);
+    let players: Vec<serde_json::Value> = p
+        .guests
+        .iter()
+        .filter(|g| g.active())
+        .take(8)
+        .map(|g| {
+            let (route, tier, _) = g.route_tier(now);
+            serde_json::json!({
+                "name": crate::join_names::effective(&g.name),
+                "ping_ms": g.stats.rtt_now(),
+                "seat": g.player,
+                "bars": bars(tier),
+                "via": route,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "name": cfg.name_for(&p.host_name),
+        "visibility": cfg.visibility.word(),
+        "locked": p.room.locked,
+        "game": p.room.game.as_ref().map(|g| serde_json::json!({"name": g.title, "title_id": g.id})),
+        "size": p.settings.max_players.clamp(1, MAX_GUESTS) + 1,
+        "players": players,
+        "playing": p.host_gone.is_none(),
+        "asks": p.pending.len(),
+        "chat": comms.chat.word(),
+        "voice": comms.voice.word(),
+    })
+}
+
+/// Keeps the helper on `console` told about its room while it is open, and `{room: null}` once
+/// it closes. Runs beside the party's own watch; an older helper is asked again after a while.
+pub(crate) fn spawn_marker(key: String, console: String) {
+    if cfg!(test) {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut sent: Option<(serde_json::Value, Instant)> = None;
+        let mut old_until: Option<Instant> = None;
+        let mut t = tokio::time::interval(MARKER_LOOK);
+        t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            t.tick().await;
+            let now = Instant::now();
+            let room = with_party(&key, |p| marker_json(p, now));
+            let open = room.is_some();
+            if old_until.is_some_and(|u| u > now) {
+                if !open {
+                    return;
+                }
+                continue;
+            }
+            let due = match (&sent, &room) {
+                (_, None) => true,
+                (None, Some(_)) => true,
+                (Some((v, at)), Some(r)) => {
+                    v != r || now.saturating_duration_since(*at).as_secs() >= MARKER_TTL_S / 3
+                }
+            };
+            if due {
+                let body = serde_json::json!({"room": room, "ttl_s": MARKER_TTL_S});
+                let c = console.clone();
+                let r = tokio::task::spawn_blocking(move || {
+                    ps5upload_core::mgmt::call(
+                        &c,
+                        ps5upload_core::mgmt::m::PLAY_ROOM,
+                        body.to_string().as_bytes(),
+                    )
+                })
+                .await;
+                match r {
+                    Ok(Ok(_)) => sent = room.clone().map(|v| (v, now)),
+                    Ok(Err(e)) if ps5upload_core::console_files::is_unsupported(&e) => {
+                        crate::log_at!(
+                            Debug,
+                            "together",
+                            "room: the helper on {console} is too old for play.room"
+                        );
+                        old_until = Some(now + MARKER_OLD_HELPER);
+                    }
+                    Ok(Err(e)) => {
+                        crate::log_at!(Debug, "together", "room: play.room to {console}: {e:#}");
+                    }
+                    Err(_) => {}
+                }
+            }
+            if !open {
+                return;
+            }
+        }
+    });
+}

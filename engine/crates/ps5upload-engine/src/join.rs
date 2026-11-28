@@ -2109,8 +2109,15 @@ impl Party {
                     )));
                     return (fx, false);
                 }
+                // Everyone else keeps their pad through the host's restart (scenario audit: no
+                // re-picking a user for the whole room); only one who most likely took the
+                // host's user gives it back, so the host's own user is free again.
                 if gone >= HOST_GRACE {
-                    for g in self.guests.iter_mut().filter(|g| g.active() && g.slot_open) {
+                    for g in self
+                        .guests
+                        .iter_mut()
+                        .filter(|g| g.active() && g.slot_open && g.took_host)
+                    {
                         g.slot_open = false;
                         fx.push(Effect::Link(link::Cmd::Close {
                             slot: g.player,
@@ -2735,6 +2742,23 @@ fn on_link_event(console: &str, ev: link::Event) {
                 _ => vec![Effect::Log(format!(
                     "join: Player {slot}'s pad was made again: the console asks who they are, PS works until they pick"
                 ))],
+            }
+        }
+        link::Event::Owner { slot, user } => {
+            // The console says someone picked a user on this pad: they are playing (PS & Create
+            // go to the block rule, ✕ needs no move first). Seen only for a user other than the
+            // one the pad was made for; the host-user pick keeps its own rule (blame_pick).
+            match p.guests.iter_mut().find(|g| g.active() && g.player == slot) {
+                Some(g) if !g.playing => {
+                    g.playing = true;
+                    g.picked_at = Some(now);
+                    g.cross_guard = false;
+                    vec![Effect::Log(format!(
+                        "join: Player {slot} picked a user on the TV (the helper read user {})",
+                        user.map(|u| format!("{u:#010x}")).unwrap_or_else(|| "?".into())
+                    ))]
+                }
+                _ => Vec::new(),
             }
         }
         link::Event::Lost { slot } => {
@@ -5390,6 +5414,7 @@ pub(crate) async fn open_party(addr: &str) -> Result<(), OpenErr> {
         let now = Instant::now();
         with_party(&key, |p| p.invite(false, now));
         crate::log_at!(Info, "together", "join: Play Together open on {addr}");
+        room_api::spawn_marker(key.clone(), addr.to_string());
         spawn_watch(key);
         room_api::hand_modes(addr, &settings().room);
         crate::join_net::lobby::changed();
@@ -6249,6 +6274,9 @@ pub(crate) mod link {
         Reopened { slot: u8, seat: OpenResult },
         /// The helper no longer has the slot for us and cannot make it again.
         Lost { slot: u8 },
+        /// The helper read who sits in Player `slot`'s pad (13.0 helpers, `vpad.hb`): a user other
+        /// than the one it was made for (a pick), once per change.
+        Owner { slot: u8, user: Option<u32> },
     }
 
     pub(crate) type EventFn = Arc<dyn Fn(Event) + Send + Sync>;
@@ -6372,6 +6400,8 @@ pub(crate) mod link {
         last_call: Instant,
         last_input: Instant,
         out_last: Option<Output>,
+        /// The last owner reading the helper gave (`vpad.hb` `has_user`), to tell a change.
+        owner_seen: Option<bool>,
         out_due: Instant,
         out_fast_until: Instant,
     }
@@ -6397,6 +6427,7 @@ pub(crate) mod link {
                 last_call: now,
                 last_input: now,
                 out_last: None,
+                owner_seen: None,
                 out_due: now,
                 out_fast_until: now,
             }
@@ -6753,6 +6784,14 @@ pub(crate) mod link {
                                 // another call or the network): what the guest still holds
                                 // (a stick, R2) goes again, though it hasn't changed.
                                 s.io.force = true;
+                            }
+                            // Who sits in the pad (a 13.0 helper): a pick of another user than
+                            // the one it was made for is told once.
+                            if a.has_user.is_some() && a.has_user != s.owner_seen {
+                                s.owner_seen = a.has_user;
+                                if a.has_user == Some(true) {
+                                    (self.events)(Event::Owner { slot, user: a.user });
+                                }
                             }
                         }
                     }
@@ -8322,9 +8361,9 @@ mod tests {
         assert_eq!(byes(fx), vec!["host_stopped"]);
         assert_eq!(arx.try_recv().unwrap(), Decision::HostStopped);
         assert_eq!(p.guests_in(), 1, "still counted: they may come back");
-        // the pads go after the grace
+        // the pads stay through the host's restart (nobody picks a user again)
         let (fx, _) = p.tick(t + HOST_GRACE, None);
-        assert_eq!(links(&fx), vec!["close2"]);
+        assert!(links(&fx).is_empty(), "{:?}", links(&fx));
         // the guest is not timed out while the host is away (only the whole party is)
         let (_, keep) = p.tick(t + RESUME_WINDOW - Duration::from_millis(1), None);
         assert!(keep && p.guests_in() == 1);
@@ -8334,8 +8373,8 @@ mod tests {
         assert_eq!(p.session, 2);
         assert!(p.host_gone.is_none());
         assert!(
-            !p.guest_mut(id).unwrap().slot_open,
-            "their pad is made again on resume"
+            p.guest_mut(id).unwrap().slot_open,
+            "their pad was kept: nothing to pick again on resume"
         );
         // and if the host never comes back: closed
         let mut q = party();
@@ -10337,17 +10376,20 @@ mod tests {
         assert_eq!(s["invite"]["key"], key.as_str());
         let mut sam3 = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
         assert_eq!(next(&mut sam3).await["stage"], "waiting");
-        until("pad removed after the grace", || {
-            f.log().contains(&"close2".to_string())
-        })
-        .await;
+        // Their pad is kept through the host's restart (nobody picks a user again).
+        tokio::time::sleep(HOST_GRACE + Duration::from_millis(500)).await;
+        assert!(
+            !f.log().contains(&"close2".to_string()),
+            "the pad stays while the host restarts: {:?}",
+            f.log()
+        );
         set_live(console, 2);
         let j = next(&mut sam3).await;
         assert_eq!(j["stage"], "joined", "{j}");
         assert_eq!(
             f.log().iter().filter(|l| *l == "open2").count(),
-            2,
-            "the pad is made again"
+            1,
+            "the pad was kept, not made again"
         );
 
         // Kicked: told, the pad removed, the token void.
