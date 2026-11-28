@@ -42,6 +42,11 @@ pub(crate) fn set_listening(at: std::net::SocketAddr) {
     PLAY_PORT.store(play_port(at), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The HTTP port the consoles reach this engine on (0: not known yet, or this computer only).
+pub(crate) fn play_port_now() -> u16 {
+    PLAY_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The port a console reaches an engine listening at `at` on; 0 for a loopback-only listener.
 fn play_port(at: std::net::SocketAddr) -> u16 {
     if at.ip().is_loopback() {
@@ -404,6 +409,8 @@ pub(crate) fn greet(addr: &str) {
     if let Err(e) = hello(addr) {
         crate::log_debug!("mesh hello to {addr} on a new session: {e:#}");
     }
+    // A new session may be a restarted helper, which forgot the grant for PS5Upload Play.
+    crate::play_app::push_grant(addr);
 }
 
 /// false: the helper predates the mesh.

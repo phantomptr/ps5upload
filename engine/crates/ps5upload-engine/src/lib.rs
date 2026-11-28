@@ -13594,6 +13594,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     join::load_invites();
     // PS5Upload Play: a `play` event on the feed when a console's status changes.
     play_app::spawn_feed();
+    // …the grant each console's helper hands its app, renewed while the session lasts…
+    play_app::spawn_grants();
     // …and a LAN responder so the app finds this engine without the helper (UDP 19261).
     if let Ok(at) = listener.local_addr() {
         play_discovery::start(at, cfg.allow_ips.clone());

@@ -598,6 +598,12 @@ value = 201
 name = "METHOD_APP_RESTORE"
 ty = "u16"
 value = 202
+# An engine's one-time grant for the console's PS5Upload Play, kept in memory and served on the
+# helper's loopback app API (GET 127.0.0.1:9181/v1/play/grants); MGMT_METHODS.md
+[[const]]
+name = "METHOD_PLAY_GRANT"
+ty = "u16"
+value = 203
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

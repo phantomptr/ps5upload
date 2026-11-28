@@ -785,3 +785,188 @@ fn a_click_is_not_a_guess_but_a_lock_still_holds() {
         Err(ConfirmErr::Locked(_))
     ));
 }
+
+#[test]
+fn a_grant_is_renewed_while_handed_and_works_once_for_its_console() {
+    let mut h = Hub::default();
+    let t = Instant::now();
+    let (g, ttl) = h.grant_for("192.168.1.50", Some(KEY_A.into()), t).unwrap();
+    assert_eq!(ttl, GRANT_TTL.as_secs());
+    // 32 random bytes, base64url without padding.
+    assert_eq!(g.len(), 43);
+    assert!(valid_grant(&g));
+    // Handed again later: the same grant, good for another full TTL.
+    let later = t + GRANT_RENEW;
+    let (g2, _) = h.grant_for("192.168.1.50:9120", None, later).unwrap();
+    assert_eq!(g, g2);
+    let near_end = t + GRANT_TTL + Duration::from_secs(60);
+    // Another console's grant is another one.
+    let (other, _) = h.grant_for("192.168.1.60", None, t).unwrap();
+    assert_ne!(g, other);
+    // From another console: refused, and used up all the same.
+    assert_eq!(
+        h.take_grant(&other, "192.168.1.50", None, t),
+        Err(GrantErr::WrongConsole)
+    );
+    assert_eq!(
+        h.take_grant(&other, "192.168.1.60", None, t),
+        Err(GrantErr::Unknown)
+    );
+    // Its own console, after the first TTL (it was renewed): works, once.
+    assert_eq!(
+        h.take_grant(&g, "192.168.1.50", None, near_end),
+        Ok("192.168.1.50".to_string())
+    );
+    assert_eq!(
+        h.take_grant(&g, "192.168.1.50", None, near_end),
+        Err(GrantErr::Unknown)
+    );
+    // Past its time: expired (and gone).
+    let (g3, _) = h.grant_for("192.168.1.50", None, t).unwrap();
+    assert_ne!(g3, g);
+    let past = t + GRANT_TTL + Duration::from_secs(1);
+    assert_eq!(
+        h.take_grant(&g3, "192.168.1.50", None, past),
+        Err(GrantErr::Expired)
+    );
+    // The same console at another address (its tailnet one: the same AVA1 key) is it.
+    let (g4, _) = h.grant_for("192.168.1.50", Some(KEY_A.into()), t).unwrap();
+    assert_eq!(
+        h.take_grant(&g4, "100.64.0.9", Some(KEY_A), t),
+        Ok("192.168.1.50".to_string())
+    );
+    let (g5, _) = h.grant_for("192.168.1.50", Some(KEY_A.into()), t).unwrap();
+    assert_eq!(
+        h.take_grant(&g5, "100.64.0.9", Some(KEY_B), t),
+        Err(GrantErr::WrongConsole)
+    );
+    assert_eq!(
+        h.take_grant("x".repeat(43).as_str(), "192.168.1.50", None, t),
+        Err(GrantErr::Unknown)
+    );
+}
+
+/// A helper for `play.grant`: what it was handed (None: one too old for the method).
+struct GrantHelper {
+    new: bool,
+    got: Mutex<Vec<(String, u16, Value)>>,
+}
+
+impl ps5upload_core::mgmt::MgmtTransport for GrantHelper {
+    fn call(
+        &self,
+        addr: &str,
+        method: ps5upload_core::mgmt::Method,
+        label: &str,
+        body: &[u8],
+        _timeout: Duration,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if !self.new {
+            return Err(ps5upload_core::mgmt::MgmtError {
+                label: label.into(),
+                status: ps5upload_core::console_files::ERR_UNKNOWN_METHOD,
+                cause: "unknown_method".into(),
+            }
+            .into());
+        }
+        self.got.lock().unwrap().push((
+            addr.to_string(),
+            method.id,
+            serde_json::from_slice(body).unwrap(),
+        ));
+        Ok(Some(br#"{"ok":true}"#.to_vec()))
+    }
+}
+
+#[test]
+fn the_helper_is_handed_a_grant_only_for_a_console_on_the_list() {
+    let _turn = TURN.blocking_lock();
+    reset(None);
+    crate::mesh_api::set_listening("192.168.1.2:19113".parse().unwrap());
+    let helper = std::sync::Arc::new(GrantHelper {
+        new: true,
+        got: Mutex::new(Vec::new()),
+    });
+    let _g = ps5upload_core::mgmt::scoped_transport(helper.clone());
+    // Not on the list: nothing is handed.
+    assert!(!send_grant("10.9.9.9", Instant::now()));
+    assert!(helper.got.lock().unwrap().is_empty());
+    let doc = crate::shared_state::read(crate::consoles_api::DOC);
+    crate::shared_state::write(
+        crate::consoles_api::DOC,
+        doc.rev,
+        json!({"profiles": [{"host": "10.0.0.7", "name": "Den"}]}),
+    )
+    .unwrap();
+    let t = Instant::now();
+    assert!(with_hub(|h| h.grant_due("10.0.0.7", t)));
+    assert!(send_grant("10.0.0.7", t));
+    let (addr, method, body) = helper.got.lock().unwrap()[0].clone();
+    assert_eq!((addr.as_str(), method), ("10.0.0.7", 203));
+    assert_eq!(method, ps5upload_core::mgmt::m::PLAY_GRANT.id);
+    assert_eq!(body["engine_id"], "0123456789abcdef");
+    assert_eq!(body["port"], 19113);
+    assert_eq!(body["ttl_s"], GRANT_TTL.as_secs());
+    assert!(body["engine_name"].is_string());
+    let grant = body["grant"].as_str().unwrap().to_string();
+    // Handed: not due again until the renewal.
+    assert!(!with_hub(|h| h.grant_due("10.0.0.7", t)));
+    assert!(with_hub(|h| h.grant_due("10.0.0.7", t + GRANT_RENEW)));
+    // The app on that console redeems it (from the hub's side).
+    assert_eq!(
+        with_hub(|h| h.take_grant(&grant, "10.0.0.7", None, t)),
+        Ok("10.0.0.7".into())
+    );
+    // A helper too old for play.grant: noted, not asked again for a while, and a new session
+    // asks at once.
+    let old = std::sync::Arc::new(GrantHelper {
+        new: false,
+        got: Mutex::new(Vec::new()),
+    });
+    let _g2 = ps5upload_core::mgmt::scoped_transport(old);
+    assert!(!send_grant("10.0.0.7", t));
+    assert!(!with_hub(|h| h.grant_due("10.0.0.7", t + GRANT_RENEW)));
+    assert!(with_hub(|h| h.grant_due("10.0.0.7", t + GRANT_OLD_HELPER)));
+    push_grant("10.0.0.7");
+    assert!(with_hub(|h| h.grant_old_helper.contains_key("10.0.0.7")));
+    reset(None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_with_its_helpers_grant_is_paired_without_a_code() {
+    let _turn = TURN.lock().await;
+    reset(None);
+    let url = serve().await;
+    let (g, _) = with_hub(|h| h.grant_for("127.0.0.1", None, Instant::now())).unwrap();
+    let mut app = connect_hello(&url, json!({"grant": g, "app_id": APP_ID})).await;
+    let p = next_with(&mut app, "paired").await;
+    let token = p["paired"]["token"].as_str().unwrap().to_string();
+    assert_eq!(token.len(), 64);
+    assert_eq!(next_with(&mut app, "doc").await["doc"]["paired"], true);
+    let a = with_hub(|h| h.store().check(&token).cloned()).unwrap();
+    assert_eq!(
+        (a.console.as_str(), a.app_id.as_deref()),
+        ("127.0.0.1", Some(APP_ID))
+    );
+    // The token works on its own from now on; the grant is used up.
+    let mut again = connect_hello(&url, json!({"token": token})).await;
+    assert_eq!(next_with(&mut again, "doc").await["doc"]["paired"], true);
+    let mut reuse = connect_hello(&url, json!({"grant": g})).await;
+    let r = next_with(&mut reuse, "auth").await;
+    assert_eq!(r, json!({"auth": "grant_invalid", "why": "unknown"}));
+    assert_eq!(next_with(&mut reuse, "doc").await["doc"]["paired"], false);
+    // A grant handed to another console's helper does not pair this one, and is used up.
+    let (other, _) = with_hub(|h| h.grant_for("192.168.1.50", None, Instant::now())).unwrap();
+    let mut wrong = connect_hello(&url, json!({"grant": other})).await;
+    assert_eq!(
+        next_with(&mut wrong, "auth").await,
+        json!({"auth": "grant_invalid", "why": "wrong_console"})
+    );
+    assert!(with_hub(|h| h.grants.is_empty()));
+    // A bad token with a good grant: paired by the grant, never told the token is invalid.
+    let (g3, _) = with_hub(|h| h.grant_for("127.0.0.1", None, Instant::now())).unwrap();
+    let mut both = connect_hello(&url, json!({"token": "ab".repeat(32), "grant": g3})).await;
+    let first = next_with(&mut both, "paired").await;
+    assert!(first["paired"]["token"].is_string());
+    reset(None);
+}

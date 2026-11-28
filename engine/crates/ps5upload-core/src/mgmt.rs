@@ -208,6 +208,7 @@ methods! {
     (NODE_UNINSTALL, 200, "NODE_UNINSTALL"),
     (TROPHY_FIX, 201, "TROPHY_FIX"),
     (APP_RESTORE, 202, "APP_RESTORE"),
+    (PLAY_GRANT, 203, "PLAY_GRANT"),
 }
 
 /// A management call the payload refused.

@@ -5,9 +5,19 @@
 //! reachable from the LAN, like the guest socket, and over Tailscale through the engine's own node
 //! (its guest port, `crate::tailnet_guest`, which serves only these two sockets and gives the
 //! handler the peer's 100.x address), so everything past a minimal status needs the app's token:
-//! * app → engine, first: `{"hello": {"token"?: t, "app_id"?: id, "v"?: version}}`. `app_id` is
-//!   the app's own install id (made once on the console: 32 hex characters, or 22–64 base64url
-//!   ones; anything else is ignored), kept with a pairing made from then on.
+//! * app → engine, first: `{"hello": {"token"?: t, "app_id"?: id, "grant"?: g, "v"?: version}}`.
+//!   `app_id` is the app's own install id (made once on the console: 32 hex characters, or 22–64
+//!   base64url ones; anything else is ignored), kept with a pairing made from then on.
+//! * **Paired through the helper, no code:** while this engine has an AVA1 session to a console on
+//!   its list, it hands the helper a one-time grant (`play.grant` `{engine_id, engine_name, grant,
+//!   ttl_s, port}`: 32 random bytes, base64url, good for 10 minutes and handed again, renewed,
+//!   every 5 while the session lasts and on every new session). The helper serves it to the app on
+//!   loopback only (`GET 127.0.0.1:9181/v1/play/grants`). An app whose token does not pair it here
+//!   and whose hello carries the grant, from that console (its address, or another address with
+//!   the same AVA1 key), is paired exactly as a typed code pairs it: `{"paired": {"id", "token"}}`.
+//!   The grant is used up by any try; one that does not pair gets `{"auth": "grant_invalid",
+//!   "why": "unknown" | "expired" | "wrong_console"}`. An older helper ("unknown method") is left
+//!   alone (asked again in 30 minutes).
 //! * without a valid token the app gets only `{"doc": {"engine": true, "version", "paired":
 //!   false}}` (no invite, no names), plus `{"auth": "invalid" | "other_console" | "revoked" |
 //!   "confirm_move"}` when the token it sent does not work here, or stopped working.
@@ -109,6 +119,14 @@ const MOVE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_PENDING_MOVES: usize = 8;
 /// How long the console that moved has to prove its AVA1 key at the new address (a dial).
 const MOVE_PROOF_WAIT: Duration = Duration::from_secs(3);
+/// A grant handed to a console's helper (`play.grant`) works this long; it is handed again,
+/// renewed, this often while the AVA1 session to the console lasts.
+const GRANT_TTL: Duration = Duration::from_secs(10 * 60);
+const GRANT_RENEW: Duration = Duration::from_secs(5 * 60);
+/// A helper too old for `play.grant` is asked again after this long.
+const GRANT_OLD_HELPER: Duration = Duration::from_secs(30 * 60);
+/// How often the consoles with a session are looked at for a grant due.
+const GRANT_LOOK: Duration = Duration::from_secs(60);
 
 // ── Paired apps ──────────────────────────────────────────────────────────────────────────────────
 
@@ -607,6 +625,57 @@ struct Hub {
     reports: HashMap<String, AppReport>,
     /// Consoles at a new address waiting for PS5Upload's confirmation.
     moves: Vec<PendingMove>,
+    /// By console (`host_key`): the grant its helper holds for its PS5Upload Play.
+    grants: HashMap<String, Grant>,
+    /// By console: its helper is too old for `play.grant` (asked again after this).
+    grant_old_helper: HashMap<String, Instant>,
+}
+
+/// A one-time grant this engine handed a console's helper: the console's PS5Upload Play sends it
+/// in its hello and is paired without a code (the helper's AVA1 session already proves the
+/// console). Kept in memory only.
+struct Grant {
+    /// 32 random bytes, base64url.
+    secret: String,
+    /// The console (`host_key`) and its AVA1 key, when pinned: the app must connect from there,
+    /// or from an address that has the same key (its tailnet one).
+    console: String,
+    key: Option<String>,
+    until: Instant,
+    /// When the helper last took it.
+    pushed: Option<Instant>,
+}
+
+/// Why a grant did not pair.
+#[derive(Debug, PartialEq, Eq)]
+enum GrantErr {
+    Unknown,
+    Expired,
+    WrongConsole,
+}
+
+impl GrantErr {
+    fn word(&self) -> &'static str {
+        match self {
+            GrantErr::Unknown => "unknown",
+            GrantErr::Expired => "expired",
+            GrantErr::WrongConsole => "wrong_console",
+        }
+    }
+}
+
+fn new_grant_secret() -> Option<String> {
+    use base64::Engine as _;
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).ok()?;
+    Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b))
+}
+
+/// A grant as an app's hello carries it: base64url, 16 to 128 characters.
+fn valid_grant(s: &str) -> bool {
+    (16..=128).contains(&s.len())
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
 impl Hub {
@@ -637,6 +706,80 @@ impl Hub {
         }
         self.moves.push(m);
         true
+    }
+
+    /// The grant for `console` (with its AVA1 key `key`, when pinned) to hand its helper now:
+    /// the one it holds, renewed for [`GRANT_TTL`], or a new one. `(grant, ttl_s)`.
+    fn grant_for(
+        &mut self,
+        console: &str,
+        key: Option<String>,
+        now: Instant,
+    ) -> Option<(String, u64)> {
+        self.grants.retain(|_, g| g.until > now);
+        let until = now + GRANT_TTL;
+        let c = host_key(console);
+        if let Some(g) = self.grants.get_mut(&c) {
+            g.until = until;
+            if key.is_some() {
+                g.key = key;
+            }
+            return Some((g.secret.clone(), GRANT_TTL.as_secs()));
+        }
+        let secret = new_grant_secret()?;
+        self.grants.insert(
+            c.clone(),
+            Grant {
+                secret: secret.clone(),
+                console: c,
+                key,
+                until,
+                pushed: None,
+            },
+        );
+        Some((secret, GRANT_TTL.as_secs()))
+    }
+
+    /// Whether `console`'s helper should be handed its grant again.
+    fn grant_due(&self, console: &str, now: Instant) -> bool {
+        let c = host_key(console);
+        if self.grant_old_helper.get(&c).is_some_and(|t| now < *t) {
+            return false;
+        }
+        self.grants
+            .get(&c)
+            .and_then(|g| g.pushed)
+            .is_none_or(|t| now.saturating_duration_since(t) >= GRANT_RENEW)
+    }
+
+    /// The grant an app on `console` (whose pinned AVA1 key is `here_key`) sent. Every grant is
+    /// compared, in constant time each; the one that matches is used up whatever the outcome
+    /// (Ok: the console it was handed to).
+    fn take_grant(
+        &mut self,
+        grant: &str,
+        console: &str,
+        here_key: Option<&str>,
+        now: Instant,
+    ) -> Result<String, GrantErr> {
+        let mut found = None;
+        for (c, g) in &self.grants {
+            if same_key(&g.secret, grant) {
+                found = Some(c.clone());
+            }
+        }
+        let g = found
+            .and_then(|c| self.grants.remove(&c))
+            .ok_or(GrantErr::Unknown)?;
+        if g.until <= now {
+            return Err(GrantErr::Expired);
+        }
+        let same_key_there =
+            matches!((g.key.as_deref(), here_key), (Some(a), Some(b)) if same_key(a, b));
+        if g.console != host_key(console) && !same_key_there {
+            return Err(GrantErr::WrongConsole);
+        }
+        Ok(g.console)
     }
 }
 
@@ -774,6 +917,8 @@ fn say(v: Value) -> Message {
 struct Hello {
     token: Option<String>,
     app_id: Option<String>,
+    /// A grant the console's helper handed it (`GET 127.0.0.1:9181/v1/play/grants`).
+    grant: Option<String>,
 }
 
 fn parse_hello(v: &Value) -> Option<Hello> {
@@ -787,6 +932,7 @@ fn parse_hello(v: &Value) -> Option<Hello> {
     Some(Hello {
         token: text("token", |t| !t.is_empty() && t.len() <= 128),
         app_id: text("app_id", valid_app_id),
+        grant: text("grant", valid_grant),
     })
 }
 
@@ -956,6 +1102,48 @@ async fn check_token(hello: &Hello, console: &str, tx: &mpsc::Sender<ToApp>) -> 
     }
 }
 
+/// The grant `grant` sent by the app on `console`: a new pairing, exactly as a typed code makes
+/// one (`(id, token)`), and the grant is used up.
+async fn redeem(
+    grant: &str,
+    console: &str,
+    app_id: Option<String>,
+) -> Result<(String, String), GrantErr> {
+    let (g, c) = (grant.to_string(), console.to_string());
+    let taken = tokio::task::spawn_blocking(move || {
+        let here_key = key_at(&c);
+        with_hub(|h| h.take_grant(&g, &c, here_key.as_deref(), Instant::now()))
+    })
+    .await
+    .map_err(|_| GrantErr::Unknown)?;
+    if let Err(e) = taken {
+        crate::log_at!(
+            Info,
+            "together",
+            "play app: a grant from the app on {console} did not pair ({})",
+            e.word()
+        );
+        return Err(e);
+    }
+    match issue(console, app_id).await {
+        Ok((id, token, _)) => {
+            // Paired anew here: a move this console waited on is moot.
+            let here = host_key(console);
+            with_hub(|h| h.moves.retain(|m| m.new != here));
+            crate::log_at!(
+                Info,
+                "together",
+                "play app: paired PS5Upload Play on {console} (through the helper, id {id})"
+            );
+            Ok((id, token))
+        }
+        Err(e) => {
+            crate::log_at!(Warn, "together", "play app: pairing not saved: {e:#}");
+            Err(GrantErr::Unknown)
+        }
+    }
+}
+
 async fn session(mut socket: WebSocket, ip: IpAddr) {
     let Some(hello) = read_hello(&mut socket).await else {
         let _ = socket
@@ -967,12 +1155,34 @@ async fn session(mut socket: WebSocket, ip: IpAddr) {
     let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = mpsc::channel::<ToApp>(4);
     let auth = check_token(&hello, &console, &tx).await;
-    if let Some(w) = auth.word() {
-        let _ = socket.send(say(json!({ "auth": w }))).await;
-    }
-    let mut paired = match auth {
-        Auth::Paired(id) => Some(id),
-        _ => None,
+    // Not paired by its token: a grant from the console's helper pairs it at once.
+    let granted = match (&auth, &hello.grant) {
+        (Auth::Paired(_), _) | (_, None) => None,
+        (_, Some(g)) => Some(redeem(g, &console, hello.app_id.clone()).await),
+    };
+    let mut paired = match (auth, granted) {
+        (Auth::Paired(id), _) => Some(id),
+        (_, Some(Ok((id, token)))) => {
+            if socket
+                .send(say(json!({"paired": {"id": id, "token": token}})))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            Some(id)
+        }
+        (a, g) => {
+            if let Some(w) = a.word() {
+                let _ = socket.send(say(json!({ "auth": w }))).await;
+            }
+            if let Some(Err(e)) = g {
+                let _ = socket
+                    .send(say(json!({"auth": "grant_invalid", "why": e.word()})))
+                    .await;
+            }
+            None
+        }
     };
     crate::log_at!(
         Info,
@@ -1381,22 +1591,17 @@ pub async fn pair_confirm(
     }
 }
 
-/// A new pairing for the app on `console` (socket `conn`): saved, with the console's AVA1 key and
-/// the app's install id when known. `(id, token, name)`.
+/// A new pairing for the app on `console` (with its install id, when it sent one): saved, with
+/// the console's AVA1 key when pinned. `(id, token, name)`.
 async fn issue(
     console: &str,
-    conn: Option<u64>,
+    app_id: Option<String>,
 ) -> anyhow::Result<(String, String, Option<String>)> {
     let c = console.to_string();
     tokio::task::spawn_blocking(move || {
         let name = crate::consoles_api::console_brief(&c).and_then(|(n, _)| n);
         let key = key_at(&c);
-        let (id, token) = with_hub(|h| {
-            let app_id = conn
-                .and_then(|n| h.sockets.get(&n))
-                .and_then(|s| s.app_id.clone());
-            h.store().add(&c, name.clone(), unix_now(), key, app_id)
-        })?;
+        let (id, token) = with_hub(|h| h.store().add(&c, name.clone(), unix_now(), key, app_id))?;
         Ok((id, token, name))
     })
     .await
@@ -1406,7 +1611,8 @@ async fn issue(
 /// The code of `p` was confirmed (typed, or one click): the app is paired and told its token.
 async fn finish_pair(p: PendingPair) -> Response {
     let console = p.console.clone();
-    let issued = issue(&console, Some(p.conn)).await;
+    let app_id = with_hub(|h| h.sockets.get(&p.conn).and_then(|s| s.app_id.clone()));
+    let issued = issue(&console, app_id).await;
     let (id, token, name) = match issued {
         Ok(v) => v,
         Err(e) => {
@@ -1643,6 +1849,104 @@ pub async fn paired(
     .await
     .unwrap_or(Value::Null);
     Json(v).into_response()
+}
+
+// ── Grants through the helper ────────────────────────────────────────────────────────────────────
+
+/// This engine's id as the Play discovery answer gives it (16 hex characters). The tests never
+/// make an identity in the user's data folder.
+fn engine_id() -> String {
+    #[cfg(test)]
+    {
+        "0123456789abcdef".to_string()
+    }
+    #[cfg(not(test))]
+    {
+        crate::mesh_api::id_hex()
+            .map(|h| h.chars().take(16).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// A new AVA1 session to the console at `addr` (its helper may have restarted and forgotten the
+/// grant, or been updated): hands it the grant now. Blocking.
+pub(crate) fn push_grant(addr: &str) {
+    with_hub(|h| h.grant_old_helper.remove(&host_key(addr)));
+    send_grant(addr, Instant::now());
+}
+
+/// Hands the helper on `addr` this engine's grant for the console's PS5Upload Play (`play.grant`
+/// `{engine_id, engine_name, grant, ttl_s, port}`): only for a console on this engine's list,
+/// when the consoles can reach this engine. An older helper ("unknown method") is noted and asked
+/// again after [`GRANT_OLD_HELPER`]. Blocking. true: the helper took it.
+fn send_grant(addr: &str, now: Instant) -> bool {
+    let port = crate::mesh_api::play_port_now();
+    if port == 0 || crate::consoles_api::console_brief(addr).is_none() {
+        return false;
+    }
+    let console = host_key(addr);
+    let key = key_at(addr);
+    let Some((grant, ttl_s)) = with_hub(|h| h.grant_for(&console, key, now)) else {
+        return false;
+    };
+    let body = json!({
+        "engine_id": engine_id(),
+        "engine_name": crate::mesh_api::device_name(),
+        "grant": grant,
+        "ttl_s": ttl_s,
+        "port": port,
+    });
+    let r = ps5upload_core::mgmt::call(
+        addr,
+        ps5upload_core::mgmt::m::PLAY_GRANT,
+        body.to_string().as_bytes(),
+    );
+    match r {
+        Ok(_) => {
+            with_hub(|h| {
+                if let Some(g) = h.grants.get_mut(&console) {
+                    g.pushed = Some(now);
+                }
+            });
+            true
+        }
+        Err(e) => {
+            if ps5upload_core::console_files::is_unsupported(&e) {
+                with_hub(|h| h.grant_old_helper.insert(console, now + GRANT_OLD_HELPER));
+                crate::log_at!(
+                    Debug,
+                    "together",
+                    "play app: the helper on {addr} is too old for play.grant"
+                );
+            } else {
+                crate::log_at!(Debug, "together", "play app: play.grant to {addr}: {e:#}");
+            }
+            false
+        }
+    }
+}
+
+/// Keeps each console's grant fresh while this engine has an AVA1 session to it: handed again,
+/// renewed, every [`GRANT_RENEW`] (one look a minute). A console with no session lets its grant
+/// run out.
+pub(crate) fn spawn_grants() {
+    tokio::spawn(async {
+        let mut t = tokio::time::interval(GRANT_LOOK);
+        t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            t.tick().await;
+            for addr in crate::mesh_api::greeted_consoles() {
+                if !with_hub(|h| h.grant_due(&addr, Instant::now())) {
+                    continue;
+                }
+                if !ps5upload_ava1::pool().has_session(&addr).await {
+                    continue;
+                }
+                let _ =
+                    tokio::task::spawn_blocking(move || send_grant(&addr, Instant::now())).await;
+            }
+        }
+    });
 }
 
 // ── The event feed ───────────────────────────────────────────────────────────────────────────────
