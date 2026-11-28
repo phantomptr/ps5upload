@@ -1268,14 +1268,14 @@ pub(crate) struct InviteInfo {
 }
 
 /// Short codes use no look-alikes (no I, L, O, 0, 1).
-const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+pub(crate) const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 /// Characters in a short code.
-const CODE_LEN: usize = 6;
+pub(crate) const CODE_LEN: usize = 6;
 /// Wrong short codes per address per minute before it must wait.
 const WRONG_CODES_PER_MIN: usize = 5;
 
 /// A new short code (uniform over the alphabet).
-fn new_code() -> Option<String> {
+pub(crate) fn new_code() -> Option<String> {
     let n = CODE_ALPHABET.len();
     let limit = 256 - 256 % n; // bytes at or past this would favour the first letters
     let mut out = String::with_capacity(CODE_LEN);
@@ -1292,7 +1292,7 @@ fn new_code() -> Option<String> {
 }
 
 /// A typed code as the invite keeps it: case, dashes and spaces do not matter.
-fn normalize_code(c: &str) -> String {
+pub(crate) fn normalize_code(c: &str) -> String {
     c.chars()
         .filter(|ch| !matches!(ch, '-' | ' ' | '\u{2010}'..='\u{2015}'))
         .flat_map(char::to_uppercase)
@@ -1301,7 +1301,7 @@ fn normalize_code(c: &str) -> String {
 }
 
 /// `K7M2QX` as people read it: `K7M-2QX`.
-fn code_display(c: &str) -> String {
+pub(crate) fn code_display(c: &str) -> String {
     if c.len() == CODE_LEN {
         format!("{}-{}", &c[..3], &c[3..])
     } else {
@@ -2186,6 +2186,27 @@ pub(crate) fn test_party_with_picking_guest(console: &str) {
         g.pad_made(&link::OpenResult::Ok, Some(None));
     }
     with_parties(|m| m.insert(host_key(console), p));
+}
+
+/// A party with an invite out and a guest named `name` asking (ask `id`), for other modules'
+/// tests: the receiver gets the host's answer.
+#[cfg(test)]
+pub(crate) fn test_party_with_ask(
+    console: &str,
+    id: u64,
+    name: &str,
+) -> oneshot::Receiver<Decision> {
+    let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+    p.invite(false, Instant::now());
+    let (tx, rx) = oneshot::channel();
+    p.pending.push(Ask {
+        id,
+        name: name.into(),
+        client: ClientInfo::default(),
+        answer: tx,
+    });
+    with_parties(|m| m.insert(host_key(console), p));
+    rx
 }
 
 #[cfg(test)]
@@ -4122,6 +4143,12 @@ fn host_allowed(peer: IpAddr, headers: &HeaderMap, allow: &[crate::AllowRule]) -
     crate::host_guard::local_or_admitted(peer, headers, allow)
 }
 
+/// The host API's check, for PS5Upload Play's host routes (play_app.rs): this computer by a
+/// loopback name, or a peer `PS5UPLOAD_ALLOW_IP` admits; else the refusal.
+pub(crate) fn host_only(peer: &std::net::SocketAddr, headers: &HeaderMap) -> Option<Response> {
+    guard(peer, headers)
+}
+
 fn guard(peer: &std::net::SocketAddr, headers: &HeaderMap) -> Option<Response> {
     (!host_allowed(
         peer.ip(),
@@ -4296,6 +4323,106 @@ fn state_json(console: &str) -> serde_json::Value {
     }
 }
 
+/// The consoles with Play Together open.
+pub(crate) fn open_consoles() -> Vec<String> {
+    with_parties(|m| m.values().map(|p| p.console.clone()).collect())
+}
+
+/// Play Together on `console` as PS5Upload Play shows it (play_app.rs): open, the invite, who
+/// asks, who is in (with their app), the settings and their revision. `secrets` false leaves
+/// out what lets someone in (the code and the link), for the engine's event feed.
+pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
+    let now = Instant::now();
+    let s = settings();
+    let settings = serde_json::json!({
+        "block_system_buttons": s.block_system_buttons,
+        "max_players": s.max_players,
+        "stream_seat": s.stream_seat,
+        "invites": invites_word(s.internet_invites),
+        "rev": settings_rev(),
+    });
+    let party = with_party(&host_key(console), |p| {
+        let inv = p.current_invite(now);
+        let net = if secrets {
+            p.internet_json(inv.as_ref())
+        } else {
+            None
+        };
+        let codec = live_codec(&p.console);
+        let pending: Vec<_> = p
+            .pending
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "name": a.name,
+                    "client_kind": a.client.kind,
+                    "codec_warning": a.client.codec_warning(codec),
+                })
+            })
+            .collect();
+        let guests: Vec<_> = p
+            .guests
+            .iter()
+            .filter(|g| g.active())
+            .map(|g| {
+                serde_json::json!({
+                    "id": g.id,
+                    "player": g.player,
+                    "name": g.name,
+                    "state": g.state(),
+                    "rtt_ms": g.stats.rtt_now(),
+                    "via": if g.net.is_some() { "internet" } else { "lan" },
+                    "client_kind": g.client.kind,
+                    "client_app": g.client.app,
+                    "codec_warning": g.codec_warning,
+                })
+            })
+            .collect();
+        (
+            p.console.clone(),
+            p.reach.clone(),
+            inv,
+            net,
+            p.host_gone.is_none(),
+            pending,
+            guests,
+        )
+    });
+    let Some((c, reach, inv, net, playing, pending, guests)) = party else {
+        return serde_json::json!({
+            "open": false,
+            "settings": settings,
+            "max_guests": MAX_GUESTS,
+        });
+    };
+    let invite = inv.map(|i| {
+        let expires_in_s = i.until.saturating_duration_since(now).as_secs();
+        if !secrets {
+            return serde_json::json!({ "expires_in_s": expires_in_s });
+        }
+        let code = i.code.clone();
+        let full = invite_json(&c, &reach, Some(i), net, now);
+        serde_json::json!({
+            "code": code,
+            "code_display": code_display(&code),
+            // The one link to share (and show as a QR code), and where it works.
+            "url": full["share"]["url"],
+            "works": full["share"]["works"],
+            "expires_in_s": expires_in_s,
+        })
+    });
+    serde_json::json!({
+        "open": true,
+        "playing": playing,
+        "invite": invite,
+        "pending": pending,
+        "guests": guests,
+        "settings": settings,
+        "max_guests": MAX_GUESTS,
+    })
+}
+
 #[derive(serde::Deserialize)]
 pub struct AddrQuery {
     #[serde(alias = "console", alias = "host")]
@@ -4384,22 +4511,54 @@ pub async fn open(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
-    let key = host_key(&b.addr);
-    let Some(session) = session_of(&b.addr) else {
-        if with_party(&key, |_| ()).is_some() {
+    match open_party(&b.addr).await {
+        Ok(()) => {
             touch_reach(&b.addr, &headers);
-            return Json(state_json(&b.addr)).into_response();
+            Json(state_json(&b.addr)).into_response()
         }
-        return not_playing(&b.addr);
+        Err(OpenErr::NotPlaying) => not_playing(&b.addr),
+        Err(OpenErr::Refused(code, why)) => bad(code, &why),
+    }
+}
+
+/// Why Play Together could not open.
+pub(crate) enum OpenErr {
+    /// No session runs for the console.
+    NotPlaying,
+    /// `old_helper` (409), `unreachable: …` (502), or another failure.
+    Refused(StatusCode, String),
+}
+
+/// Opens Play Together on `addr` (an open one stays as it is): what [`open`] and PS5Upload Play
+/// (play_app.rs) do.
+pub(crate) async fn open_party(addr: &str) -> Result<(), OpenErr> {
+    let key = host_key(addr);
+    let Some(session) = session_of(addr) else {
+        if with_party(&key, |_| ()).is_some() {
+            return Ok(());
+        }
+        return Err(OpenErr::NotPlaying);
     };
     if with_party(&key, |_| ()).is_none() {
         // An older helper has no guest controllers: the host is told before anyone is invited.
-        let c = b.addr.clone();
+        let c = addr.to_string();
         match tokio::task::spawn_blocking(move || helper_has_vpad(&c)).await {
             Ok(Ok(true)) => {}
-            Ok(Ok(false)) => return bad(StatusCode::CONFLICT, "old_helper"),
-            Ok(Err(e)) => return bad(StatusCode::BAD_GATEWAY, &format!("unreachable: {e:#}")),
-            Err(e) => return bad(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            Ok(Ok(false)) => {
+                return Err(OpenErr::Refused(StatusCode::CONFLICT, "old_helper".into()))
+            }
+            Ok(Err(e)) => {
+                return Err(OpenErr::Refused(
+                    StatusCode::BAD_GATEWAY,
+                    format!("unreachable: {e:#}"),
+                ))
+            }
+            Err(e) => {
+                return Err(OpenErr::Refused(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    e.to_string(),
+                ))
+            }
         }
     }
     let host_name = crate::mesh_api::device_name();
@@ -4409,18 +4568,17 @@ pub async fn open(
         }
         m.insert(
             key.clone(),
-            Party::new(&b.addr, session, host_name, settings()),
+            Party::new(addr, session, host_name, settings()),
         );
         true
     });
-    touch_reach(&b.addr, &headers);
     if created {
         let now = Instant::now();
         with_party(&key, |p| p.invite(false, now));
-        crate::log_at!(Info, "together", "join: Play Together open on {}", b.addr);
+        crate::log_at!(Info, "together", "join: Play Together open on {addr}");
         spawn_watch(key);
     }
-    Json(state_json(&b.addr)).into_response()
+    Ok(())
 }
 
 /// `POST /api/join/close {addr}`: every guest out, invites void.
@@ -4432,11 +4590,18 @@ pub async fn close(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
-    let key = host_key(&b.addr);
-    let now = Instant::now();
-    let fx = with_parties(|m| m.remove(&key).map(|mut p| p.close(now))).unwrap_or_default();
-    apply(&b.addr, fx);
+    close_party(&b.addr);
     Json(state_json(&b.addr)).into_response()
+}
+
+/// Closes Play Together on `addr`: every guest out, invites void. Whether one was open.
+pub(crate) fn close_party(addr: &str) -> bool {
+    let key = host_key(addr);
+    let now = Instant::now();
+    let fx = with_parties(|m| m.remove(&key).map(|mut p| p.close(now)));
+    let was = fx.is_some();
+    apply(addr, fx.unwrap_or_default());
+    was
 }
 
 #[derive(serde::Deserialize)]
@@ -4474,6 +4639,19 @@ pub async fn invite(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    touch_reach(&b.addr, &headers);
+    make_invite(&b.addr, b.new, b.internet, b.share)
+}
+
+/// [`invite`] once the host's request is checked: also PS5Upload Play's "New invite"
+/// (play_app.rs), as the one link (`share`).
+pub(crate) fn make_invite(addr: &str, new: bool, internet: bool, share: bool) -> Response {
+    let b = InviteBody {
+        addr: addr.to_string(),
+        new,
+        internet,
+        share,
+    };
     let s = settings();
     // The one link: the internet one when invites work anywhere and it can be made; otherwise the
     // home network's, never a refusal (`share` says which, and why).
@@ -4494,7 +4672,6 @@ pub async fn invite(
         }
     }
     let now = Instant::now();
-    touch_reach(&b.addr, &headers);
     let key = host_key(&b.addr);
     match with_party(&key, |p| {
         let inv = p.invite(b.new, now);
@@ -4583,19 +4760,45 @@ pub async fn kick(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    let ok = kick_player(&b.addr, b.player);
+    Json(serde_json::json!({ "ok": ok })).into_response()
+}
+
+/// Lets Player `player` on `addr` go (their token stops working). Whether one was in.
+pub(crate) fn kick_player(addr: &str, player: u8) -> bool {
     let now = Instant::now();
-    let fx = with_party(&host_key(&b.addr), |p| {
+    let fx = with_party(&host_key(addr), |p| {
         let id = p
             .guests
             .iter()
-            .find(|g| g.active() && g.player == b.player)
+            .find(|g| g.active() && g.player == player)
             .map(|g| g.id)?;
         Some(p.leave(id, "kicked", now))
     })
     .flatten();
     let ok = fx.is_some();
-    apply(&b.addr, fx.unwrap_or_default());
-    Json(serde_json::json!({ "ok": ok })).into_response()
+    apply(addr, fx.unwrap_or_default());
+    ok
+}
+
+/// Answers ask `id` on `addr` only (PS5Upload Play acts on its own console's Play Together). The
+/// first answer wins: Err("already_answered") when the ask is no longer waiting (answered from
+/// PS5Upload or another app, given up, timed out).
+pub(crate) fn decide_on(addr: &str, id: u64, allow: bool) -> Result<(), &'static str> {
+    let found = with_party(&host_key(addr), |p| {
+        let i = p.pending.iter().position(|a| a.id == id)?;
+        Some(p.pending.remove(i))
+    })
+    .flatten();
+    let Some(a) = found else {
+        return Err("already_answered");
+    };
+    let _ = a.answer.send(if allow {
+        Decision::Allow
+    } else {
+        Decision::Deny
+    });
+    Ok(())
 }
 
 /// `POST /api/join/playing {addr, player}`: the host saw the guest pick a user ("They're in"):
@@ -4648,7 +4851,7 @@ pub async fn profiles(
     .into_response()
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 pub struct SettingsBody {
     /// The console `guest_profiles` are for (user ids are that console's).
     #[serde(default, alias = "console", alias = "host")]
@@ -4834,6 +5037,38 @@ pub async fn set_settings(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    apply_settings(b).await
+}
+
+/// The settings' revision: one more at each change, from PS5Upload or PS5Upload Play. The last
+/// change wins; the revision tells everyone which one that was.
+static SETTINGS_REV: AtomicU64 = AtomicU64::new(1);
+
+/// The settings' revision now ([`SETTINGS_REV`]).
+pub(crate) fn settings_rev() -> u64 {
+    SETTINGS_REV.load(Ordering::Relaxed)
+}
+
+/// The settings change PS5Upload Play may make: Block PS & Create, players, the stream's
+/// controller, Invites work ("anywhere" or "wifi"). Answers as [`set_settings`] does.
+pub(crate) async fn app_settings(
+    block_system_buttons: Option<bool>,
+    max_players: Option<u8>,
+    stream_seat: Option<bool>,
+    invites: Option<String>,
+) -> Response {
+    apply_settings(SettingsBody {
+        block_system_buttons,
+        max_players,
+        stream_seat,
+        invites,
+        ..SettingsBody::default()
+    })
+    .await
+}
+
+/// [`set_settings`] once the request is checked.
+async fn apply_settings(b: SettingsBody) -> Response {
     let mut seats = None;
     if let Some(v) = b.guest_profiles.take() {
         let Some(addr) = b.addr.clone().filter(|a| !a.trim().is_empty()) else {
@@ -4870,6 +5105,7 @@ pub async fn set_settings(
             v.len()
         );
     }
+    let rev = SETTINGS_REV.fetch_add(1, Ordering::Relaxed) + 1;
     if ((b.internet_invites.is_some() || b.invites.is_some()) && s.internet_invites != was_anywhere)
         || b.port.is_some()
         || b.hub_url.is_some()
@@ -4907,7 +5143,7 @@ pub async fn set_settings(
         // The phone link's internet link too (phones already in keep playing).
         crate::pad_link::internet_off();
     }
-    let mut out = serde_json::json!({ "settings": settings_view(&s) });
+    let mut out = serde_json::json!({ "settings": settings_view(&s), "rev": rev });
     if let Some(addr) = b.addr.as_deref().filter(|a| !a.trim().is_empty()) {
         out["guest_profiles"] = serde_json::json!(seat_profiles(addr));
     }

@@ -106,6 +106,7 @@ mod payloads_api;
 mod pkg_install;
 mod pkg_name_api;
 mod pkg_sidecar;
+mod play_app;
 mod pldmgr_api;
 mod profile_image;
 mod ps2_saves;
@@ -937,6 +938,9 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // the invite or the resume token itself. The rest of /api/join is the host's.
         || path == "/join"
         || path == "/api/join/ws"
+        // PS5Upload Play on the host's PS5 (play_app.rs): its socket, which checks the app's
+        // token itself and tells an app without one only that the engine is there.
+        || path == "/api/play/app"
         // …and an internet invite's signalling straight to this engine (join_net/local_signal),
         // for this engine's own rooms only: the guest still checks the certificate and the key.
         || path == "/api/join/signal"
@@ -13534,6 +13538,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // work" and the rest as they were last set.
     self_host::log_settings();
     join::load_invites();
+    // PS5Upload Play: a `play` event on the feed when a console's status changes.
+    play_app::spawn_feed();
     // The built-in hub, only when PS5UPLOAD_HUB_LISTEN asks for it (a listener of its own).
     builtin_hub::start().await;
 
@@ -14390,6 +14396,10 @@ fn build_app_and_mcp(
         .route("/api/join/playing", post(join::playing))
         .route("/api/join/settings", post(join::set_settings))
         .route("/api/join/profiles", get(join::profiles))
+        .route("/api/play/app", get(play_app::ws))
+        .route("/api/play/app/pair", post(play_app::pair))
+        .route("/api/play/app/unpair", post(play_app::unpair))
+        .route("/api/play/app/paired", get(play_app::paired))
         // Share: an app's things to a friend (share/mod.rs).
         .route("/share", get(share::page))
         .route("/api/share/ws", get(share::ws))
@@ -15329,6 +15339,23 @@ mod loopback_guard_tests {
             assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
         }
         assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/join/open"));
+    }
+
+    #[test]
+    fn ps5upload_play_reaches_only_its_socket_and_pairing_stays_on_this_computer() {
+        let c = cfg(&[]);
+        assert!(loopback_allows(&c, ip("192.168.1.50"), "/api/play/app"));
+        for p in [
+            "/api/play/app/pair",
+            "/api/play/app/unpair",
+            "/api/play/app/paired",
+            "/api/play/app/x",
+            "/api/play/appx",
+            "/api/play",
+        ] {
+            assert!(!loopback_allows(&c, ip("192.168.1.50"), p), "{p}");
+        }
+        assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/play/app/pair"));
     }
 
     #[test]

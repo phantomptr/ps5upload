@@ -68,6 +68,19 @@ pub(crate) fn greeted_consoles() -> Vec<String> {
     consoles
 }
 
+/// How long ago the helper on `console` last answered our hello (seconds), or None when it never
+/// did since this engine started.
+pub(crate) fn helper_seen_s(console: &str) -> Option<u64> {
+    let want = crate::vinput_api::host_key(console);
+    let now = Instant::now();
+    lock_consoles()
+        .iter()
+        .filter(|(addr, _)| crate::vinput_api::host_key(addr) == want)
+        .filter_map(|(_, c)| c.hello_at)
+        .map(|t| now.saturating_duration_since(t).as_secs())
+        .min()
+}
+
 /// The mesh for a bug report: what kind of device this engine is and, per console it greets,
 /// how many app windows are active and whether the console took our presence. No names.
 pub(crate) fn diag_summary() -> Value {

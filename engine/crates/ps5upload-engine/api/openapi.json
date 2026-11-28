@@ -10424,6 +10424,17 @@
         ],
         "type": "object"
       },
+      "PairBody": {
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
       "PairResult": {
         "description": "What a successful pairing leaves us with.",
         "properties": {
@@ -16888,6 +16899,17 @@
         "required": [
           "drive",
           "console"
+        ],
+        "type": "object"
+      },
+      "UnpairBody": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ],
         "type": "object"
       },
@@ -26279,6 +26301,7 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "rev": {},
                     "settings": {}
                   },
                   "type": "object"
@@ -30982,6 +31005,283 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "none"
+        }
+      }
+    },
+    "/api/play/app": {
+      "get": {
+        "description": "`GET /api/play/app`: PS5Upload Play's socket.",
+        "responses": {
+          "101": {
+            "description": "Switches to a WebSocket."
+          },
+          "429": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too many requests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "PS5Upload Play's socket",
+        "tags": [
+          "play"
+        ],
+        "x-ps5upload": {
+          "access": "lan-open",
+          "response_schema": "websocket",
+          "websocket": true
+        }
+      }
+    },
+    "/api/play/app/pair": {
+      "post": {
+        "description": "`POST /api/play/app/pair {code}`: the code PS5Upload Play shows on the TV, typed in here.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "console": {},
+                    "id": {},
+                    "name": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "tries_left": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "retry_s": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Too many requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The code PS5Upload Play shows on the TV, typed in here",
+        "tags": [
+          "play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/play/app/paired": {
+      "get": {
+        "description": "`GET /api/play/app/paired`: `{apps: [{id, console, name, paired_unix, last_seen_unix,\nconnected}], waiting: [{console, expires_in_s}], locked_s}`. Never a token or a code.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "`{apps: [{id, console, name, paired_unix, last_seen_unix, connected}], waiting: [{console, expires_in_s}], locked_s}`",
+        "tags": [
+          "play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/play/app/unpair": {
+      "post": {
+        "description": "`POST /api/play/app/unpair {id}`: that app's token stops working (an app connected with it\nis told `revoked`).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnpairBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "That app's token stops working (an app connected with it is told `revoked`)",
+        "tags": [
+          "play"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
         }
       }
     },
@@ -55939,6 +56239,9 @@
     {
       "description": "The helper and other payloads.",
       "name": "payloads"
+    },
+    {
+      "name": "play"
     },
     {
       "description": "Friends joining a running session. The host's routes answer this computer and PS5UPLOAD_ALLOW_IP addresses.",
