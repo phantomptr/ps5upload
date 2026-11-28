@@ -11,6 +11,7 @@ import { gamepadsOf } from "../lib/nativePad";
 import { isWeak8BitDo, padName } from "../lib/padMappings";
 import {
   CHECK_STEPS,
+  deadzonesFor,
   defaultProfileFor,
   loadProfiles,
   PadLearner,
@@ -181,7 +182,7 @@ export function PadCheck({ onClose }: { onClose: () => void }) {
       if (learning.feed(snapshot(g))) finishOrNext(learning, g);
       return;
     }
-    const p = padFromGamepads([g], profileFor);
+    const p = padFromGamepads([g], profileFor, deadzonesFor);
     setLive((old) =>
       old.buttons === p.buttons && old.l2 === p.l2 && old.r2 === p.r2 && old.lx === p.lx && old.ly === p.ly && old.rx === p.rx && old.ry === p.ry
         ? old

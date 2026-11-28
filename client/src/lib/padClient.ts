@@ -9,7 +9,7 @@
 import { backoffMs, netFailure } from "./joinProtocol";
 import type { MotionReading } from "./motion";
 import { gamepadsOf } from "./nativePad";
-import { profileFor } from "./padProfiles";
+import { deadzonesFor, profileFor } from "./padProfiles";
 import { IDLE_PAD, mergePads, padFromGamepads, type PadState } from "./remotePlayStream";
 
 /** Keepalive: the pad is sent at least this often (the engine lets go after a second of nothing). */
@@ -334,7 +334,7 @@ export class PadClient {
 
   /** The pad this phone is now: its on-screen controller and any controller attached to it. */
   current(): PadState {
-    const pads = padFromGamepads(gamepadsOf(typeof navigator === "undefined" ? undefined : navigator), profileFor);
+    const pads = padFromGamepads(gamepadsOf(typeof navigator === "undefined" ? undefined : navigator), profileFor, deadzonesFor);
     const touch = this.o.touchPad();
     return { ...mergePads(pads, touch), touch: touch.touch ?? null, motion: this.o.motion?.() ?? null };
   }
