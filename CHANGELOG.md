@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 12.6.44
 
 **TV mode (#976)**
 - **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
