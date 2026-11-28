@@ -30,6 +30,7 @@ namespace play::ui
     X(hint_phone, "Phone code")                                                                                 \
     X(inv_got, "%s sent you an invite.")                                                                        \
     X(inv_unreachable, "This PS5 can't reach %s's game. It needs to be on this network or on Tailscale.")       \
+    X(inv_bridge_need, "To play %s's game over the internet, this PS5 needs PS5Upload 13.0.0 or later open on a computer on your home network, with \"PS5Upload Play can find this computer\" on in PS5Upload › Settings › App › Play Together.") \
     X(why_friend, "Your friend's PS5Upload doesn't remember this PS5 any more. Join once with a code, then Play again works.") \
     X(hint_choose, "Choose")                                                                                    \
     X(hint_back, "Back")                                                                                        \
@@ -104,6 +105,12 @@ namespace play::ui
     X(fail_busy, "PS5Upload is busy. Try again in a minute.")                                                   \
     X(fail_old_engine, "That PS5Upload is too old for PS5Upload Play. Update PS5Upload on that computer.")      \
     X(fail_closed, "PS5Upload closed the connection.")                                                          \
+    X(fail_bridge_old, "PS5Upload at %s is too old to play over the internet. Update it to 13.0.0 or later.")   \
+    X(fail_bridge_reach, "Couldn't reach PS5Upload at %s to play over the internet. Is it open on that computer?") \
+    X(fail_bridge_hub, "Your PS5Upload couldn't reach the Play Together server. Check that computer's internet connection.") \
+    X(fail_bridge_room, "Your friend's internet invite isn't open any more. Ask them for a new one.")           \
+    X(fail_bridge_direct, "Your network and your friend's couldn't connect over the internet. Try again, or play over Tailscale.") \
+    X(fail_bridge_other, "Your PS5Upload couldn't open the internet invite (%s).")                              \
     X(end_left, "You left the game.")                                                                           \
     X(end_kicked, "Your friend took you out of the game.")                                                      \
     X(end_closed, "Your friend closed Play Together.")                                                          \

@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload 正忙。請過一分鐘再試。",
   "fail_old_engine": "那個 PS5Upload 版本太舊，無法搭配 PS5Upload Play 使用。請更新那台電腦上的 PS5Upload。",
   "fail_closed": "PS5Upload 關閉了連線。",
+  "fail_bridge_old": "%s 上的 PS5Upload 版本太舊，無法透過網際網路遊玩。請更新到 13.0.0 或更新版本。",
+  "fail_bridge_reach": "無法連線到 %s 上的 PS5Upload 來透過網際網路遊玩。它是否已在那台電腦上開啟？",
+  "fail_bridge_hub": "你的 PS5Upload 無法連線到一起暢玩的伺服器。請檢查那台電腦的網際網路連線。",
+  "fail_bridge_room": "好友的網際網路邀請已不再開放。請向對方要一個新的。",
+  "fail_bridge_direct": "你的網路和好友的網路無法透過網際網路連線。請再試一次，或透過 Tailscale 遊玩。",
+  "fail_bridge_other": "你的 PS5Upload 無法開啟網際網路邀請（%s）。",
   "end_left": "你已離開遊戲。",
   "end_kicked": "好友把你移出了遊戲。",
   "end_closed": "好友關閉了一起暢玩。",
@@ -187,5 +193,6 @@
   "hint_phone": "手機碼",
   "inv_got": "%s 傳來了邀請。",
   "inv_unreachable": "這台 PS5 連不上 %s 的遊戲。它需要在同一網路或 Tailscale 上。",
+  "inv_bridge_need": "要透過網際網路玩 %s 的遊戲，這台 PS5 需要你家用網路中的一台電腦上開啟 PS5Upload 13.0.0 或更新版本，並在 PS5Upload › 設定 › 應用程式 › 一起暢玩 中開啟「PS5Upload Play 可以找到這台電腦」。",
   "why_friend": "你朋友的 PS5Upload 已經不記得這台 PS5 了。先用代碼加入一次，「再玩一次」就能用了。"
 }

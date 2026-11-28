@@ -463,10 +463,20 @@ void test_invite_links()
     CHECK(inv.internet && !std::strcmp(inv.key, "KEY12345678") && inv.n_routes == 2);
     CHECK(!std::strcmp(inv.routes[0].addr, "192.168.1.20") && !inv.routes[0].tailnet);
     CHECK(!std::strcmp(inv.routes[1].addr, "100.101.2.3") && inv.routes[1].tailnet);
-    // Internet only: no direct route (the play-routes work adds the internet one).
+    // The room and the certificate for the bridge (docs/ROUTES.md §6), and the host's first page.
+    CHECK(!std::strcmp(inv.room, "AbCdEfGhIjKlMnOpQrStUh") && !std::strcmp(inv.fp, "AA:BB"));
+    CHECK(!std::strcmp(inv.home_addr, "192.168.1.20") && inv.home_port == 19113);
+    // Internet only: no direct route; the bridge is its way.
     inv = invite::Invite{};
     CHECK(invite::add_link("https://ps5upload.phantomptr.com/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA&hub=h", inv));
-    CHECK(inv.internet && inv.n_routes == 0);
+    CHECK(inv.internet && inv.n_routes == 0 && !std::strcmp(inv.room, "AbCdEfGhIjKlMnOpQrStUh") && !inv.home_addr[0]);
+    // A room or a certificate that isn't one: the invite still reads, with no bridge.
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://x/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=AA:B&hub=h", inv) && !inv.room[0]);
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://x/join/#room=short&k=KEY12345678&fp=AA:BB&hub=h", inv) && !inv.room[0] && !inv.fp[0]);
+    inv = invite::Invite{};
+    CHECK(invite::add_link("https://x/join/#room=AbCdEfGhIjKlMnOpQrStUh&k=KEY12345678&fp=ZZ:BB&hub=h", inv) && !inv.room[0]);
     // Public, https and loopback pages are not direct routes; bad keys and other pages are refused.
     inv = invite::Invite{};
     CHECK(invite::add_link("http://8.8.8.8:19113/join#i=abcdefgh123", inv) && inv.n_routes == 0);
@@ -547,6 +557,24 @@ void test_friends_and_hello()
     const Friend *r[Friends::kMax];
     CHECK(g.recent(r, Friends::kMax) == 2 && !std::strcmp(r[0]->name, "Laptop") && r[0]->tailnet &&
           !std::strcmp(r[0]->path, "/p/api/join/ws") && !std::strcmp(r[1]->pass, "pass1"));
+    // The last internet invite kept with a host (Play again over the bridge) reads back with it.
+    CHECK(Friends::set_link(*g.find("100.101.2.3", 19113), "AbCdEfGhIjKlMnOpQrStUh", "AA:BB", "KEY12345678"));
+    CHECK(!Friends::set_link(*g.find("100.101.2.3", 19113), "AbCdEfGhIjKlMnOpQrStUh", "AA|BB", "KEY12345678"));
+    {
+        char t2[4096];
+        const std::size_t n2 = g.write(t2, sizeof t2);
+        Friends h2;
+        h2.parse(t2, n2);
+        const Friend *l = h2.find("100.101.2.3", 19113);
+        CHECK(l && !std::strcmp(l->room, "AbCdEfGhIjKlMnOpQrStUh") && !std::strcmp(l->fp, "AA:BB") &&
+              !std::strcmp(l->key, "KEY12345678") && !std::strcmp(l->pass, "pass2"));
+        const Friend *d = h2.find("192.168.1.20", 19113);
+        CHECK(d && !d->room[0] && !d->key[0]);
+        // A link line for a host not read is left out.
+        const char *orphan = "friend=1.2.3.4|5|0|1||pp|n\nlink=9.9.9.9|5|AbCdEfGhIjKlMnOpQrStUh|AA|KEY12345678\n";
+        h2.parse(orphan, std::strlen(orphan));
+        CHECK(h2.find("1.2.3.4", 5) && !h2.find("1.2.3.4", 5)->room[0]);
+    }
     // Refreshing keeps one entry; the oldest makes room when full.
     CHECK(g.remember("192.168.1.20", 19113, false, "", "Desk", "pass3"));
     CHECK(g.recent(r, Friends::kMax) == 2 && !std::strcmp(r[0]->pass, "pass3"));

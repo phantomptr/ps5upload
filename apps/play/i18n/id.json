@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload sedang sibuk. Coba lagi dalam semenit.",
   "fail_old_engine": "PS5Upload itu terlalu lama untuk PS5Upload Play. Perbarui PS5Upload di komputer itu.",
   "fail_closed": "PS5Upload menutup koneksi.",
+  "fail_bridge_old": "PS5Upload di %s terlalu lama untuk bermain lewat internet. Perbarui ke 13.0.0 atau lebih baru.",
+  "fail_bridge_reach": "Tidak bisa menjangkau PS5Upload di %s untuk bermain lewat internet. Apakah terbuka di komputer itu?",
+  "fail_bridge_hub": "PS5Upload Anda tidak bisa menjangkau server Main Bareng. Periksa koneksi internet komputer itu.",
+  "fail_bridge_room": "Undangan internet teman Anda sudah tidak terbuka. Minta yang baru.",
+  "fail_bridge_direct": "Jaringan Anda dan jaringan teman Anda tidak bisa terhubung lewat internet. Coba lagi, atau main lewat Tailscale.",
+  "fail_bridge_other": "PS5Upload Anda tidak bisa membuka undangan internet (%s).",
   "end_left": "Anda keluar dari game.",
   "end_kicked": "Teman Anda mengeluarkan Anda dari game.",
   "end_closed": "Teman Anda menutup Main Bareng.",
@@ -187,5 +193,6 @@
   "hint_phone": "Kode ponsel",
   "inv_got": "%s mengirimimu undangan.",
   "inv_unreachable": "PS5 ini tidak bisa menjangkau game %s. Harus di jaringan ini atau di Tailscale.",
+  "inv_bridge_need": "Untuk memainkan game %s lewat internet, PS5 ini butuh PS5Upload 13.0.0 atau lebih baru yang terbuka di komputer di jaringan rumah Anda, dengan “PS5Upload Play dapat menemukan komputer ini” aktif di PS5Upload › Pengaturan › Aplikasi › Main Bareng.",
   "why_friend": "PS5Upload temanmu sudah tidak ingat PS5 ini. Gabung sekali dengan kode, lalu \"Main lagi\" berfungsi."
 }

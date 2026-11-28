@@ -6,6 +6,9 @@
 // Hub load is kept small (owner rule): the room is open only while armed (the home screen, at most
 // kOpenFor at a stretch), the app sends nothing but `host`, its answers and `leave`, and the hub's
 // pings keep it; the link closes when the screen goes or the time is up.
+//
+// This is the app's only connection to the hub (net::HubLink). Playing an internet invite never
+// opens another: this home's PS5Upload talks to the hub for the bridge (docs/ROUTES.md §6).
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "../core/invite.hpp"
@@ -59,6 +62,12 @@ class WaitingRoom
     {
         busy_ = b;
     }
+    // Whether this home has a PS5Upload the app can play an internet invite through (the bridge,
+    // docs/ROUTES.md §6): such an invite is then answered yes even when nothing direct reaches it.
+    void set_bridge(bool b) noexcept
+    {
+        bridge_ = b;
+    }
     void stop() noexcept;
     // The room this app hosts and its hub's host: for the hello's `inbox`, so a host can send an
     // invite later. Empty until init().
@@ -82,7 +91,7 @@ class WaitingRoom
 
     pthread_t thread_{};
     pthread_mutex_t lock_;
-    std::atomic<bool> run_{false}, busy_{false};
+    std::atomic<bool> run_{false}, busy_{false}, bridge_{false};
     std::atomic<std::uint64_t> armed_until_{0};
     View view_;
     char url_[128] = {};

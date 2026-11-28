@@ -76,6 +76,7 @@ struct GuestView
     int route_switches = 0;
     std::uint64_t route_changed_us = 0;
     char route_why[12] = {};
+    char bridge_at[64] = {}; // this home's PS5Upload (addr:port), when a join through it failed
 };
 
 // How a join goes beyond the code (docs/EASY_JOIN.md): an invite link's key, a friend pass, asking
@@ -89,6 +90,10 @@ struct JoinExtras
     char inbox_room[24] = {};
     char inbox_hub[64] = {};
     char path[80] = {}; // "" = /api/join/ws
+    // The invite key the hello carries on the bridge way only (docs/ROUTES.md §6): Play again
+    // through this home's PS5Upload asks with the host's last internet invite, because an engine
+    // takes no friend pass from an internet room. Unused when `invite` is set.
+    char bridge_invite[132] = {};
 };
 
 class Guest
@@ -139,6 +144,7 @@ class Guest
 
     // guest_route.cpp: the ways (docs/ROUTES.md)
     bool route_open(net::WsClient &ws, int way, int *status) noexcept;
+    bool route_is_bridge(int way) noexcept; // -1: the one in use
     void route_pick() noexcept;
     void route_tick(std::uint64_t now) noexcept;
     bool route_switch(int to, const char *why) noexcept;
@@ -184,5 +190,9 @@ class Guest
     pthread_t route_thread_{};
     std::int64_t last_skipped_ = -1;
     int lost_tries_ = 0;
+    // why the last try through this home's PS5Upload failed ("" none): the bridge's own reason,
+    // "old" (no /api/join/bridge there: older than 13.0.0) or "unreachable"
+    char bridge_why_[16] = {};
+    char bridge_at_[64] = {};
 };
 } // namespace play

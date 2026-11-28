@@ -35,6 +35,17 @@ Friend *Friends::find(const char *addr, std::uint16_t port) noexcept
     return nullptr;
 }
 
+bool Friends::set_link(Friend &f, const char *room, const char *fp, const char *key) noexcept
+{
+    if (!room || !fp || !key || !safe(room) || !safe(fp) || !safe(key) || std::strlen(room) >= sizeof f.room ||
+        std::strlen(fp) >= sizeof f.fp || std::strlen(key) >= sizeof f.key)
+        return false;
+    std::snprintf(f.room, sizeof f.room, "%s", room);
+    std::snprintf(f.fp, sizeof f.fp, "%s", fp);
+    std::snprintf(f.key, sizeof f.key, "%s", key);
+    return true;
+}
+
 Friend *Friends::remember(const char *addr, std::uint16_t port, bool tailnet, const char *path, const char *name,
                           const char *pass) noexcept
 {
@@ -108,14 +119,21 @@ std::size_t Friends::write(char *out, std::size_t cap) const noexcept
         n += l;
         out[n] = 0;
     };
-    add("# PS5Upload Play: hosts to play again with (addr|port|tailnet|seen|path|pass|name)\n");
-    char line[320];
+    add("# PS5Upload Play: hosts to play again with (addr|port|tailnet|seen|path|pass|name), and the last\n"
+        "# internet invite played with each (link=addr|port|room|fp|key)\n");
+    char line[400];
     for (const auto &f : list)
         if (f.addr[0])
         {
             std::snprintf(line, sizeof line, "friend=%s|%u|%d|%u|%s|%s|%s\n", f.addr, static_cast<unsigned>(f.port),
                           f.tailnet ? 1 : 0, f.seen, f.path, f.pass, f.name);
             add(line);
+            if (f.room[0] && f.fp[0] && f.key[0])
+            {
+                std::snprintf(line, sizeof line, "link=%s|%u|%s|%s|%s\n", f.addr, static_cast<unsigned>(f.port), f.room,
+                              f.fp, f.key);
+                add(line);
+            }
         }
     return n;
 }
@@ -126,7 +144,7 @@ void Friends::parse(const char *text, std::size_t len) noexcept
     clock = 0;
     int fi = 0;
     std::size_t i = 0;
-    while (i < len && fi < kMax)
+    while (i < len)
     {
         std::size_t e = i;
         while (e < len && text[e] != '\n')
@@ -134,7 +152,29 @@ void Friends::parse(const char *text, std::size_t len) noexcept
         char line[400];
         copy(line, sizeof line, text + i, e - i);
         i = e + 1;
-        if (std::strncmp(line, "friend=", 7))
+        if (!std::strncmp(line, "link=", 5))
+        {
+            // addr|port|room|fp|key, for a friend read above
+            char *fld[5] = {};
+            char *p = line + 5;
+            int k = 0;
+            for (; k < 5 && p; ++k)
+            {
+                fld[k] = p;
+                char *bar = k < 4 ? std::strchr(p, '|') : nullptr;
+                if (bar)
+                    *bar = 0;
+                p = bar ? bar + 1 : nullptr;
+            }
+            if (k == 5 && fld[4])
+            {
+                const long port = std::strtol(fld[1], nullptr, 10);
+                if (Friend *f = port > 0 && port < 65536 ? find(fld[0], static_cast<std::uint16_t>(port)) : nullptr)
+                    set_link(*f, fld[2], fld[3], fld[4]);
+            }
+            continue;
+        }
+        if (std::strncmp(line, "friend=", 7) || fi >= kMax)
             continue;
         // addr|port|tailnet|seen|path|pass|name (the name last: the only free text)
         const char *f[7] = {};

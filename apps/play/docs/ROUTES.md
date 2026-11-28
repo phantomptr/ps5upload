@@ -11,7 +11,8 @@ Code:
 | Tiers, meters, switch rules, backup budget (pure logic) | `apps/play/src/net/route.{hpp,cpp}`, tests `apps/play/tests/test_route.cpp` |
 | Checking one way over the engine's checks socket | `apps/play/src/net/route_probe.{hpp,cpp}` |
 | The guest's ways: race, backups, switching | `apps/play/src/app/guest_route.cpp` |
-| Ways from discovery; the bridge way | `apps/play/src/app/route_pick.{hpp,cpp}` |
+| Ways from discovery; the bridge way; this home's PS5Upload; the ways for a handed invite and Play again | `apps/play/src/app/route_pick.{hpp,cpp}` |
+| Easy join's invites into the ways (§6) | `apps/play/src/app/easy.cpp` (`join_invite`, `join_again`), `waiting_room.cpp` |
 | On screen | `apps/play/src/app/route_ui.{hpp,cpp}` |
 | Engine: checks socket, tiers, per-guest way and tier, `/api/join/routes` | `engine/crates/ps5upload-engine/src/join_route.rs` |
 | Engine: the bridge for internet invites | `engine/crates/ps5upload-engine/src/join_net/bridge.rs` |
@@ -148,7 +149,7 @@ every guest, including those on a plain socket.
 |---|---|---|---|
 | `lan` | Home network | The engine's LAN address | UDP discovery, the helper's mesh, remembered or typed |
 | `tailscale` | Tailscale | The helper's forward on `127.0.0.1` (helper `/v1/tailnet/forward`), or a 100.x address the console can reach directly | The helper's mesh (tailnet engines) |
-| `internet` | Internet, through your PS5Upload | This home's own PS5Upload engine (`/api/join/bridge`) | An internet invite's room and certificate (see §5) |
+| `internet` | Internet, through your PS5Upload | This home's own PS5Upload engine (`/api/join/bridge`) | An internet invite's room and certificate (see §6) |
 
 - The **shortest kind wins ties**: `lan` before `tailscale` before `internet`.
 - A **better tier always beats a shorter kind**. A Poor home network, such as a far Wi-Fi
@@ -281,6 +282,7 @@ media.
 | Browser guest join | join, offer, 5–11 candidates out; joined, answer, a few candidates in; leave | 2–6 KB | Until the data channel opens (seconds), at most 3 min (the hub removes it) |
 | Host (engine) | host, hosted; then one signal per guest message; a WebSocket ping every 20 s | Tens of bytes a minute while idle | While an internet invite is open |
 | Changing way, a backup check, stats | none | 0 | 0 |
+| The app itself | only easy join's waiting room (EASY_JOIN.md, "Hub load per join"); nothing more for an internet invite | 0 more | 0 more |
 
 Per game session with one internet guest, that comes to about 10–20 messages, a few kilobytes
 and a few seconds of a guest socket.
@@ -298,32 +300,86 @@ Limits already in place (PROTOCOL.md):
 - idle sockets closed after 60 s;
 - 10 s to say `host` or `join`.
 
-## 6. Interfaces for the easy-join work
+## 6. Easy join's internet invites go through the bridge
 
-The app never talks to the hub. To join an internet invite from a PS5, the easy-join flow
-(QR code, code, or "Play on my PS5" from the phone) gives the guest:
+**One hub connection.** The app's only connection to the hub is easy join's waiting room
+(`net::HubLink`, `app/waiting_room.cpp`): its room for the phone's "Play on my PS5" and a host's
+"Send invite". Playing an internet invite never opens another one: this home's PS5Upload talks to
+the hub for the bridge.
+
+**Where the invites come from.** An invite reaches the app three ways:
+
+- the phone hand-off (the TV's QR code, then "Play on my PS5");
+- a host's push ("Send invite to <friend>'s PS5");
+- Play again with a remembered host.
+
+**When an invite is internet-only** (none of its direct routes answers), the app joins it through
+the bridge, exactly as below (`App::join_invite`, `App::join_again` in `app/easy.cpp`, with the
+pure parts in `app/route_pick.cpp`):
 
 ```cpp
 #include "app/route_pick.hpp"
+char own[64]; std::uint16_t own_port;
+const bool can_bridge = inv.room[0] && own_engine(found, n_found, own, sizeof own, &own_port);
 route::Candidate ways[route::Selector::kMax];
-int n = route_candidates(found, n_found, engine_name, engine_id, addr, port, ways, route::Selector::kMax);
-route::Candidate b;
-if (route_bridge(own_engine_addr, own_engine_port, room /* 22 chars */, fp /* AA:BB:… */, b) && n < route::Selector::kMax)
-    ways[n++] = b;   // used only when no direct way answers
-guest->set_routes(ways, n);
-guest->start(addr, port, code_or_empty, name, version);
+// The invite's direct route (the waiting room kept the one that answered), then
+// route_bridge(own, own_port, inv.room, inv.fp) last: used only when no direct way answers.
+int n = invite_ways(inv, can_bridge ? own : nullptr, own_port, ways, route::Selector::kMax);
+guest->set_routes(ways, n);   // the app adds discovery's other addresses for the same engine
+guest->start(direct ? route_addr : own, direct ? route_port : own_port, "", name, version);
 ```
 
-- **`room` and `fp`** are the internet link's `#room=…&fp=…`. The invite key `k` is still sent in
-  the hello, inside the bridge's DTLS channel.
-- **`own_engine_addr:port`** is PS5Upload on the guest's own network (UDP discovery answers, or
-  the helper's mesh). It must be 13.0.0 or later, because older engines answer
-  `/api/join/bridge` with 404.
+- **`room` and `fp`** are the internet link's `#room=…&fp=…` (`invite::Invite::room`, `fp`).
+  The invite key `k` is still sent in the hello, inside the bridge's DTLS channel.
+- **`own_engine`** is PS5Upload on the guest's own network: a UDP discovery answer, or an engine
+  from the helper's mesh that is on this network (not over Tailscale). One that says 13.0.0 or
+  later is preferred. An older one is still tried: it answers `/api/join/bridge` with 404, and
+  the app says to update it.
+- **The waiting room says yes** to an internet-only hand-off when this home has a PS5Upload
+  (`WaitingRoom::set_bridge`), so the phone hears at once that the PS5 will play it.
+- **No PS5Upload on this network:** the waiting room answers `invite_ok: false, why: route`. The TV
+  then says what is needed (`inv_bridge_need`): "To play Alex's game over the internet, this PS5
+  needs PS5Upload 13.0.0 or later open on a computer on your home network, with "PS5Upload Play
+  can find this computer" on in PS5Upload › Settings › App › Play Together." It never fails
+  quietly.
 - **Bridge failures** arrive in the log as `failed (<why>)`. The reasons are `hub`, `no_room`,
-  `room_full`, `no_direct`, `mismatch`, `bad`, `offer` and `busy` (join_net/bridge.rs).
+  `room_full`, `no_direct`, `mismatch`, `bad`, `offer` and `busy` (join_net/bridge.rs). The app
+  adds `old` (404) and `unreachable`. A join that fails there ends as `failed`, with why
+  `bridge_<why>`, and a plain message:
+
+| Why | What the TV says |
+|---|---|
+| `old` | That PS5Upload is too old to play over the internet: update it to 13.0.0 or later |
+| `unreachable` | Couldn't reach that PS5Upload: is it open? |
+| `hub` | Your PS5Upload couldn't reach the Play Together server |
+| `no_room`, `mismatch` | Your friend's internet invite isn't open any more: ask for a new one |
+| `room_full` | The game is full |
+| `no_direct` | The two networks couldn't connect over the internet: try again, or use Tailscale |
+| `busy` | PS5Upload is busy |
+| any other | Your PS5Upload couldn't open the internet invite (`<why>`) |
+
 - **Each way joins with the invite.** The engine's address list from discovery and the bridge go
   together: a guest on the host's Wi-Fi or tailnet then plays directly and keeps the bridge only
   as a last resort.
+
+**Play again over the bridge.** The engine gives no friend pass in an internet room, and takes
+none there (join.rs: passes are for the home network and Tailscale). So a remembered host also
+keeps the last internet invite the app joined it with (`friends.txt`, a `link=` line: room,
+certificate, key). That invite can come from the phone, a push, or the one link's `lan`/`ts`
+pages naming that host.
+
+Play again then uses:
+
+- the host's own address (through the helper for Tailscale);
+- the bridge with that room and certificate, last (`again_ways`).
+
+The hello carries the pass on every way. On the bridge way only, it also carries the kept
+invite's key (`JoinExtras::bridge_invite`), because the key is what asks there.
+
+This works while that invite is open: rooms and certificates change with each invite and engine
+run. An ended one says so plainly: `no_room` or `mismatch` from the bridge, or a `key` refusal,
+after which the app lets the kept invite go and keeps the pass. A Tailscale host whose helper
+forward fails goes straight to the bridge when it has one.
 
 ## 7. Diagnosis
 
@@ -334,7 +390,10 @@ The owner's rule: logs, API and a read-only MCP tool.
     reading at connect;
   - `route: upgrade|rescue|lost from X to Y`;
   - `route: now on Y (why) in N ms`;
-  - `route: through this home's PS5Upload: open|failed (why)`.
+  - `route: through this home's PS5Upload: open|failed (why)`, or `… at ADDR:PORT: failed (old|unreachable, http N)`;
+  - `room: an invite (…, over the internet, through this home's PS5Upload)` or `(…, an internet invite, and no PS5Upload on this network to play it through)`;
+  - `app: joining ADDR:PORT (invite; N way(s), this home's PS5Upload as the last | only through this home's PS5Upload)`;
+  - `app: kept this internet invite for Play again`, `app: the host's internet invite has ended: let it go`.
 - **The engine's log:**
   - `join: Player N on <console> plays over <way> (<tier>, K backup(s))`;
   - `… changed way: a -> b (<tier>, n change(s) so far)`.
@@ -367,6 +426,19 @@ The owner's rule: logs, API and a read-only MCP tool.
     socket: no reconnect screen, and pictures go on;
   - the bridge is used when nothing direct answers, and a failed bridge says why;
   - an engine without the checks socket still joins.
+- **Easy join through the bridge** (`make -C apps/play e2e`, §12; the stand-in is the hub, this
+  home's PS5Upload and the host's engine, and takes no pass through a bridge, as join.rs does):
+  - the phone hands over an internet-only invite: the waiting room says yes, and the app joins
+    through the bridge with the invite's room and certificate, asking with its key;
+  - with no PS5Upload on this network the phone hears no, and the app says what it needs;
+  - Play again over the bridge (the host's address dark): the kept room, certificate and key, with
+    the pass; Play again whose host answers sends the pass alone, with no key and no bridge;
+  - a kept invite that ended fails with the bridge's reason (`bridge_no_room`), or is refused
+    (`key`);
+  - a join with a friend pass changes way mid-game: resumed with the token, no reconnect screen,
+    no refusal, no second pass.
+- **Unit tests** (`test_core`): an invite's room, certificate and the host's first page; a host's
+  kept invite read back from `friends.txt`.
 - **Engine tests:**
   - `join_route` (the table, the engine's reading, checks socket limits and bursts, the routes
     document);

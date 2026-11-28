@@ -16,6 +16,13 @@ struct Friend
     char name[48] = {};   // the host's computer, as shown
     char pass[48] = {};   // the friend pass (asks again; the host still decides)
     std::uint32_t seen = 0;
+    // The last internet invite played with this host (docs/ROUTES.md §6): its room, the host
+    // engine's certificate and the invite's key. Play again joins it through this home's
+    // PS5Upload (the bridge) when the host's own address doesn't answer; it works while that
+    // invite is open (the engine takes no pass from an internet room, so the key asks there).
+    char room[24] = {};
+    char fp[100] = {};
+    char key[132] = {};
 };
 
 struct Friends
@@ -28,6 +35,9 @@ struct Friends
     Friend *remember(const char *addr, std::uint16_t port, bool tailnet, const char *path, const char *name,
                      const char *pass) noexcept;
     Friend *find(const char *addr, std::uint16_t port) noexcept;
+    // Keeps an internet invite's room, certificate and key with a remembered host; false when a
+    // field can't be kept (too long, or holds a '|' or a line break).
+    static bool set_link(Friend &f, const char *room, const char *fp, const char *key) noexcept;
     void forget(const Friend *f) noexcept;
     void forget_all() noexcept;
     // Most recent first; returns how many.

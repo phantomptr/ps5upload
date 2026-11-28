@@ -206,6 +206,12 @@ int main(int argc, char **argv)
     f.guest.phase = GuestView::refused;
     std::snprintf(f.guest.why, sizeof f.guest.why, "not_playing");
     shot("refused", App::Screen::joining, f);
+    // An internet invite through this home's PS5Upload that is too old for the bridge.
+    f.guest.phase = GuestView::failed;
+    std::snprintf(f.guest.why, sizeof f.guest.why, "bridge_old");
+    std::snprintf(f.guest.bridge_at, sizeof f.guest.bridge_at, "192.168.86.31:19113");
+    shot("failed-bridge", App::Screen::joining, f);
+    f.guest.bridge_at[0] = 0;
     f.guest.phase = GuestView::joined;
     f.guest.player = 2;
     std::snprintf(f.guest.host, sizeof f.guest.host, "Sam's PC");

@@ -46,6 +46,7 @@ bool Guest::start(const char *addr, std::uint16_t port, const char *code, const 
     switch_to_ = -1;
     last_skipped_ = -1;
     lost_tries_ = 0;
+    bridge_why_[0] = 0;
     pthread_mutex_lock(&lock_);
     view_ = GuestView{};
     std::snprintf(view_.engine, sizeof view_.engine, "%s:%u", addr, static_cast<unsigned>(port));
@@ -135,12 +136,15 @@ bool Guest::connect_and_hello(bool resume) noexcept
 // The hello for a join or a resume, on any way (a change of way sends the same one, with the token).
 std::size_t Guest::make_hello(char *out, std::size_t cap, bool resume, int way) noexcept
 {
-    (void)way;
     // main10: HDR pictures are shown, tone-mapped to SDR (display.cpp, core/hdr.cpp).
     const proto::ClientCaps caps{version_, true, true, true, true};
     // Coming back: the token, and the code too in case the seat is gone but the invite still works.
     proto::HelloExtras x;
     x.invite = extras_.invite;
+    // Play again through this home's PS5Upload: the host's engine takes no pass from an internet
+    // room, so the last internet invite's key asks there (the pass still goes with it).
+    if (!extras_.invite[0] && extras_.bridge_invite[0] && route_is_bridge(way))
+        x.invite = extras_.bridge_invite;
     x.again = extras_.again;
     x.remember = extras_.remember;
     x.inbox_room = extras_.inbox_room;
@@ -169,6 +173,17 @@ void Guest::run() noexcept
             if (!ever_joined)
             {
                 const char *e = ws_.error();
+                if (bridge_why_[0] && route_is_bridge(-1))
+                {
+                    // Through this home's PS5Upload: its own reason, for a plain message.
+                    char why[24];
+                    std::snprintf(why, sizeof why, "bridge_%s", bridge_why_);
+                    pthread_mutex_lock(&lock_);
+                    std::snprintf(view_.bridge_at, sizeof view_.bridge_at, "%s", bridge_at_);
+                    pthread_mutex_unlock(&lock_);
+                    set_phase(GuestView::failed, why);
+                    break;
+                }
                 set_phase(GuestView::failed, !std::strcmp(e, "busy") ? "busy"
                                              : !std::strcmp(e, "upgrade") ? "old_engine"
                                                                           : "unreachable");

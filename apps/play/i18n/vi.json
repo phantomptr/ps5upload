@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload đang bận. Hãy thử lại sau một phút.",
   "fail_old_engine": "PS5Upload đó quá cũ cho PS5Upload Play. Hãy cập nhật PS5Upload trên máy tính đó.",
   "fail_closed": "PS5Upload đã đóng kết nối.",
+  "fail_bridge_old": "PS5Upload tại %s quá cũ để chơi qua internet. Hãy cập nhật lên 13.0.0 trở lên.",
+  "fail_bridge_reach": "Không kết nối được PS5Upload tại %s để chơi qua internet. Nó có đang mở trên máy tính đó không?",
+  "fail_bridge_hub": "PS5Upload của bạn không kết nối được máy chủ Chơi cùng nhau. Hãy kiểm tra kết nối internet của máy tính đó.",
+  "fail_bridge_room": "Lời mời qua internet của bạn bè không còn mở nữa. Hãy xin một lời mời mới.",
+  "fail_bridge_direct": "Mạng của bạn và mạng của bạn bè không kết nối được qua internet. Hãy thử lại, hoặc chơi qua Tailscale.",
+  "fail_bridge_other": "PS5Upload của bạn không mở được lời mời qua internet (%s).",
   "end_left": "Bạn đã rời trò chơi.",
   "end_kicked": "Bạn bè đã mời bạn ra khỏi trò chơi.",
   "end_closed": "Bạn bè đã đóng Chơi cùng nhau.",
@@ -187,5 +193,6 @@
   "hint_phone": "Mã điện thoại",
   "inv_got": "%s đã gửi cho bạn một lời mời.",
   "inv_unreachable": "PS5 này không kết nối được game của %s. Cần cùng mạng này hoặc dùng Tailscale.",
+  "inv_bridge_need": "Để chơi trò chơi của %s qua internet, PS5 này cần PS5Upload 13.0.0 trở lên đang mở trên một máy tính trong mạng nhà bạn, và “PS5Upload Play có thể tìm thấy máy tính này” đang bật trong PS5Upload › Cài đặt › Ứng dụng › Chơi cùng nhau.",
   "why_friend": "PS5Upload của bạn bạn không còn nhớ PS5 này. Tham gia một lần bằng mã, sau đó \"Chơi lại\" sẽ hoạt động."
 }

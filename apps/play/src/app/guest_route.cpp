@@ -144,8 +144,16 @@ bool Guest::route_open(net::WsClient &ws, int way, int *status) noexcept
     // This home's PS5Upload joins the host's internet room for us (engine join_net/bridge.rs):
     // it answers "connecting", then "open" (or "failed" with why), and the socket is then the
     // guest socket.
+    bridge_why_[0] = 0;
+    std::snprintf(bridge_at_, sizeof bridge_at_, "%s:%u", c.addr, static_cast<unsigned>(c.port));
     if (!ws.open(c.addr, c.port, "/api/join/bridge", 4000, status))
+    {
+        // It answered without the bridge (older than 13.0.0: 404), or not at all.
+        std::snprintf(bridge_why_, sizeof bridge_why_, "%s", *status > 0 ? "old" : "unreachable");
+        log("route: through this home's PS5Upload at %s:%u: failed (%s, http %d)", c.addr,
+            static_cast<unsigned>(c.port), bridge_why_, *status);
         return false;
+    }
     char m[256];
     json::Writer w(m, sizeof m);
     w.raw("{\"bridge\":{\"v\":1,\"room\":").str(c.room).raw(",\"fp\":").str(c.fp).raw("}}");
@@ -159,7 +167,10 @@ bool Guest::route_open(net::WsClient &ws, int way, int *status) noexcept
     {
         const auto got = ws.next(200);
         if (got == net::WsClient::Got::closed)
+        {
+            std::snprintf(bridge_why_, sizeof bridge_why_, "%s", "closed");
             return false;
+        }
         if (got != net::WsClient::Got::message || ws.op() != ws::kText)
             continue;
         json::Token tok[16];
@@ -184,12 +195,24 @@ bool Guest::route_open(net::WsClient &ws, int way, int *status) noexcept
             char why[24] = {};
             d.str(d.get(0, "why"), why, sizeof why);
             log("route: through this home's PS5Upload: failed (%s)", why);
+            std::snprintf(bridge_why_, sizeof bridge_why_, "%s", why[0] ? why : "bad");
             ws.close();
             return false;
         }
     }
+    log("route: through this home's PS5Upload: no answer in %u s", kBridgeMs / 1000);
+    std::snprintf(bridge_why_, sizeof bridge_why_, "%s", "no_direct");
     ws.close();
     return false;
+}
+
+bool Guest::route_is_bridge(int way) noexcept
+{
+    pthread_mutex_lock(&route_lock_);
+    const int i = way >= 0 ? way : sel_.active();
+    const bool b = n_routes_ > 0 && i >= 0 && i < n_routes_ && sel_.at(i).way == route::Way::bridge;
+    pthread_mutex_unlock(&route_lock_);
+    return b;
 }
 
 void Guest::route_pick() noexcept

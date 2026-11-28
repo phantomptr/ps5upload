@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload가 바빠요. 잠시 후 다시 시도하세요.",
   "fail_old_engine": "그 PS5Upload는 PS5Upload Play를 쓰기에는 너무 오래됐어요. 그 컴퓨터의 PS5Upload를 업데이트하세요.",
   "fail_closed": "PS5Upload가 연결을 닫았어요.",
+  "fail_bridge_old": "%s의 PS5Upload는 인터넷으로 플레이하기에 너무 오래됐어요. 13.0.0 이상으로 업데이트하세요.",
+  "fail_bridge_reach": "인터넷으로 플레이하기 위해 %s의 PS5Upload에 연결하지 못했어요. 그 컴퓨터에서 열려 있나요?",
+  "fail_bridge_hub": "PS5Upload가 함께 플레이 서버에 연결하지 못했어요. 그 컴퓨터의 인터넷 연결을 확인하세요.",
+  "fail_bridge_room": "친구의 인터넷 초대가 더 이상 열려 있지 않아요. 새 초대를 부탁하세요.",
+  "fail_bridge_direct": "내 네트워크와 친구의 네트워크가 인터넷으로 연결되지 못했어요. 다시 시도하거나 Tailscale로 플레이하세요.",
+  "fail_bridge_other": "PS5Upload가 인터넷 초대를 열지 못했어요 (%s).",
   "end_left": "게임에서 나왔어요.",
   "end_kicked": "친구가 나를 게임에서 내보냈어요.",
   "end_closed": "친구가 함께 플레이를 닫았어요.",
@@ -187,5 +193,6 @@
   "hint_phone": "휴대폰 코드",
   "inv_got": "%s님이 초대를 보냈어요.",
   "inv_unreachable": "이 PS5에서 %s님의 게임에 연결할 수 없어요. 같은 네트워크나 Tailscale에 있어야 해요.",
+  "inv_bridge_need": "%s님의 게임을 인터넷으로 하려면, 집 네트워크의 컴퓨터에서 PS5Upload 13.0.0 이상이 열려 있고 PS5Upload › 설정 › 앱 › 함께 플레이에서 “PS5Upload Play가 이 컴퓨터를 찾을 수 있음”이 켜져 있어야 해요.",
   "why_friend": "친구의 PS5Upload가 이 PS5를 더 이상 기억하지 않아요. 코드로 한 번 참가하면 \"다시 플레이\"가 돼요."
 }

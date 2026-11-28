@@ -81,6 +81,12 @@
   "fail_busy": "O PS5Upload está ocupado. Tente de novo em um minuto.",
   "fail_old_engine": "Esse PS5Upload é antigo demais para o PS5Upload Play. Atualize o PS5Upload naquele computador.",
   "fail_closed": "O PS5Upload fechou a conexão.",
+  "fail_bridge_old": "O PS5Upload em %s é antigo demais para jogar pela internet. Atualize para 13.0.0 ou mais recente.",
+  "fail_bridge_reach": "Não foi possível alcançar o PS5Upload em %s para jogar pela internet. Ele está aberto nesse computador?",
+  "fail_bridge_hub": "Seu PS5Upload não conseguiu alcançar o servidor do Jogar juntos. Verifique a conexão com a internet desse computador.",
+  "fail_bridge_room": "O convite pela internet do seu amigo não está mais aberto. Peça um novo.",
+  "fail_bridge_direct": "A sua rede e a do seu amigo não conseguiram se conectar pela internet. Tente de novo, ou jogue pelo Tailscale.",
+  "fail_bridge_other": "Seu PS5Upload não conseguiu abrir o convite pela internet (%s).",
   "end_left": "Você saiu do jogo.",
   "end_kicked": "Seu amigo tirou você do jogo.",
   "end_closed": "Seu amigo fechou o Jogar juntos.",
@@ -187,5 +193,6 @@
   "hint_phone": "Código do celular",
   "inv_got": "%s enviou um convite para você.",
   "inv_unreachable": "Este PS5 não alcança o jogo de %s. Ele precisa estar nesta rede ou no Tailscale.",
+  "inv_bridge_need": "Para jogar o jogo de %s pela internet, este PS5 precisa do PS5Upload 13.0.0 ou mais recente aberto em um computador da sua rede de casa, com \"O PS5Upload Play pode encontrar este computador\" ligado em PS5Upload › Configurações › App › Jogar juntos.",
   "why_friend": "O PS5Upload do seu amigo não se lembra mais deste PS5. Entre uma vez com um código e depois \"Jogar de novo\" funciona."
 }

@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload が混み合っています。1 分ほどしてからもう一度お試しください。",
   "fail_old_engine": "その PS5Upload は PS5Upload Play を使うには古すぎます。そのコンピューターの PS5Upload を更新してください。",
   "fail_closed": "PS5Upload が接続を閉じました。",
+  "fail_bridge_old": "%s の PS5Upload はインターネット経由で遊ぶには古すぎます。13.0.0 以降に更新してください。",
+  "fail_bridge_reach": "インターネット経由で遊ぶための %s の PS5Upload に接続できませんでした。そのコンピューターで開いていますか？",
+  "fail_bridge_hub": "PS5Upload がいっしょにプレイのサーバーに接続できませんでした。そのコンピューターのインターネット接続を確認してください。",
+  "fail_bridge_room": "フレンドのインターネット招待はもう開いていません。新しい招待を頼んでください。",
+  "fail_bridge_direct": "あなたとフレンドのネットワークがインターネット経由でつながりませんでした。もう一度試すか、Tailscale で遊んでください。",
+  "fail_bridge_other": "PS5Upload がインターネット招待を開けませんでした（%s）。",
   "end_left": "ゲームから抜けました。",
   "end_kicked": "フレンドにゲームから外されました。",
   "end_closed": "フレンドが「いっしょにプレイ」を閉じました。",
@@ -187,5 +193,6 @@
   "hint_phone": "スマホ用コード",
   "inv_got": "%sから招待が届きました。",
   "inv_unreachable": "このPS5から%sのゲームに届きません。同じネットワークかTailscale上にある必要があります。",
+  "inv_bridge_need": "%s のゲームをインターネット経由で遊ぶには、自宅のネットワークにあるコンピューターで PS5Upload 13.0.0 以降を開き、PS5Upload › 設定 › アプリ › いっしょにプレイ で「PS5Upload Play がこのコンピューターを見つけられる」をオンにしてください。",
   "why_friend": "フレンドのPS5UploadがこのPS5を覚えていません。一度コードで参加すれば、「もう一度遊ぶ」が使えます。"
 }

@@ -81,6 +81,12 @@
   "fail_busy": "A PS5Upload foglalt. Próbáld újra egy perc múlva.",
   "fail_old_engine": "Ez a PS5Upload túl régi a PS5Upload Playhez. Frissítsd a PS5Uploadot azon a számítógépen.",
   "fail_closed": "A PS5Upload bontotta a kapcsolatot.",
+  "fail_bridge_old": "A PS5Upload itt (%s) túl régi az internetes játékhoz. Frissítsd 13.0.0-ra vagy újabbra.",
+  "fail_bridge_reach": "Az internetes játékhoz nem érhető el a PS5Upload itt: %s. Nyitva van azon a számítógépen?",
+  "fail_bridge_hub": "A PS5Uploadod nem érte el a Közös játék szerverét. Ellenőrizd annak a számítógépnek az internetkapcsolatát.",
+  "fail_bridge_room": "A barátod internetes meghívója már nincs nyitva. Kérj tőle újat.",
+  "fail_bridge_direct": "A te hálózatod és a barátodé nem tudott kapcsolódni az interneten. Próbáld újra, vagy játssz Tailscale-en.",
+  "fail_bridge_other": "A PS5Uploadod nem tudta megnyitni az internetes meghívót (%s).",
   "end_left": "Kiléptél a játékból.",
   "end_kicked": "A barátod kivett a játékból.",
   "end_closed": "A barátod bezárta a Közös játékot.",
@@ -187,5 +193,6 @@
   "hint_phone": "Telefonos kód",
   "inv_got": "%s meghívót küldött neked.",
   "inv_unreachable": "Ez a PS5 nem éri el %s játékát. Ezen a hálózaton vagy Tailscale-en kell lennie.",
+  "inv_bridge_need": "Ahhoz, hogy %s játékában az interneten játssz, ennek a PS5-nek PS5Upload 13.0.0 vagy újabb kell, nyitva egy otthoni hálózatodon lévő számítógépen, és bekapcsolva „A PS5Upload Play megtalálhatja ezt a számítógépet” itt: PS5Upload › Beállítások › App › Közös játék.",
   "why_friend": "A barátod PS5Uploadja már nem emlékszik erre a PS5-re. Csatlakozz egyszer kóddal, utána az „Újra játék” működik."
 }

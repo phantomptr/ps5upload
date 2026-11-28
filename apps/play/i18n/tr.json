@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload meşgul. Bir dakika sonra tekrar dene.",
   "fail_old_engine": "Bu PS5Upload, PS5Upload Play için çok eski. O bilgisayardaki PS5Upload'ı güncelle.",
   "fail_closed": "PS5Upload bağlantıyı kapattı.",
+  "fail_bridge_old": "%s adresindeki PS5Upload internet üzerinden oynamak için çok eski. 13.0.0 veya daha yenisine güncelle.",
+  "fail_bridge_reach": "İnternet üzerinden oynamak için %s adresindeki PS5Upload'a ulaşılamadı. O bilgisayarda açık mı?",
+  "fail_bridge_hub": "PS5Upload'ın Birlikte Oyna sunucusuna ulaşamadı. O bilgisayarın internet bağlantısını kontrol et.",
+  "fail_bridge_room": "Arkadaşının internet daveti artık açık değil. Yeni bir davet iste.",
+  "fail_bridge_direct": "Senin ağın ile arkadaşının ağı internet üzerinden bağlanamadı. Tekrar dene ya da Tailscale üzerinden oyna.",
+  "fail_bridge_other": "PS5Upload'ın internet davetini açamadı (%s).",
   "end_left": "Oyundan ayrıldın.",
   "end_kicked": "Arkadaşın seni oyundan çıkardı.",
   "end_closed": "Arkadaşın Birlikte Oyna'yı kapattı.",
@@ -187,5 +193,6 @@
   "hint_phone": "Telefon kodu",
   "inv_got": "%s sana bir davet gönderdi.",
   "inv_unreachable": "Bu PS5, %s oyununa ulaşamıyor. Bu ağda ya da Tailscale'de olmalı.",
+  "inv_bridge_need": "%s ile internet üzerinden oynamak için bu PS5'in, ev ağındaki bir bilgisayarda açık PS5Upload 13.0.0 veya daha yenisine ve PS5Upload › Ayarlar › Uygulama › Birlikte Oyna'da “PS5Upload Play bu bilgisayarı bulabilir” seçeneğinin açık olmasına ihtiyacı var.",
   "why_friend": "Arkadaşının PS5Upload'u bu PS5'i artık hatırlamıyor. Bir kez kodla katıl, sonra \"Yeniden oyna\" çalışır."
 }

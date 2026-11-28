@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload 正忙。请过一分钟再试。",
   "fail_old_engine": "那个 PS5Upload 版本太旧，无法配合 PS5Upload Play 使用。请更新那台电脑上的 PS5Upload。",
   "fail_closed": "PS5Upload 关闭了连接。",
+  "fail_bridge_old": "%s 上的 PS5Upload 版本太旧，无法通过互联网游玩。请更新到 13.0.0 或更高版本。",
+  "fail_bridge_reach": "无法连接 %s 上的 PS5Upload 来通过互联网游玩。它是否已在那台电脑上打开？",
+  "fail_bridge_hub": "你的 PS5Upload 无法连接一起畅玩的服务器。请检查那台电脑的互联网连接。",
+  "fail_bridge_room": "好友的互联网邀请已不再开放。请向对方要一个新的。",
+  "fail_bridge_direct": "你的网络和好友的网络无法通过互联网连接。请重试，或通过 Tailscale 游玩。",
+  "fail_bridge_other": "你的 PS5Upload 无法打开互联网邀请（%s）。",
   "end_left": "你已离开游戏。",
   "end_kicked": "好友把你移出了游戏。",
   "end_closed": "好友关闭了一起畅玩。",
@@ -187,5 +193,6 @@
   "hint_phone": "手机码",
   "inv_got": "%s 给你发来了邀请。",
   "inv_unreachable": "这台 PS5 连不上 %s 的游戏。它需要在同一网络或 Tailscale 上。",
+  "inv_bridge_need": "要通过互联网玩 %s 的游戏，这台 PS5 需要你家庭网络中的一台电脑上打开 PS5Upload 13.0.0 或更高版本，并在 PS5Upload › 设置 › 应用 › 一起畅玩 中打开“PS5Upload Play 可以找到这台电脑”。",
   "why_friend": "你朋友的 PS5Upload 已经不记得这台 PS5 了。先用代码加入一次，“再玩一次”就能用了。"
 }

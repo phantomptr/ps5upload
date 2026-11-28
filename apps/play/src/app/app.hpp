@@ -176,7 +176,7 @@ class App
     char engine_name_[65] = {};
     char code_[8] = {};
     char typed_[32] = {};
-    char note_[160] = {}; // a short line under a screen (e.g. "That doesn't look like an address")
+    char note_[512] = {}; // a short line under a screen (e.g. "That doesn't look like an address")
     std::uint64_t note_until_ = 0;
     bool dirty_ = true;
     std::uint64_t last_draw_ = 0, last_tick_ = 0, joined_at_ = 0, ps_note_until_ = 0;
@@ -218,6 +218,10 @@ class App
         bool tailnet = false;
         char path[80] = {};
         char name[65] = {};
+        // the internet invite this join came with (kept with the host for Play again)
+        char room[24] = {};
+        char fp[100] = {};
+        char key[132] = {};
     };
     static constexpr int kEasyRows = 2; // at most, above the home screen's own rows
     void easy_init() noexcept;
@@ -228,14 +232,23 @@ class App
     void draw_easy_row(ui::Canvas &c, int x, int y, int w, int h, bool sel, const EasyRow &r) noexcept;
     void save_friends() noexcept;
     JoinExtras default_extras() const noexcept;
-    void start_join_how(const char *code, const JoinExtras &x) noexcept;
+    // Starts the guest. `ways`: the ways a handed join already has (the invite's or the remembered
+    // host's address, and the bridge last); null: start()'s address. Discovery adds the engine's
+    // other addresses either way, unless the join goes only through this home's PS5Upload.
+    void start_join_how(const char *code, const JoinExtras &x, const route::Candidate *ways = nullptr,
+                        int n_ways = 0) noexcept;
+    // This home's PS5Upload for an internet invite (docs/ROUTES.md §6), from discovery.
+    bool own_ps5upload(char *addr, std::size_t cap, std::uint16_t *port) noexcept;
     void join_invite(const invite::Invite &inv) noexcept;
     void join_again(const Friend &f) noexcept;
     Friends friends_;
     WaitingRoom room_;
     JoinExtras last_extras_;
+    route::Candidate last_ways_[route::Selector::kMax]; // a handed join's ways, for Try again
+    int n_last_ways_ = 0;
     JoinTarget target_;
     bool friend_saved_ = false;
+    bool link_saved_ = false;
     invite::Invite invite_;
     bool has_invite_ = false;
     std::uint64_t invite_until_ = 0;

@@ -296,10 +296,16 @@ void WaitingRoom::session() noexcept
             if (!from_tv)
                 inv.nonce[0] = 0; // a push: the screen asks first
             // The routes before answering: the phone hears at once whether this PS5 can play it.
+            // An internet invite nothing direct reaches is played through this home's PS5Upload
+            // (the bridge, docs/ROUTES.md §6) when there is one on this network.
             const bool reach = pick_route(inv);
-            answer(link, gid, reach, reach ? nullptr : "route");
+            const bool bridged = !reach && inv.room[0] && bridge_.load();
+            answer(link, gid, reach || bridged, reach || bridged ? nullptr : "route");
             log("room: an invite (%s, %s)", from_tv ? "the phone in front of this TV" : "sent by a host",
-                reach ? "reachable" : "not reachable from here");
+                reach     ? "reachable"
+                : bridged ? "over the internet, through this home's PS5Upload"
+                : inv.room[0] ? "an internet invite, and no PS5Upload on this network to play it through"
+                              : "not reachable from here");
             pthread_mutex_lock(&lock_);
             if (queued_ == 2)
             {

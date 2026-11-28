@@ -21,7 +21,7 @@ Press counts start with PS5Upload Play open on its home screen ("✕" = one pres
 | 7 | **Short code** | Join a friend's game › computer (✕) › "Enter a code" (✕) › 6 characters on the code keyboard (≈ 4 moves + ✕ each, ≈ 30 presses) | the host's engine reachable | the fallback. The keyboard only has the code's 31 characters in a big 8 × 4 grid and jumps to Join after the 6th. |
 | 8 | **Typed engine address** | address keypad (12–21 presses) | — | last resort; kept. |
 | 9 | **Guest's own PS5Upload pushes to its PS5** ("Play on my PS5" in the guest's desktop app) | 1 click on the computer | the guest's engine would need the app's waiting-room id | not built: the phone page covers the same need (the link usually arrives on the phone). Later: the app can tell nearby engines its room. |
-| 10 | **Internet invite played by the app itself** | — | WebRTC (or another internet route) in the app | **not in this branch**: the play-routes branch adds the native internet route. Here the app plays an internet link through its `lan` / `ts` hints and says plainly when it can't. |
+| 10 | **Internet invite played by the app itself** | as way 3, 4 or 5 (the invite arrives the same way) | PS5Upload 13.0.0 or later on the guest's own home network (the bridge, ROUTES.md §6) | the app tries the link's `lan` / `ts` pages first; when none answers it plays through this home's PS5Upload, which joins the host's room peer to peer. Without one it says plainly what to turn on. |
 
 ### What each needs and what crosses the network
 
@@ -48,16 +48,20 @@ Press counts start with PS5Upload Play open on its home screen ("✕" = one pres
 
 Why not the others: a QR the host's TV shows and the friend's *PS5* reads is impossible (no camera
 on the PS5); the guest's own desktop pushing to its PS5 (9) needs the app's room id first and the
-phone covers it; internet play (10) belongs to the play-routes work.
+phone covers it. Internet play (10) is not a way of its own: any invite from 3, 4 or 5 that only
+the internet reaches goes through this home's PS5Upload (ROUTES.md §6).
 
 ### What the app can play from an invite it was handed
 
 An invite link is `http://<engine>:<port>/join#i=<key>` (the home network's) or the one link for
 everywhere, `https://ps5upload.phantomptr.com/join/#room=…&k=<key>&fp=…&hub=…[&lan=<page>][&ts=<page>]`.
 The app tries, in order: the home network's page (`lan`, or the link itself) with the key on
-`/api/join/ws`; the Tailscale page (`ts`) through the helper's forward; else it says the invite
-needs the host on the same network or on Tailscale (the play-routes branch replaces this with its
-internet route: `App::join_link` is the one place to change).
+`/api/join/ws`; the Tailscale page (`ts`) through the helper's forward; then, for the one link,
+the bridge: this home's PS5Upload joins the host's room (`#room`, `#fp`) and the key goes in the
+hello inside it (ROUTES.md §6, `App::join_invite`). With no PS5Upload on this network the app says
+what it needs: PS5Upload 13.0.0 or later open on a computer at home, with "PS5Upload Play can find
+this computer" on in PS5Upload › Settings › App › Play Together. A home-network link that doesn't
+answer still says the host must be on the same network or on Tailscale.
 
 ## Flows (as built)
 
@@ -95,8 +99,9 @@ joins that room on the hub and sends the current invite (the one link). The frie
 
 ### App: hub client (`src/net/hub.hpp`)
 
-A small JSON-over-WebSocket client for the hub, TLS by BearSSL (`src/net/tls.hpp`), reusable by
-other work (the play-routes signalling):
+A small JSON-over-WebSocket client for the hub, TLS by BearSSL (`src/net/tls.hpp`). It is the
+app's only hub connection, and the waiting room is its only user: playing an internet invite goes
+through this home's PS5Upload, which talks to the hub for the bridge (ROUTES.md §6).
 
 ```cpp
 namespace play::net {
@@ -125,7 +130,10 @@ reconnects with backoff.
 {"invite": {"link": "<join link>", "name": "<host name, optional>", "t": "<nonce, phone only>"}}
 ```
 
-Answer (app → that guest): `{"invite_ok": true}` or `{"invite_ok": false, "why": "link" | "busy"}`.
+Answer (app → that guest): `{"invite_ok": true}` or `{"invite_ok": false, "why": "link" | "busy" | "route"}`.
+`route`: none of the link's routes answers from this PS5, and (for an internet link) this home has
+no PS5Upload to play it through. An internet link this PS5 can only play through its home's
+PS5Upload is answered `true` (ROUTES.md §6).
 `t` equal to the nonce in the QR on the TV means "the person in front of this TV sent it": the app
 joins at once. Without it (a host's push) the app asks first. Data is capped at 2 KiB by the app
 (the hub caps it at 12 KiB); a link that is not a Play Together link is answered `link`.

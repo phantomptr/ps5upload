@@ -81,6 +81,12 @@
   "fail_busy": "PS5Upload è occupato. Riprova tra un minuto.",
   "fail_old_engine": "Quel PS5Upload è troppo vecchio per PS5Upload Play. Aggiorna PS5Upload su quel computer.",
   "fail_closed": "PS5Upload ha chiuso la connessione.",
+  "fail_bridge_old": "PS5Upload su %s è troppo vecchio per giocare via Internet. Aggiornalo alla 13.0.0 o successiva.",
+  "fail_bridge_reach": "Impossibile raggiungere PS5Upload su %s per giocare via Internet. È aperto su quel computer?",
+  "fail_bridge_hub": "Il tuo PS5Upload non ha raggiunto il server di Gioca insieme. Controlla la connessione a Internet di quel computer.",
+  "fail_bridge_room": "L'invito via Internet del tuo amico non è più aperto. Chiedigliene uno nuovo.",
+  "fail_bridge_direct": "La tua rete e quella del tuo amico non sono riuscite a collegarsi via Internet. Riprova, o gioca tramite Tailscale.",
+  "fail_bridge_other": "Il tuo PS5Upload non è riuscito ad aprire l'invito via Internet (%s).",
   "end_left": "Sei uscito dalla partita.",
   "end_kicked": "Il tuo amico ti ha tolto dalla partita.",
   "end_closed": "Il tuo amico ha chiuso Gioca insieme.",
@@ -187,5 +193,6 @@
   "hint_phone": "Codice telefono",
   "inv_got": "%s ti ha mandato un invito.",
   "inv_unreachable": "Questa PS5 non raggiunge la partita di %s. Deve essere su questa rete o su Tailscale.",
+  "inv_bridge_need": "Per giocare alla partita di %s via Internet, questa PS5 ha bisogno di PS5Upload 13.0.0 o successivo aperto su un computer della tua rete di casa, con «PS5Upload Play può trovare questo computer» attivo in PS5Upload › Impostazioni › App › Gioca insieme.",
   "why_friend": "Il PS5Upload del tuo amico non ricorda più questa PS5. Entra una volta con un codice, poi «Gioca di nuovo» funziona."
 }

@@ -106,10 +106,10 @@ def parse_pad(b):
             "touch": touch, "motion": motion}
 
 
-def guest(ws, args, state):
+def guest(ws, args, state, via=None):
     kind, hello = ws.recv()
     h = json.loads(hello)["hello"]
-    rec("hellos", h)
+    rec("hellos", dict(h, _via=via) if via else h)
     resume = h.get("resume")
     if resume and state.get("live"):
         rec("replaced")
@@ -119,8 +119,17 @@ def guest(ws, args, state):
     if args.refuse:
         ws.text({"stage": "refused", "why": args.refuse})
         return
+    # Through a bridge the guest is in an internet room (join.rs): no friend pass is taken or given
+    # there, and something to show is needed (the invite's key or a code).
+    internet = via == "bridge"
+    if internet and not resume and not h.get("invite") and not h.get("code"):
+        ws.text({"stage": "refused", "why": "key"})
+        return
+    if internet and args.key and h.get("invite") and h.get("invite") != args.key:
+        ws.text({"stage": "refused", "why": "key"})
+        return
     # Play again (join_friends.rs): a pass this engine gave, or refused "friend".
-    again = h.get("again")
+    again = None if internet else h.get("again")
     if again and again != "pass1":
         ws.text({"stage": "refused", "why": "friend"})
         return
@@ -128,7 +137,7 @@ def guest(ws, args, state):
         ws.text({"stage": "asking"})
         time.sleep(0.2)
     joined = {"stage": "joined", "player": 2, "token": "tok1", "hevc": True, "track": False, "audio": False}
-    if h.get("remember") and not again and not resume:
+    if h.get("remember") and not again and not resume and not internet:
         joined["friend"] = "pass1"
     if not args.old:
         joined["codec_warning"] = None
@@ -246,7 +255,7 @@ def bridge(ws, args, state):
         ws.text({"bridge": "failed", "why": args.bridge_fail})
         return
     ws.text({"bridge": "open", "path": "internet", "rtt_ms": 45})
-    guest(ws, args, state)
+    guest(ws, args, state, via="bridge")
 
 
 def app(ws, args, state):
@@ -529,6 +538,7 @@ def main():
     ap.add_argument("--discovery", action="store_true")
     ap.add_argument("--lifetime", type=float, default=20)
     ap.add_argument("--bridge-fail", help="the stand-in bridge answers failed with this why")
+    ap.add_argument("--key", help="the invite key the stand-in takes through a bridge (default: any)")
     ap.add_argument("--no-probe", action="store_true", help="an engine without the checks socket")
     ap.add_argument("--proxy", action="append", default=[],
                     help="DELAY_MS[:HOLE_AFTER_S[:HOLE_UNTIL_S]]: another way in, with that round trip")

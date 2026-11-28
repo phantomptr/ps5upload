@@ -28,7 +28,16 @@ struct Invite
     Route routes[6];
     int n_routes = 0;
     bool internet = false; // the link is an internet invite (room, fp, hub)
+    // An internet invite's room on the hub (22 base64url characters) and the host engine's
+    // certificate fingerprint (hex with colons): what the bridge needs (docs/ROUTES.md §6). Empty
+    // when the link has none that can be used.
+    char room[24] = {};
+    char fp[100] = {};
     char nonce[40] = {};   // the hand-off's `t` (the phone that scanned this TV's code)
+    // The first direct route the link named, as it named it (kept when none of them answers):
+    // which remembered host this invite is from.
+    char home_addr[16] = {};
+    std::uint16_t home_port = 0;
 };
 
 // A Play Together link: `http://<engine>:<port>[/prefix]/join[/]#i=<key>[&n=<name>]`, or the one

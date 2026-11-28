@@ -151,7 +151,30 @@ void add_route(const char *page, Invite &inv) noexcept
     for (int i = 0; i < inv.n_routes; ++i)
         if (inv.routes[i].port == r.port && !std::strcmp(inv.routes[i].addr, r.addr))
             return;
+    if (!inv.home_addr[0])
+    {
+        std::snprintf(inv.home_addr, sizeof inv.home_addr, "%s", r.addr);
+        inv.home_port = r.port;
+    }
     inv.routes[inv.n_routes++] = r;
+}
+
+// A hub room id: 22 base64url characters.
+bool room_ok(const char *r) noexcept
+{
+    return std::strlen(r) == 22 && key_ok(r, 22);
+}
+
+// A certificate fingerprint as the link carries it: hex pairs split by colons (SHA-256: 95).
+bool fp_ok(const char *f) noexcept
+{
+    const std::size_t n = std::strlen(f);
+    if (n < 2 || n >= sizeof(Invite{}.fp))
+        return false;
+    for (std::size_t i = 0; i < n; ++i)
+        if (i % 3 == 2 ? f[i] != ':' : hexv(f[i]) < 0)
+            return false;
+    return n % 3 == 2;
 }
 
 bool set_key(Invite &inv, const char *k) noexcept
@@ -282,6 +305,13 @@ bool add_link(const char *link, Invite &inv) noexcept
         if (!frag_get(u.frag, "k", k, sizeof k) || !set_key(inv, k))
             return false;
         inv.internet = true;
+        // The room and the certificate, for the bridge through this home's PS5Upload.
+        char fp[sizeof inv.fp];
+        if (!inv.room[0] && room_ok(v) && frag_get(u.frag, "fp", fp, sizeof fp) && fp_ok(fp))
+        {
+            std::snprintf(inv.room, sizeof inv.room, "%s", v);
+            std::snprintf(inv.fp, sizeof inv.fp, "%s", fp);
+        }
         if (frag_get(u.frag, "lan", v, sizeof v))
             add_route(v, inv);
         if (frag_get(u.frag, "ts", v, sizeof v))

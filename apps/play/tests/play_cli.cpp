@@ -2,6 +2,9 @@
 //   play-cli discover
 //   play-cli join ADDR PORT [CODE] [--seconds N] [--dump FILE] [--leave-after N]
 //   play-cli companion ADDR PORT [TOKEN] [--pair] [--seconds N] [--invite] [--allow-first]
+//   play-cli room HUB_URL SECRET_FILE [--seconds N]
+//   play-cli handoff HUB_URL SECRET_FILE [--own PORT] [--seconds N]   (an invite from the phone, played)
+//   play-cli again ADDR PORT PASS [--link ROOM,FP,KEY] [--own PORT] [--no-direct] [--seconds N]
 // The same guest and companion code as the console's; pictures and sound are counted (and the
 // pictures optionally written out as an Annex-B file to check with ffmpeg).
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -114,65 +117,13 @@ const char *phase_name(int p)
     return p >= 0 && p < 9 ? n[p] : "?";
 }
 
-int join(int argc, char **argv)
+// Starts the guest and plays until --seconds (or --leave-after): the phases, the friend pass, the
+// counts and the way, as the e2e test reads them.
+int run_guest(Guest &guest, CountSinks &sinks, const char *addr, std::uint16_t port, const char *code, int argc,
+              char **argv)
 {
-    if (argc < 4)
-        return 2;
-    const char *code = argc > 4 && argv[4][0] != '-' ? argv[4] : "";
-    CountSinks sinks;
-    if (const char *f = arg_str(argc, argv, "--dump"))
-        sinks.dump = std::fopen(f, "wb");
-    static Guest guest(sinks, big, sizeof big);
-    // Easy join (docs/EASY_JOIN.md): --invite KEY, --again PASS, --remember, --path P.
-    JoinExtras x;
-    x.remember = has(argc, argv, "--remember");
-    if (const char *k = arg_str(argc, argv, "--invite"))
-        std::snprintf(x.invite, sizeof x.invite, "%s", k);
-    if (const char *p = arg_str(argc, argv, "--again"))
-        std::snprintf(x.again, sizeof x.again, "%s", p);
-    if (const char *p = arg_str(argc, argv, "--path"))
-        std::snprintf(x.path, sizeof x.path, "%s", p);
-    guest.set_extras(x);
+    guest.start(addr, port, code, "play-cli", "13.0.0");
     bool told_friend = false;
-    // --way KIND:PORT (lan, tailscale, internet) on 127.0.0.1, any number: the ways to check and
-    // keep (docs/ROUTES.md); --bridge PORT:ROOM:FP: an internet invite through a stand-in bridge.
-    route::Candidate ways[route::Selector::kMax];
-    int n_ways = 0;
-    for (int i = 1; i + 1 < argc && n_ways < route::Selector::kMax; ++i)
-    {
-        if (!std::strcmp(argv[i], "--way"))
-        {
-            char kind[16] = {};
-            unsigned port = 0;
-            const char *colon = std::strchr(argv[i + 1], ':');
-            if (!colon || colon - argv[i + 1] >= 15)
-                continue;
-            std::memcpy(kind, argv[i + 1], static_cast<std::size_t>(colon - argv[i + 1]));
-            port = static_cast<unsigned>(std::atoi(colon + 1));
-            route::Candidate c;
-            std::snprintf(c.addr, sizeof c.addr, "127.0.0.1");
-            c.port = static_cast<std::uint16_t>(port);
-            c.kind = !std::strcmp(kind, "tailscale") ? route::Kind::tailscale
-                     : !std::strcmp(kind, "internet") ? route::Kind::internet
-                                                       : route::Kind::lan;
-            ways[n_ways++] = c;
-        }
-        else if (!std::strcmp(argv[i], "--bridge"))
-        {
-            char spec[160];
-            std::snprintf(spec, sizeof spec, "%s", argv[i + 1]);
-            char *a = std::strchr(spec, ':');
-            char *b = a ? std::strchr(a + 1, ':') : nullptr;
-            if (!a || !b)
-                continue;
-            *a = *b = 0;
-            if (route_bridge("127.0.0.1", static_cast<std::uint16_t>(std::atoi(spec)), a + 1, b + 1, ways[n_ways]))
-                ++n_ways;
-        }
-    }
-    if (n_ways)
-        guest.set_routes(ways, n_ways);
-    guest.start(argv[2], static_cast<std::uint16_t>(std::atoi(argv[3])), code, "play-cli", "13.0.0");
     const int seconds = arg_int(argc, argv, "--seconds", 10);
     const int leave_after = arg_int(argc, argv, "--leave-after", -1);
     const std::uint64_t t0 = net::now_us();
@@ -221,6 +172,66 @@ int join(int argc, char **argv)
     if (sinks.dump)
         std::fclose(sinks.dump);
     return 0;
+}
+
+int join(int argc, char **argv)
+{
+    if (argc < 4)
+        return 2;
+    const char *code = argc > 4 && argv[4][0] != '-' ? argv[4] : "";
+    CountSinks sinks;
+    if (const char *f = arg_str(argc, argv, "--dump"))
+        sinks.dump = std::fopen(f, "wb");
+    static Guest guest(sinks, big, sizeof big);
+    // Easy join (docs/EASY_JOIN.md): --invite KEY, --again PASS, --remember, --path P.
+    JoinExtras x;
+    x.remember = has(argc, argv, "--remember");
+    if (const char *k = arg_str(argc, argv, "--invite"))
+        std::snprintf(x.invite, sizeof x.invite, "%s", k);
+    if (const char *p = arg_str(argc, argv, "--again"))
+        std::snprintf(x.again, sizeof x.again, "%s", p);
+    if (const char *p = arg_str(argc, argv, "--path"))
+        std::snprintf(x.path, sizeof x.path, "%s", p);
+    guest.set_extras(x);
+    // --way KIND:PORT (lan, tailscale, internet) on 127.0.0.1, any number: the ways to check and
+    // keep (docs/ROUTES.md); --bridge PORT:ROOM:FP: an internet invite through a stand-in bridge.
+    route::Candidate ways[route::Selector::kMax];
+    int n_ways = 0;
+    for (int i = 1; i + 1 < argc && n_ways < route::Selector::kMax; ++i)
+    {
+        if (!std::strcmp(argv[i], "--way"))
+        {
+            char kind[16] = {};
+            unsigned port = 0;
+            const char *colon = std::strchr(argv[i + 1], ':');
+            if (!colon || colon - argv[i + 1] >= 15)
+                continue;
+            std::memcpy(kind, argv[i + 1], static_cast<std::size_t>(colon - argv[i + 1]));
+            port = static_cast<unsigned>(std::atoi(colon + 1));
+            route::Candidate c;
+            std::snprintf(c.addr, sizeof c.addr, "127.0.0.1");
+            c.port = static_cast<std::uint16_t>(port);
+            c.kind = !std::strcmp(kind, "tailscale") ? route::Kind::tailscale
+                     : !std::strcmp(kind, "internet") ? route::Kind::internet
+                                                       : route::Kind::lan;
+            ways[n_ways++] = c;
+        }
+        else if (!std::strcmp(argv[i], "--bridge"))
+        {
+            char spec[160];
+            std::snprintf(spec, sizeof spec, "%s", argv[i + 1]);
+            char *a = std::strchr(spec, ':');
+            char *b = a ? std::strchr(a + 1, ':') : nullptr;
+            if (!a || !b)
+                continue;
+            *a = *b = 0;
+            if (route_bridge("127.0.0.1", static_cast<std::uint16_t>(std::atoi(spec)), a + 1, b + 1, ways[n_ways]))
+                ++n_ways;
+        }
+    }
+    if (n_ways)
+        guest.set_routes(ways, n_ways);
+    return run_guest(guest, sinks, argv[2], static_cast<std::uint16_t>(std::atoi(argv[3])), code, argc, argv);
 }
 
 void on_token(const char *addr, std::uint16_t port, const char *token, void *)
@@ -370,6 +381,124 @@ int room(int argc, char **argv)
     std::printf("done\n");
     return 0;
 }
+
+// --own PORT: this home's PS5Upload on 127.0.0.1 (as discovery would have found it), through the
+// app's own choice (own_engine). False when not given.
+bool own_from_args(int argc, char **argv, char *addr, std::size_t cap, std::uint16_t *port)
+{
+    const int p = arg_int(argc, argv, "--own", 0);
+    if (p <= 0)
+        return false;
+    net::Answer a{};
+    net::resolve("127.0.0.1", &a.ip_be);
+    a.info.port = static_cast<std::uint16_t>(p);
+    std::snprintf(a.info.version, sizeof a.info.version, "%s", "13.0.0");
+    std::snprintf(a.info.name, sizeof a.info.name, "%s", "This home's PS5Upload");
+    return own_engine(&a, 1, addr, cap, port);
+}
+
+// The phone hands an invite to the app's waiting room, and the app plays it as App::join_invite
+// does (docs/ROUTES.md §6): play-cli handoff HUB_URL SECRET_FILE [--own PORT] [--seconds N]
+int handoff(int argc, char **argv)
+{
+    if (argc < 4)
+        return 2;
+    char own[64] = {};
+    std::uint16_t own_port = 0;
+    const bool have_own = own_from_args(argc, argv, own, sizeof own, &own_port);
+    static WaitingRoom r;
+    r.init(argv[3], argv[2]);
+    r.set_bridge(have_own);
+    r.arm();
+    const std::uint64_t t0 = net::now_us();
+    invite::Invite inv;
+    bool got = false;
+    int state = -1;
+    while (!got && net::now_us() - t0 < 15000000)
+    {
+        const auto v = r.view();
+        if (v.state != state)
+        {
+            static const char *n[] = {"off", "connecting", "ready", "offline"};
+            std::printf("state %s room=%s qr=%s\n", n[v.state], v.room, v.qr);
+            std::fflush(stdout);
+            state = v.state;
+        }
+        got = r.take(inv);
+        net::sleep_ms(50);
+    }
+    r.stop();
+    if (!got)
+    {
+        std::printf("no invite\n");
+        return 1;
+    }
+    std::printf("invite key=%s routes=%d internet=%d room=%s fp=%s home=%s:%u\n", inv.key, inv.n_routes, inv.internet,
+                inv.room, inv.fp, inv.home_addr, inv.home_port);
+    route::Candidate ways[route::Selector::kMax];
+    const int n = invite_ways(inv, have_own ? own : nullptr, own_port, ways, route::Selector::kMax);
+    if (!n)
+    {
+        // App::join_invite says what it needs (S::inv_bridge_need / S::inv_unreachable).
+        std::printf("cannot play: %s\n", inv.room[0] ? "needs PS5Upload on this network" : "unreachable");
+        return 0;
+    }
+    for (int i = 0; i < n; ++i)
+        std::printf("way %s %s:%u%s\n", route::kind_word(ways[i].kind), ways[i].addr, static_cast<unsigned>(ways[i].port),
+                    ways[i].way == route::Way::bridge ? " bridge" : "");
+    CountSinks sinks;
+    static Guest guest(sinks, big, sizeof big);
+    JoinExtras x;
+    x.remember = true;
+    std::snprintf(x.invite, sizeof x.invite, "%s", inv.key);
+    if (inv.n_routes)
+        std::snprintf(x.path, sizeof x.path, "%s", inv.routes[0].path);
+    guest.set_extras(x);
+    guest.set_routes(ways, n);
+    const bool direct = inv.n_routes > 0;
+    return run_guest(guest, sinks, direct ? inv.routes[0].dial_addr : own,
+                     direct ? inv.routes[0].dial_port : own_port, "", argc, argv);
+}
+
+// Play again with a remembered host as App::join_again does: play-cli again ADDR PORT PASS
+// [--link ROOM,FP,KEY] [--own PORT] [--no-direct] [--seconds N]
+int again(int argc, char **argv)
+{
+    if (argc < 5)
+        return 2;
+    Friend f;
+    std::snprintf(f.addr, sizeof f.addr, "%s", argv[2]);
+    f.port = static_cast<std::uint16_t>(std::atoi(argv[3]));
+    std::snprintf(f.pass, sizeof f.pass, "%s", argv[4]);
+    if (const char *l = arg_str(argc, argv, "--link"))
+    {
+        char spec[400];
+        std::snprintf(spec, sizeof spec, "%s", l);
+        char *a = std::strchr(spec, ',');
+        char *b = a ? std::strchr(a + 1, ',') : nullptr;
+        if (a && b)
+        {
+            *a = *b = 0;
+            Friends::set_link(f, spec, a + 1, b + 1);
+        }
+    }
+    char own[64] = {};
+    std::uint16_t own_port = 0;
+    const bool have_own = f.key[0] && own_from_args(argc, argv, own, sizeof own, &own_port);
+    const bool direct = !has(argc, argv, "--no-direct");
+    route::Candidate ways[route::Selector::kMax];
+    const int n = again_ways(f, direct, have_own ? own : nullptr, own_port, ways, route::Selector::kMax);
+    CountSinks sinks;
+    static Guest guest(sinks, big, sizeof big);
+    JoinExtras x;
+    x.remember = false;
+    std::snprintf(x.again, sizeof x.again, "%s", f.pass);
+    if (have_own)
+        std::snprintf(x.bridge_invite, sizeof x.bridge_invite, "%s", f.key);
+    guest.set_extras(x);
+    guest.set_routes(ways, n);
+    return run_guest(guest, sinks, direct ? f.addr : own, direct ? f.port : own_port, "", argc, argv);
+}
 } // namespace
 
 int main(int argc, char **argv)
@@ -386,6 +515,10 @@ int main(int argc, char **argv)
         return helper_cmd(argc, argv);
     if (argc >= 2 && !std::strcmp(argv[1], "room"))
         return room(argc, argv);
+    if (argc >= 2 && !std::strcmp(argv[1], "handoff"))
+        return handoff(argc, argv);
+    if (argc >= 2 && !std::strcmp(argv[1], "again"))
+        return again(argc, argv);
     std::fprintf(stderr, "usage: play-cli discover | join ADDR PORT [CODE] | companion ADDR PORT [TOKEN] [--pair]\n");
     return 2;
 }

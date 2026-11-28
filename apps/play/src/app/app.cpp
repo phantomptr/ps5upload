@@ -716,7 +716,8 @@ void App::input_joining(std::uint32_t p) noexcept
     if ((p & pad::kCross) && over)
     {
         platform::blip(platform::Blip::choose);
-        start_join_how(code_, last_extras_);
+        // the same ways again (a handed invite's, the bridge too)
+        start_join_how(code_, last_extras_, n_last_ways_ ? last_ways_ : nullptr, n_last_ways_);
     }
 }
 
@@ -1141,9 +1142,21 @@ void App::draw(std::uint32_t *ui_px, std::uint32_t *layer, std::uint64_t now, bo
     }
     if (note_until_ && now < note_until_ && screen_ != Screen::playing)
     {
-        const int w = Canvas::text_width(Font::body, note_) + 60;
-        c.round_rect((ui::kW - w) / 2, 900, w, 64, 32, col::panel_hi);
-        c.text_center(Font::body, ui::kW / 2, 908, note_, col::text);
+        const int tw = Canvas::text_width(Font::body, note_);
+        if (tw <= 1600)
+        {
+            const int w = tw + 60;
+            c.round_rect((ui::kW - w) / 2, 900, w, 64, 32, col::panel_hi);
+            c.text_center(Font::body, ui::kW / 2, 908, note_, col::text);
+        }
+        else
+        {
+            // A longer one (what an internet invite needs) wraps, the box growing upwards.
+            const int lines = tw / 1300 + 1, lh = ui::font_height(Font::body) + 6;
+            const int h = lines * lh + 28;
+            c.round_rect((ui::kW - 1560) / 2, 964 - h, 1560, h, 32, col::panel_hi);
+            c.text_wrap(Font::body, (ui::kW - 1500) / 2, 964 - h + 14, 1500, note_, col::text);
+        }
     }
 }
 
@@ -1393,6 +1406,29 @@ const char *App::guest_message(const GuestView &v, char *buf, std::size_t cap) c
                 return tr(w.s);
         return tr(S::end_lost);
     case GuestView::failed:
+        if (!std::strncmp(v.why, "bridge_", 7))
+        {
+            // Through this home's PS5Upload (docs/ROUTES.md §6): what went wrong, plainly.
+            const char *b = v.why + 7;
+            const char *at = v.bridge_at[0] ? v.bridge_at : v.engine;
+            if (!std::strcmp(b, "old"))
+                std::snprintf(buf, cap, tr(S::fail_bridge_old), at);
+            else if (!std::strcmp(b, "unreachable"))
+                std::snprintf(buf, cap, tr(S::fail_bridge_reach), at);
+            else if (!std::strcmp(b, "hub"))
+                return tr(S::fail_bridge_hub);
+            else if (!std::strcmp(b, "no_room") || !std::strcmp(b, "mismatch"))
+                return tr(S::fail_bridge_room);
+            else if (!std::strcmp(b, "room_full"))
+                return tr(S::why_full);
+            else if (!std::strcmp(b, "no_direct"))
+                return tr(S::fail_bridge_direct);
+            else if (!std::strcmp(b, "busy"))
+                return tr(S::fail_busy);
+            else
+                std::snprintf(buf, cap, tr(S::fail_bridge_other), b);
+            return buf;
+        }
         if (!std::strcmp(v.why, "busy"))
             return tr(S::fail_busy);
         if (!std::strcmp(v.why, "old_engine"))
@@ -1409,7 +1445,7 @@ void App::draw_joining(Canvas &c, const GuestView &v) noexcept
 {
     draw_frame(c, nullptr);
     c.image(logo_, 1480, 330, 140);
-    char buf[256];
+    char buf[640]; // a message in UTF-8 with an address in it
     const char *msg = guest_message(v, buf, sizeof buf);
     const bool over = v.phase == GuestView::refused || v.phase == GuestView::ended || v.phase == GuestView::failed;
     const bool good_end = v.phase == GuestView::ended && !std::strcmp(v.why, "left");

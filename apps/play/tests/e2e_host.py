@@ -319,5 +319,98 @@ r = finish(p, rep)
 check(route_line(out).get("way") == "lan" and "phase joined" in out and r["probe_sockets"] == 0,
       "an engine without the checks socket still joins")
 
+# 12. Easy join's internet invites through the bridge (docs/ROUTES.md §6): what the app does with
+# an invite nothing direct reaches, played through this home's PS5Upload (the stand-in is the
+# hub, this home's PS5Upload with its bridge, and the host's engine behind it).
+room12, fp12, key12 = "B" * 21 + "h", "AB:CD:EF:01", "internetkey12"
+
+
+def handoff(name, own):
+    p, port, rep = engine(name, "--lifetime", "25", "--seconds", "6")
+    secret = os.path.join(work, name + ".room.txt")
+    if os.path.exists(secret):
+        os.remove(secret)
+    cmd = [cli, "handoff", f"ws://127.0.0.1:{port}/ws", secret, "--seconds", "3"] + (["--own", str(port)] if own else [])
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    head = ""
+    for line in proc.stdout:
+        head += line
+        if line.startswith("state ready"):
+            break
+    frag = dict(kv.split("=", 1) for kv in line.strip().split("qr=", 1)[1].split("#", 1)[1].split("&")) \
+        if "qr=" in line else {}
+    # The one link for everywhere, its home-network page one this PS5 can't reach (port 1).
+    link = (f"https://ps5upload.phantomptr.com/join/#room={room12}&k={key12}&fp={fp12}&hub=127.0.0.1:{port}"
+            f"&lan=http%3A%2F%2F127.0.0.1%3A1%2Fjoin&n=Alex")
+    ans = phone(port, frag.get("ps5"), {"invite": {"link": link, "t": frag.get("t")}}) if frag else {}
+    out = head + proc.communicate(timeout=40)[0]
+    return ans, out, finish(p, rep)
+
+
+# 12a. The phone hands over an internet invite: the app says yes (this home has a PS5Upload), joins
+# through the bridge with the invite's room and certificate, and asks with the invite's key.
+ans, out, r = handoff("handoff_bridge", True)
+check(ans.get("data") == {"invite_ok": True}, "an internet-only invite is taken when this home has a PS5Upload")
+check(f"invite key={key12} routes=0 internet=1 room={room12} fp={fp12} home=127.0.0.1:1" in out,
+      "the hand-off keeps the room, the certificate and the host's page")
+check("way internet" in out and " bridge" in out and route_line(out).get("way") == "internet" and "phase joined" in out,
+      "phone hand-off -> bridge -> joined")
+check(r["bridges"] == [{"v": 1, "room": room12, "fp": fp12}], "the bridge gets the invite's room and certificate")
+bh = [h for h in r["hellos"] if h.get("_via") == "bridge"]
+check(bh and bh[0].get("invite") == key12 and "friend " not in out, "the hello asks with the key; no pass over the internet")
+
+# 12b. No PS5Upload on this network: the phone hears no, and the app says what it needs.
+ans, out, r = handoff("handoff_none", False)
+check(ans.get("data") == {"invite_ok": False, "why": "route"} and "cannot play: needs PS5Upload on this network" in out
+      and r["bridges"] == [], "no PS5Upload here: refused, and the app says what is needed")
+
+# 12c. Play again over the bridge: the remembered host's address doesn't answer, so its last
+# internet invite goes through this home's PS5Upload; there the key asks (no pass from an internet room).
+p, port, rep, (dark,) = ways("again_bridge", "--seconds", "5", "--lifetime", "9", "--proxy", "0:0.001",
+                             "--key", key12)
+out = run("again", "127.0.0.1", str(dark), "pass1", "--link", f"{room12},{fp12},{key12}", "--own", str(port),
+          "--seconds", "3")
+r = finish(p, rep)
+check(route_line(out).get("way") == "internet" and "phase joined" in out, "play again over the bridge")
+bh = [h for h in r["hellos"] if h.get("_via") == "bridge"]
+check(r["bridges"] == [{"v": 1, "room": room12, "fp": fp12}] and bh and bh[0].get("invite") == key12
+      and bh[0].get("again") == "pass1", "play again: the bridge with the kept room, the key and the pass")
+
+# 12d. Play again whose host answers: the home network, the pass alone (the key stays off it).
+p, port, rep = engine("again_direct", "--seconds", "4", "--lifetime", "8")
+out = run("again", "127.0.0.1", str(port), "pass1", "--link", f"{room12},{fp12},{key12}", "--own", str(port),
+          "--seconds", "2")
+r = finish(p, rep)
+check(route_line(out).get("way") == "lan" and r["bridges"] == [] and r["hellos"]
+      and r["hellos"][0].get("again") == "pass1" and "invite" not in r["hellos"][0],
+      "play again directly: the pass, no key, no bridge")
+
+# 12e. A kept invite that ended: the bridge says so, or the host's engine no longer takes its key.
+p, port, rep, (dark,) = ways("again_gone", "--lifetime", "8", "--proxy", "0:0.001", "--bridge-fail", "no_room")
+out = run("again", "127.0.0.1", str(dark), "pass1", "--link", f"{room12},{fp12},{key12}", "--own", str(port),
+          "--seconds", "3")
+finish(p, rep)
+check("phase failed bridge_no_room" in out, "an ended internet invite: failed with the bridge's reason")
+p, port, rep, (dark,) = ways("again_stale", "--lifetime", "8", "--proxy", "0:0.001", "--key", "anotherkey12")
+out = run("again", "127.0.0.1", str(dark), "pass1", "--link", f"{room12},{fp12},{key12}", "--own", str(port),
+          "--seconds", "3")
+finish(p, rep)
+check("phase refused key" in out, "a key the host's engine no longer takes is refused")
+
+# 12f. The way changes mid-game in a join with a friend pass: the seat is resumed beside the old
+# socket with the token (the pass goes only on a new ask: proto::hello_ex), no reconnect screen,
+# no new pass, nothing refused.
+p, port, rep, (dark,) = ways("again_switch", "--seconds", "14", "--lifetime", "16", "--proxy", "0:4")
+out = run("join", "127.0.0.1", str(port), "--again", "pass1", "--remember", "--seconds", "10",
+          "--way", f"lan:{dark}", "--way", f"tailscale:{port}")
+r = finish(p, rep)
+rl = route_line(out)
+check(rl.get("way") == "tailscale" and rl.get("switches") == "1" and rl.get("why") == "lost", "a friend-pass join changes way")
+hs = r["hellos"]
+check(len(hs) == 2 and hs[0].get("again") == "pass1" and "resume" not in hs[0] and hs[1].get("resume") == "tok1"
+      and "again" not in hs[1] and r["replaced"] == 1, "the change of way resumes with the token, not a new ask")
+check(out.count("joined as player 2") == 2 and "phase reconnecting" not in out and "phase refused" not in out
+      and "friend " not in out, "no reconnect screen, no refusal, no second pass")
+
 print("e2e:", "all passed" if not failures else f"{failures} failed")
 sys.exit(1 if failures else 0)
