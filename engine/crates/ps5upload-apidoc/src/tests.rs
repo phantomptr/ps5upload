@@ -368,3 +368,50 @@ fn the_file_keeps_console_keys_out_and_marks_local_routes() {
     assert_eq!(paths["/pad"]["get"]["x-ps5upload"]["access"], "lan-open");
     assert_eq!(parsed["info"]["version"], spec::VERSION_PLACEHOLDER);
 }
+
+#[test]
+fn routes_behind_the_friends_guard_say_how_to_confirm() {
+    let crates = crates_dir();
+    let generated = spec::generate(&crates).unwrap();
+    let parsed: Value = serde_json::from_str(&generated.text).unwrap();
+    let paths = &parsed["paths"];
+    for (path, method) in [
+        ("/api/ps5/rp/stop", "post"),
+        ("/api/ps5/power/control", "post"),
+        ("/api/ps5/process/kill", "post"),
+        ("/api/ps5/app/lifecycle", "post"),
+        ("/api/ps5/app/launch", "post"),
+        ("/api/play/app/open", "post"),
+        ("/api/ps5/helper/stop", "post"),
+        ("/api/ps5/helper/uninstall", "post"),
+        ("/api/payload/send", "post"),
+        ("/api/payload/send-check", "post"),
+        ("/api/pkg/payload-restore", "post"),
+    ] {
+        let op = &paths[path][method];
+        assert_eq!(op["x-ps5upload"]["friends_guard"], true, "{path}");
+        let params = op["parameters"].as_array().unwrap();
+        assert!(
+            params.iter().any(|p| p["name"] == "X-Confirm-Friends"),
+            "{path}"
+        );
+        assert!(
+            params.iter().any(|p| p["name"] == "confirm_friends"),
+            "{path}"
+        );
+        let conflict = op["responses"]["409"]["content"]["application/json"]["schema"].to_string();
+        assert!(conflict.contains("FriendsPlaying"), "{path}");
+    }
+    assert!(paths["/api/jobs"]["get"]["x-ps5upload"]
+        .get("friends_guard")
+        .is_none());
+    let schemas = &parsed["components"]["schemas"];
+    assert_eq!(
+        schemas["FriendsPlaying"]["properties"]["error"]["const"],
+        "friends_playing"
+    );
+    assert_eq!(
+        schemas["StopReq"]["properties"]["confirm_friends"]["type"],
+        "boolean"
+    );
+}

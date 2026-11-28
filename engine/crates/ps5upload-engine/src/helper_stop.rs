@@ -789,8 +789,11 @@ mod tests {
     ) -> (axum::http::StatusCode, serde_json::Value) {
         let resp = crate::ps5_helper_stop(
             installs,
+            axum::http::HeaderMap::new(),
+            crate::together_guard::ConfirmQuery::default(),
             crate::HelperStopReq {
                 addr: addr.map(str::to_string),
+                confirm_friends: false,
             },
         )
         .await;

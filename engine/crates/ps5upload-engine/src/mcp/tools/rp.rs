@@ -115,6 +115,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 json!({
                     "console": console_of_session(),
                     "session": session_of_console(),
+                    "confirm_friends": super::confirm_friends(),
                 }),
                 &[],
             ),
@@ -429,7 +430,7 @@ async fn session_call(
 }
 
 async fn stop(ctx: ToolCtx, args: Args) -> ToolResult {
-    let answer = session_call(&ctx, &args, "/api/ps5/rp/stop", &[]).await?;
+    let answer = session_call(&ctx, &args, "/api/ps5/rp/stop", &["confirm_friends"]).await?;
     Ok(ToolOutput::ok(
         "Stopped the stream. The console holds its slot for 12 to 30 s.",
         answer,

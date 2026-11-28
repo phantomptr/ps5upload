@@ -364,10 +364,25 @@ fn build_operation(route: &Route, analysis: &Analysis, schemas: &mut Schemas<'_>
     if websocket {
         meta.insert("websocket".into(), json!(true));
     }
+    if analysis.friends_guard {
+        parameters.push(json!({
+            "name": "X-Confirm-Friends",
+            "in": "header",
+            "required": false,
+            "description": "`1`: go ahead even though friends are playing through Play Together. \
+                            Without it (or `confirm_friends`), the route answers 409 \
+                            `friends_playing` while anyone is in.",
+            "schema": { "type": "string" },
+        }));
+        meta.insert("friends_guard".into(), json!(true));
+    }
     if !parameters.is_empty() {
         op.insert("parameters".into(), Value::Array(parameters));
     }
-    let (responses, source) = build_responses(route, analysis, access, websocket);
+    let (mut responses, source) = build_responses(route, analysis, access, websocket);
+    if analysis.friends_guard {
+        responses["409"] = friends_playing_response(responses.get("409"));
+    }
     op.insert("responses".into(), responses);
     meta.insert("response_schema".into(), json!(source));
     op.insert("x-ps5upload".into(), Value::Object(meta));
@@ -375,6 +390,25 @@ fn build_operation(route: &Route, analysis: &Analysis, schemas: &mut Schemas<'_>
         operation: Value::Object(op),
         response_source: source,
     }
+}
+
+/// A guarded route's 409: `friends_playing`, beside what the route's own 409 carried.
+fn friends_playing_response(own: Option<&Value>) -> Value {
+    let friends = json!({ "$ref": "#/components/schemas/FriendsPlaying" });
+    let mut schemas = vec![friends];
+    match own.map(|o| &o["content"]["application/json"]["schema"]) {
+        Some(Value::Object(s)) if s.contains_key("anyOf") => {
+            schemas.extend(s["anyOf"].as_array().cloned().unwrap_or_default());
+        }
+        Some(Value::Object(s)) if !s.is_empty() => schemas.push(Value::Object(s.clone())),
+        _ => schemas.push(json!({ "$ref": "#/components/schemas/Error" })),
+    }
+    json!({
+        "description": "Conflict. `friends_playing`: friends are playing on this PS5 through \
+                        Play Together and this would end their game; ask, then send it again \
+                        confirmed.",
+        "content": { "application/json": { "schema": { "anyOf": schemas } } },
+    })
 }
 
 fn union_of(list: &[(Value, bool)]) -> Value {
@@ -803,6 +837,32 @@ pub fn generate(crates: &Path) -> Result<Generated, String> {
             },
         },
         "required": ["error"],
+    });
+    components_value["FriendsPlaying"] = json!({
+        "type": "object",
+        "description": "The engine's \"friends playing\" guard: friends are in through Play \
+                        Together on the console, and the request would end their game. Send it \
+                        again with the header `X-Confirm-Friends: 1`, the query \
+                        `confirm_friends=1` or `\"confirm_friends\": true` in the body to go \
+                        ahead.",
+        "properties": {
+            "error": { "const": "friends_playing" },
+            "code": { "const": "friends_playing" },
+            "friends": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "The names of the friends in (\"Friend\" for one who gave none).",
+            },
+            "console": {
+                "type": ["string", "null"],
+                "description": "The console, as the request named it; null for all of them.",
+            },
+            "message": {
+                "type": "string",
+                "description": "\"Friends are playing on this PS5. Stop anyway?\"",
+            },
+        },
+        "required": ["error", "friends", "console", "message"],
     });
 
     // Words the types cannot say (a field's upper bound), merged into a named schema.

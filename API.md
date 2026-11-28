@@ -121,6 +121,48 @@ The status tells you whose fault it was:
 | `502`, `504` | The console or the server behind this did not answer as it should. |
 | `507` | Not enough space. |
 
+### Friends playing
+
+While friends are in through Play Together, a request that would end their game is answered `409`
+instead of done:
+
+```json
+{ "error": "friends_playing", "code": "friends_playing", "friends": ["Mia", "Lee"],
+  "console": "192.168.1.20", "message": "Friends are playing on this PS5. Stop anyway?" }
+```
+
+`friends` names everyone in ("Friend" for someone who gave no name). `console` is the console the
+request named. Ask the person, and if they say go ahead, send the same request again with any one of:
+
+- the header `X-Confirm-Friends: 1`,
+- the query `confirm_friends=1`,
+- `"confirm_friends": true` in the JSON body.
+
+With nobody in, these routes work as they always did. The engine's own work is never asked about.
+
+| Route | Asked when |
+|---|---|
+| `POST /api/ps5/rp/stop` | always (ends the Remote Play session friends play on) |
+| `POST /api/ps5/power/control` | `standby`, `reboot`, `shutdown` (not `tick`) |
+| `POST /api/ps5/process/kill` | always |
+| `POST /api/ps5/app/lifecycle` | `kill`, `suspend` (not `resume`, `list`) |
+| `POST /api/ps5/app/launch`, `POST /api/play/app/open` | always (a launch replaces the running game) |
+| `POST /api/ps5/helper/stop` | always (the helper runs friends' controllers) |
+| `POST /api/ps5/helper/uninstall` | unless `check: true` |
+| `POST /api/payload/send` | when the payload is the helper (the raw-body form takes the header or the query) |
+| `POST /api/payload/send-check` | `helper: true` |
+| `POST /api/pkg/payload-restore` | always (it sends the helper) |
+
+The Remote Play page's socket (`GET /api/ps5/rp/ws`) does the same in its own way: `{"stop": true}`
+with friends in is answered `{"stage": "confirm_friends", "friends": [...], "message": "..."}` and
+nothing stops; `{"stop": true, "confirm_friends": true}` stops. The engine never updates itself, so
+`GET /api/engine/update` lists who is playing (`friends_playing: [{console, friends}]`) for the app
+to ask before an update or restart. The MCP tools for these actions take `confirm_friends` too.
+
+A session with friends in keeps running with no page of the host's attached (a phone asleep, the
+desktop closed), picture on or off, for up to 4 hours since the host's last page left; then it ends
+as any session with no page does.
+
 ## Long calls
 
 Many routes wait until the console has finished, which can take minutes, and a proxy or a client

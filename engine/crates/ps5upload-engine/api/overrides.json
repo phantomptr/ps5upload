@@ -184,6 +184,29 @@
    "summary": "This device's drive folders on every console, with their status"
   },
   "GET /api/engine/update": {
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "properties": {
+         "friends_playing": {
+          "description": "Who plays through Play Together now, read fresh on each call: an update or restart ends their game, so ask first. Empty when nobody is in.",
+          "items": {
+           "properties": {
+            "console": { "type": "string" },
+            "friends": { "items": { "type": "string" }, "type": "array" }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
    "summary": "Whether a newer engine release exists"
   },
   "GET /api/fakelibs/scan/{id}": {

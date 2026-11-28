@@ -1486,12 +1486,28 @@ pub(crate) async fn remove(Json(req): Json<PlayAppRemoveBody>) -> Response {
 pub(crate) struct PlayAppOpenBody {
     #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
+    /// Go ahead even though friends are playing through Play Together (together_guard.rs).
+    #[serde(default, deserialize_with = "crate::together_guard::de_confirm")]
+    confirm_friends: bool,
 }
 
-pub(crate) async fn open(Json(req): Json<PlayAppOpenBody>) -> Response {
+/// Open PS5Upload Play on the console.
+///
+/// Opening it replaces the game running now: with friends playing through Play Together, 409
+/// `friends_playing` unless confirmed (together_guard.rs).
+pub(crate) async fn open(
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(confirm): axum::extract::Query<crate::together_guard::ConfirmQuery>,
+    Json(req): Json<PlayAppOpenBody>,
+) -> Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
+    if let Some(r) =
+        crate::together_guard::check(Some(&addr), &headers, req.confirm_friends || confirm.yes())
+    {
+        return r;
+    }
     match tokio::task::spawn_blocking(move || ps5upload_core::fs_ops::app_launch(&addr, TITLE_ID))
         .await
     {
@@ -1767,7 +1783,15 @@ mod tests {
         }))
         .await;
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
-        let r = open(Json(PlayAppOpenBody { addr: None })).await;
+        let r = open(
+            Default::default(),
+            axum::extract::Query(Default::default()),
+            Json(PlayAppOpenBody {
+                addr: None,
+                confirm_friends: false,
+            }),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     }
 
