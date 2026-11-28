@@ -145,6 +145,7 @@ mod state_io;
 mod tailnet_api;
 mod tailnet_discover;
 pub(crate) mod tailnet_engine;
+mod tailnet_guest;
 pub(crate) mod tailnet_system;
 mod telemetry;
 mod title_restore_api;
@@ -13462,6 +13463,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     host_guard::log_settings();
     // A console it cannot serve is a `helper_not_ava1` error, never another protocol.
     ps5upload_ava1::mgmt::install();
+    // Friends' PS5s over the engine's own tailnet node: a listener of their own on 127.0.0.1 that
+    // serves only their two sockets (tailnet_guest.rs), which the node serves on this engine's
+    // HTTP port (the port bound, a fallback one included). Before the node starts; kept while the
+    // engine serves.
+    let _guest = tailnet_guest::boot(listener.local_addr().map_or(0, |a| a.port())).await;
     // The engine's own tailnet node (when turned on) and the away routing (tailnet_engine.rs).
     tailnet_engine::boot();
     // Every new session says who this engine is, whatever opened it (Devices showed a phone
@@ -15370,6 +15376,27 @@ mod loopback_guard_tests {
             assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
         }
         assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/join/open"));
+    }
+
+    /// The main listener's guard is not widened for Tailscale: a 100.x peer (the system app's, or
+    /// anyone routed here) is a LAN peer. The engine's own node never delivers here at all; its
+    /// guest port has a listener and router of its own (tailnet_guest.rs).
+    #[test]
+    fn a_tailnet_peer_on_the_main_listener_is_a_lan_peer() {
+        let c = cfg(&[]);
+        for p in ["/api/join/ws", "/api/play/app"] {
+            assert!(loopback_allows(&c, ip("100.101.2.3"), p), "{p}");
+        }
+        for p in [
+            "/api/join/open",
+            "/api/play/app/pair",
+            "/api/play/app/paired",
+            "/api/ps5/status",
+            "/api/tailnet/status",
+            "/api/jobs",
+        ] {
+            assert!(!loopback_allows(&c, ip("100.101.2.3"), p), "{p}");
+        }
     }
 
     #[test]

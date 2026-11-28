@@ -14,6 +14,14 @@
 //!   `tailnet_system.rs`).
 //! * Everything about the decision stays in memory: `GET /api/tailnet/route?addr=` explains it.
 //!   One log line and one `tailnet` event when a console switches path; nothing periodic.
+//! * Inbound: the engine's own node serves ONE TCP port, the engine's HTTP port on its tailnet
+//!   address, so a friend's PS5 running PS5Upload Play reaches Play Together and the app channel
+//!   over Tailscale with no Tailscale app here. The core splices it to the guest listener
+//!   ([`crate::tailnet_guest`], 127.0.0.1 at a port of its own, never the main listener) with a
+//!   PROXY line naming the peer; that listener serves only `/api/join/ws` and `/api/play/app`.
+//!   Nothing else on the tailnet reaches this device through the node: it accepts new connections
+//!   to that port alone (and only what the tailnet's access rules allow), plus the replies on its
+//!   own mappings. `status` says which port it serves (`guest_port`, 0 for none).
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
@@ -37,6 +45,45 @@ pub const ROUTED: &[(u16, bool)] = &[(9120, false), (9295, false), (9296, true),
 pub const WAKE_AWAY_NOTE: &str = "If this PS5 is not on the same network as this device, it can't be woken from here: a PS5 in rest mode is off Tailscale, and waking works only on its home network.";
 /// "Test it now": how long a console is sent through Tailscale on demand at most.
 const TEST_PATH_MAX: Duration = Duration::from_secs(15 * 60);
+
+/// What the node serves: the engine's HTTP port on its tailnet address, spliced to the guest
+/// listener's port on 127.0.0.1 (tailnet_guest.rs). Set once at engine start, before the node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuestPort {
+    pub tailnet_port: u16,
+    pub local_port: u16,
+}
+
+static GUEST_PORT: Mutex<Option<GuestPort>> = Mutex::new(None);
+
+/// Engine start (tailnet_guest::boot): the engine's HTTP port, and the guest listener's port
+/// (None: it could not be bound, and the node serves nothing).
+pub fn set_guest_port(http_port: u16, local_port: Option<u16>) {
+    *lock(&GUEST_PORT) = local_port
+        .filter(|&l| l != 0 && http_port != 0)
+        .map(|local_port| GuestPort {
+            tailnet_port: http_port,
+            local_port,
+        });
+}
+
+fn guest_port() -> Option<GuestPort> {
+    *lock(&GUEST_PORT)
+}
+
+/// The node's serve rules: the guest port alone, with the PROXY line on (the guest listener
+/// refuses a connection without one), or nothing.
+pub(crate) fn serve_rules(guest: Option<GuestPort>) -> Vec<tn::Serve> {
+    guest
+        .map(|g| tn::Serve {
+            proto: tn::Proto::Tcp,
+            port: g.tailnet_port,
+            local_port: g.local_port,
+            proxy_v1: true,
+        })
+        .into_iter()
+        .collect()
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
@@ -157,6 +204,8 @@ struct ConsoleState {
 pub struct TailnetEngine {
     dir: Option<PathBuf>,
     node: Mutex<Option<Arc<tn::Node>>>,
+    /// The guest port the running node serves (None: it serves nothing).
+    serving: Mutex<Option<GuestPort>>,
     settings: Mutex<Settings>,
     known: Mutex<Vec<KnownConsole>>,
     state: Mutex<HashMap<String, ConsoleState>>,
@@ -262,6 +311,7 @@ impl TailnetEngine {
             known: Mutex::new(load(&dir, "consoles.json").unwrap_or_default()),
             dir,
             node: Mutex::new(None),
+            serving: Mutex::new(None),
             state: Mutex::new(HashMap::new()),
             last_error: Mutex::new(String::new()),
             last_warning: Mutex::new(String::new()),
@@ -316,11 +366,39 @@ impl TailnetEngine {
             // Test beds and private Headscale servers with their own CA; DERP-only for tests.
             ca_file: std::env::var_os("PS5UPLOAD_TAILNET_CA_FILE").map(PathBuf::from),
             no_direct: std::env::var("PS5UPLOAD_TAILNET_NO_DIRECT").is_ok_and(|v| v == "1"),
+            serve: serve_rules(guest_port()),
             ..Default::default()
         };
         // A fresh start says nothing of the last run's trouble.
         self.clear_problems();
-        let node = tn::Node::start(&cfg, |ev| match ev {
+        let serving = match Self::start_node(&cfg) {
+            Ok(node) => {
+                *slot = Some(Arc::new(node));
+                guest_port()
+            }
+            // Serving failed where a client would not (an old node still held lwIP): the
+            // consoles still work through a client, only friends cannot come in.
+            Err(e) if !cfg.serve.is_empty() => {
+                crate::log_at!(
+                    Warn,
+                    "tailnet",
+                    "tailnet: could not serve the guest port ({e}); started without it"
+                );
+                let cfg = tn::Config {
+                    serve: Vec::new(),
+                    ..cfg
+                };
+                *slot = Some(Arc::new(Self::start_node(&cfg)?));
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        *lock(&self.serving) = serving;
+        Ok(())
+    }
+
+    fn start_node(cfg: &tn::Config) -> anyhow::Result<tn::Node> {
+        tn::Node::start(cfg, |ev| match ev {
             tn::Event::State(s) => {
                 crate::log_at!(Info, "tailnet", "tailnet: {s}");
                 if s == "running" {
@@ -343,9 +421,7 @@ impl TailnetEngine {
             }
             tn::Event::NetmapChanged => {}
         })
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-        *slot = Some(Arc::new(node));
-        Ok(())
+        .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     fn clear_problems(&self) {
@@ -356,6 +432,7 @@ impl TailnetEngine {
     fn stop(&self) {
         // Left before anything starts again: a node a status read still held stayed on the
         // tailnet beside the one a rename started under the same keys.
+        *lock(&self.serving) = None;
         if let Some(node) = lock(&self.node).take() {
             if !drop_when_last(node, NODE_RELEASE_WAIT) {
                 crate::log_at!(
@@ -930,6 +1007,9 @@ impl TailnetEngine {
             "derp_connected": st.as_ref().is_some_and(|s| s.derp_connected),
             "home_latency_ms": st.as_ref().and_then(|s| s.home_latency_ms).unwrap_or(-1.0),
             "key_expiry": st.as_ref().map(|s| s.key_expiry).unwrap_or(0),
+            // The port friends' PS5s reach this engine on over the node (its HTTP port), 0 when
+            // it serves none (off, or the guest listener could not be bound).
+            "guest_port": if node.is_some() { lock(&self.serving).map_or(0, |g| g.tailnet_port) } else { 0 },
             "error": lock(&self.last_error).clone(),
             "warning": lock(&self.last_warning).clone(),
             "peers": peers,
@@ -1027,6 +1107,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::create_dir_all(&d);
         d
+    }
+
+    #[test]
+    fn the_node_serves_the_http_port_to_the_guest_listener_with_the_proxy_line() {
+        let rules = serve_rules(Some(GuestPort {
+            tailnet_port: 19113,
+            local_port: 53001,
+        }));
+        assert_eq!(
+            rules,
+            vec![tn::Serve {
+                proto: tn::Proto::Tcp,
+                port: 19113,
+                local_port: 53001,
+                proxy_v1: true,
+            }]
+        );
+        // No guest listener: nothing served (a client, as before).
+        assert!(serve_rules(None).is_empty());
+    }
+
+    #[tokio::test]
+    async fn engine_start_hands_the_node_the_guest_listener_and_the_bound_port() {
+        // What lib.rs run() does: the guest listener, then the engine's own HTTP port (a fallback
+        // port included: the one bound, not the one asked for) as the tailnet port.
+        let guest = crate::tailnet_guest::boot(19114).await.unwrap();
+        let want = GuestPort {
+            tailnet_port: 19114,
+            local_port: guest.local_port,
+        };
+        assert_eq!(guest_port(), Some(want));
+        assert_eq!(serve_rules(guest_port())[0].local_port, guest.local_port);
+        assert!(serve_rules(guest_port())[0].proxy_v1);
+        // An unbound guest listener or an unknown HTTP port: nothing served.
+        set_guest_port(19114, None);
+        assert_eq!(guest_port(), None);
+        set_guest_port(0, Some(guest.local_port));
+        assert_eq!(guest_port(), None);
     }
 
     /// A stop waits for the last borrower to let the node go, so it has left before the next
