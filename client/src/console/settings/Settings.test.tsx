@@ -3,7 +3,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import de from "../locales/de.json";
 import { _setStringsLoaderForTests, chooseLanguage, getLanguage, storedLanguage, stringsReady, t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { canTurnOff, lanToggleStep, SettingsView, startSection, TurnedOff, tileNote, tileWhy, waitTileApplied, type SettingsViewProps, type WebSettings } from "./Settings";
+import {
+  canTurnOff,
+  firstOffset,
+  hasTimeZone,
+  lanToggleStep,
+  SettingsView,
+  startSection,
+  timeZoneNote,
+  TurnedOff,
+  tileNote,
+  tileWhy,
+  waitTileApplied,
+  type SettingsViewProps,
+  type WebSettings,
+} from "./Settings";
 
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   const out: ReactElement<Record<string, unknown>>[] = [];
@@ -236,5 +250,50 @@ describe("settings", () => {
     expect(startSection({ start_cheats: true }, false)).toBeNull();
     expect(startSection({ start_cheats: false }, true)).toBeNull();
     expect(startSection(null, true)).toBeNull();
+  });
+
+  // #978: backup times 3 hours ahead on a console in Recife. Settings › Time zone sets it by hand.
+  it("time_zone_choice_shows_with_a_helper_that_has_it_and_steps_through_real_offsets", () => {
+    // An older helper sends no tz_min: no section.
+    const old = elements(SettingsView(base({ onTimeZone: vi.fn() })));
+    expect(old.some((e) => e.props["data-setting"] === "time-zone")).toBe(false);
+    expect(hasTimeZone({ lan: false, tile: true, version: "12.6.31" })).toBe(false);
+
+    // Automatic, the console said UTC-3: pressed, the note says the zone, no stepper.
+    const onTimeZone = vi.fn();
+    const auto: WebSettings = { lan: false, tile: true, version: "12.6.45", tz_min: null, tz_auto: -180, tz_auto_src: "console" };
+    let els = elements(SettingsView(base({ settings: auto, onTimeZone })));
+    const choices = els.filter((e) => e.props["data-tz-choice"] !== undefined);
+    expect(choices.map((e) => e.props["data-tz-choice"])).toEqual(["auto", "offset"]);
+    expect(choices.map((e) => e.props["aria-pressed"])).toEqual([true, false]);
+    expect(els.some((e) => e.props["data-tz-step"] !== undefined)).toBe(false);
+    const at = Date.UTC(2026, 10, 27, 3, 1, 53);
+    expect(timeZoneNote(auto, at)).toContain("UTC−03:00");
+    expect(timeZoneNote(auto, at)).toMatch(/\b(00|12):01\b/); // the page's language decides 24 or 12 hours
+    // "UTC offset" starts at the console's own zone; Automatic again is a no-op while on it.
+    (choices[1].props.onClick as () => void)();
+    expect(onTimeZone).toHaveBeenCalledWith(-180);
+    (choices[0].props.onClick as () => void)();
+    expect(onTimeZone).toHaveBeenCalledTimes(1);
+
+    // By hand: the stepper moves to the next real offset either way.
+    const set: WebSettings = { ...auto, tz_min: -180 };
+    els = elements(SettingsView(base({ settings: set, onTimeZone })));
+    const step = (dir: string) => els.find((e) => e.props["data-tz-step"] === dir);
+    (step("earlier")?.props.onClick as () => void)();
+    expect(onTimeZone).toHaveBeenLastCalledWith(-210);
+    (step("later")?.props.onClick as () => void)();
+    expect(onTimeZone).toHaveBeenLastCalledWith(-150);
+    expect(timeZoneNote(set, at)).toContain("UTC−03:00");
+    (els.find((e) => e.props["data-tz-choice"] === "auto")?.props.onClick as () => void)();
+    expect(onTimeZone).toHaveBeenLastCalledWith(null);
+
+    // The console said nothing: UTC to start from, and the note says so.
+    const none: WebSettings = { ...auto, tz_auto: null, tz_auto_src: "none" };
+    expect(firstOffset(none)).toBe(0);
+    expect(timeZoneNote(none)).toBe(t("cw_settings_tz_note_unknown"));
+    // The ends of the map do not step further.
+    els = elements(SettingsView(base({ settings: { ...auto, tz_min: 840 }, onTimeZone })));
+    expect(step("later")?.props.disabled).toBe(true);
   });
 });

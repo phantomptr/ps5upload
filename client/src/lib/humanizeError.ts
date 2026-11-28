@@ -603,7 +603,7 @@ export function humanizePs5Error(
   if (/\b0x80B2[0-9A-Fa-f]{4}\b/i.test(raw)) {
     // Other 0x80B2_xxxx — PlayGo errors, not pkg-format errors.
     // Don't blame the file.
-    return te("err_install_80b2_generic");
+    return te("err_install_80b2_generic_v2");
   }
 
   // ─── BGFT init failure (0xE0000001 = BGFT_ERR_LIB_NOT_LOADABLE) ──

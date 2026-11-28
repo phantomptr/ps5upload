@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { backupName, parseBackupName } from "./saves/model";
-import { formatDate, formatDateTime, setConsoleZone } from "./time";
+import { formatDate, formatDateTime, formatZone, setConsoleZone, stepZone, timeInZone, ZONE_OFFSETS } from "./time";
 
 // A backup made at 07:25:59 on a console in Recife (UTC-3): 10:25:59 UTC.
 const MADE = Date.UTC(2026, 10, 25, 10, 25, 59);
@@ -55,6 +55,31 @@ describe("times on the PS5's own browser (#928)", () => {
     expect(formatDate(late, "pt-BR")).toBe("20/10/2026");
     setConsoleZone(9 * 60, true); // Tokyo
     expect(formatDate(Date.UTC(2026, 9, 20, 16), "en-GB")).toBe("21/10/2026");
+  });
+
+  it("#978: the report's backup, 03:01:53 UTC, reads 00:01:53 once the zone arrives (by hand or from the console)", () => {
+    const made = Date.UTC(2026, 10, 27, 3, 1, 53);
+    const name = backupName(new Date(made));
+    expect(name).toBe("2026-11-27_03-01-53Z");
+    expect(formatDateTime(parseBackupName(name)!.when, "pt-BR")).toBe("27/11/2026, 03:01:53"); // the bug
+    setConsoleZone(RECIFE, true);
+    expect(formatDateTime(parseBackupName(name)!.when, "pt-BR")).toBe("27/11/2026, 00:01:53");
+  });
+
+  it("names and steps through the offsets real zones use", () => {
+    expect(formatZone(-180)).toBe("UTC−03:00");
+    expect(formatZone(345)).toBe("UTC+05:45");
+    expect(formatZone(-570)).toBe("UTC−09:30");
+    expect(formatZone(0)).toBe("UTC");
+    expect(stepZone(-180, -1)).toBe(-210);
+    expect(stepZone(-180, 1)).toBe(-150);
+    expect(stepZone(330, 1)).toBe(345);
+    expect(stepZone(-720, -1)).toBe(-720);
+    expect(stepZone(840, 1)).toBe(840);
+    expect(stepZone(-100, 1)).toBe(-60); // off the map: the next real one
+    expect(ZONE_OFFSETS.every((z) => z % 15 === 0 && z >= -720 && z <= 840)).toBe(true);
+    expect(timeInZone(Date.UTC(2026, 10, 27, 3, 1, 53), -180, "en-GB")).toBe("00:01");
+    expect(timeInZone(Date.UTC(2026, 10, 27, 3, 1, 53), 345, "en-GB")).toBe("08:46");
   });
 
   it("uses the console's zone on the console only, not on another device", () => {

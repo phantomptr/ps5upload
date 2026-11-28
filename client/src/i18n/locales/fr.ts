@@ -1874,8 +1874,7 @@ err_install_1401:
   "Le chemin d'installation ShellUI de la PS5 a rejeté la requête (0x80B21401). Généralement associé à un autre échec de tier sur FW 9.60 lorsque le point firmware ne dispose pas des registres BGFT dont nous dépendons. Essayez le dernier payload depuis Connection → Send payload, ou installez via le propre panneau Debug Settings de la PS5.",
 err_install_2101:
   "Un téléchargement antérieur du même contenu est encore en file sur la PS5. Ouvrez le panneau de notifications de la PS5, effacez-le, puis réessayez l'installation.",
-err_install_80b2_generic:
-  "Le sous-système PlayGo de la PS5 a rejeté l'installation avec une erreur 0x80B2_xxxx. C'est le chemin de récupération de l'installation, pas l'analyseur de pkg — votre fichier est probablement correct. Envoyez l'assistant actuel (« Envoyer l'assistant » dans la bannière, ou depuis l'écran Connexion) ; son chemin d'installation contourne le type de rejet 0x80B2 le plus fréquent.",
+err_install_80b2_generic_v2: "La PS5 a refusé d'installer ce paquet (erreur 0x80B2…). Le fichier lui-même est généralement correct. Envoyez l'assistant le plus récent à la PS5 (« Envoyer l'assistant » dans la bannière, ou depuis l'écran Connexion) et réessayez : il évite la cause la plus fréquente de cette erreur.",
 err_bgft_not_loadable:
   "Le firmware de votre PS5 n'expose pas l'installateur BGFT de Sony d'une manière utilisable par ps5upload. Vérifiez que la PS5 exécute l'assistant actuel (« Envoyer l'assistant » dans la bannière, ou renvoyez-le depuis l'écran Connexion), puis réessayez. Si l'échec persiste, ce firmware ne peut pas installer un .pkg de cette façon : installez-le sur la PS5 elle-même (Paramètres → Système → Paramètres de débogage → Jeu → Package Installer) ou, pour un dossier de jeu ou une image disque, utilisez « Ajouter à l'écran d'accueil » sur la page du jeu dans Jeux.",
 err_install_enoent_dlc:
@@ -6177,6 +6176,14 @@ c2c_test_deep_bad: "L’envoi test de 4 Kio n’est pas arrivé : {detail}",
 "cw_settings_using": "Manette et astuces",
 "cw_settings_start": "Page de démarrage",
 "cw_settings_start_note": "Enregistrée sur la PS5. Avec Codes, PS5Upload Minion s'ouvre sur les codes du jeu en cours.",
+"cw_settings_tz": "Fuseau horaire",
+"cw_settings_tz_auto": "Automatique",
+"cw_settings_tz_offset": "Décalage UTC",
+"cw_settings_tz_earlier": "Plus tôt",
+"cw_settings_tz_later": "Plus tard",
+"cw_settings_tz_note_auto": "Les heures dans le navigateur de la PS5 suivent le fuseau de la console : {zone}, il est {now}. Si ce n'est pas le bon, choisissez Décalage UTC.",
+"cw_settings_tz_note_unknown": "La PS5 n'a pas indiqué son fuseau horaire, donc son navigateur affiche les heures en UTC. Choisissez Décalage UTC pour régler le vôtre.",
+"cw_settings_tz_note_offset": "Les heures dans le navigateur de la PS5 utilisent {zone}, il est {now}. Un téléphone ou un PC utilise sa propre horloge.",
 "cw_settings_controls": "Commandes",
 "cw_settings_controls_note": "Ce que fait ici chaque bouton de la manette. Appuyez sur un bouton pour le tester.",
 "cw_settings_tips": "Revoir les astuces",
@@ -8200,6 +8207,7 @@ helper_copies_failed_body: "Toujours l'ancien assistant : {list}. La PS5 le rela
 "join_guide_title": "Encore une étape sur la télé",
 "join_guide_body": "Appuyez une fois sur PS sur votre manette. La télé demande « Qui utilise cette manette ? ». Choisissez Jeu rapide ou votre propre utilisateur. L'hôte n'a rien à faire.",
 "join_guide_menus": "Sur l'écran d'accueil de la PS5, seul l'hôte contrôle les menus ; votre manette joue dans les jeux.",
+"join_guide_stuck": "Rien ne bouge sur cet écran ? Demandez à l'hôte d'envoyer un rapport de bug depuis PS5Upload : il montre si sa PS5 accepte votre manette.",
 "join_guide_ok": "Compris",
 "join_reconnecting": "Reconnexion…",
 "join_reconnecting_left": "Votre place est gardée pendant {time}.",

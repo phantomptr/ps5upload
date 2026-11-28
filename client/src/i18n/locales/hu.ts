@@ -2623,8 +2623,7 @@ err_install_1401:
   "A PS5 ShellUI telepítési útvonala elutasította a kérést (0x80B21401). Gyakran egy másik szintű hibával párosul FW 9.60-on, amikor az adott firmware-pont nem rendelkezik a szükséges BGFT-regiszterekkel. Próbáld a legújabb payloadot a Connection → Send payload menüből, vagy telepíts a PS5 saját Debug Settings paneljén keresztül.",
 err_install_2101:
   "Egy korábbi letöltés ugyanahhoz a tartalomhoz még várólistán van a PS5-ön. Nyisd meg a PS5 értesítési panelét, töröld, majd próbáld újra a telepítést.",
-err_install_80b2_generic:
-  "A PS5 PlayGo alrendszere elutasította a telepítést egy 0x80B2_xxxx hibával. Ez a telepítési lekérési útvonal, nem a pkg-elemző — a fájlod valószínűleg rendben van. Küldd el a jelenlegi segédprogramot (Segédprogram küldése a sávban, vagy a Kapcsolat képernyőről); a telepítési útvonala megkerüli a leggyakoribb 0x80B2 elutasítási osztályt.",
+err_install_80b2_generic_v2: "A PS5 nem telepítette ezt a csomagot (0x80B2… hiba). Maga a fájl általában rendben van. Küldd el a legújabb segédprogramot a PS5-re (Segédprogram küldése a sávban, vagy a Kapcsolat képernyőről), és próbáld újra: elkerüli a hiba leggyakoribb okát.",
 err_bgft_not_loadable:
   "A PS5 firmware-ed nem teszi elérhetővé a Sony BGFT telepítőjét olyan módon, amit a ps5upload használni tud. Győződj meg róla, hogy a PS5 a jelenlegi segédprogramot futtatja (Segédprogram küldése a sávban, vagy küldd el újra a Kapcsolat képernyőről), majd próbáld újra. Ha még mindig nem sikerül, ez a firmware így nem tud .pkg-t telepíteni: telepítsd magán a PS5-ön (Beállítások → Rendszer → Hibakeresési beállítások → Játék → Package Installer), vagy játékmappa vagy lemezkép esetén használd a Hozzáadás a kezdőképernyőhöz lehetőséget a játék oldalán a Játékok között.",
 err_install_enoent_dlc:
@@ -6453,6 +6452,14 @@ c2c_test_deep_bad: "A 4 KiB-os tesztküldés nem érkezett meg: {detail}",
 "cw_settings_using": "Kontroller és tippek",
 "cw_settings_start": "Kezdőoldal",
 "cw_settings_start_note": "A PS5-ön tárolódik. Csalások esetén a PS5Upload Minion a futó játék csalásainál nyílik meg.",
+"cw_settings_tz": "Időzóna",
+"cw_settings_tz_auto": "Automatikus",
+"cw_settings_tz_offset": "UTC-eltérés",
+"cw_settings_tz_earlier": "Korábban",
+"cw_settings_tz_later": "Később",
+"cw_settings_tz_note_auto": "A PS5 böngészőjében az időpontok a konzol időzónáját követik: {zone}, most {now}. Ha ez hibás, válaszd az UTC-eltérést.",
+"cw_settings_tz_note_unknown": "A PS5 nem adta meg az időzónáját, ezért a böngészője UTC szerint mutatja az időpontokat. Válaszd az UTC-eltérést a sajátod beállításához.",
+"cw_settings_tz_note_offset": "A PS5 böngészőjében az időpontok ezt használják: {zone}, most {now}. A telefon vagy a PC a saját óráját használja.",
 "cw_settings_controls": "Irányítás",
 "cw_settings_controls_note": "Mit csinál itt a kontroller egyes gombja. Nyomj meg egy gombot a kipróbáláshoz.",
 "cw_settings_tips": "Tippek újbóli megjelenítése",
@@ -8476,6 +8483,7 @@ helper_copies_failed_body: "Még mindig a régi segédprogram: {list}. A PS5 min
 "join_guide_title": "Még egy lépés a tévén",
 "join_guide_body": "Nyomd meg egyszer a PS gombot a kontrollereden. A tévé megkérdezi: „Ki használja ezt a kontrollert?”. Válaszd a Gyors játékot vagy a saját felhasználódat. A házigazdának semmit sem kell tennie.",
 "join_guide_menus": "A PS5 kezdőképernyőjén csak a házigazda kezeli a menüket; a te kontrollered a játékokban működik.",
+"join_guide_stuck": "Semmi sem mozdul azon a képernyőn? Kérd meg a házigazdát, hogy küldjön hibajelentést a PS5Uploadból: abból kiderül, hogy a PS5-je fogadja-e a kontrolleredet.",
 "join_guide_ok": "Értem",
 "join_reconnecting": "Újracsatlakozás…",
 "join_reconnecting_left": "A helyed még {time} ideig fenntartjuk.",

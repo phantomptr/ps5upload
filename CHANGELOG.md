@@ -6,6 +6,17 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**PS5Upload Minion**
+- **Save backup times show the PS5's own time (#978).** On some consoles the page still showed backup times in UTC (3 hours ahead in Recife). Minion now reads the time zone the way the PS5's own clock does, and falls back to the old way when it can't. If times still look wrong, **Settings › Time zone** lets you pick your UTC offset by hand. Needs the new helper.
+
+**Play Together**
+- **When a friend's controller does nothing on "Who's using this controller?"** (reported on an early-firmware PS5), the helper log now says whether the PS5 took or refused that controller's input, so a bug report from the host shows where it stops. The friend's guide says to ask the host for one.
+
+**Installs**
+- The message for a 0x80B2 install error is in plain words now, in every language.
+
+## 12.6.44
+
 **TV mode (#976)**
 - **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
 

@@ -1875,8 +1875,7 @@ err_install_1401:
   "Der ShellUI-Installationspfad der PS5 hat die Anfrage abgelehnt (0x80B21401). Tritt auf FW 9.60 meist zusammen mit einem weiteren Tier-Fehler auf, wenn dem Firmware-Punkt die BGFT-Register fehlen, von denen wir abhängen. Probiere das neueste Payload über Connection → Send payload oder installiere über das PS5-eigene Debug-Settings-Panel.",
 err_install_2101:
   "Ein früherer Download für denselben Inhalt steht noch in der Warteschlange der PS5. Öffne das Benachrichtigungsfeld der PS5, lösche ihn und versuche die Installation dann erneut.",
-err_install_80b2_generic:
-  "Das PlayGo-Subsystem der PS5 hat die Installation mit einem Fehler 0x80B2_xxxx abgelehnt. Das betrifft den Abrufpfad der Installation, nicht den pkg-Parser — deine Datei ist wahrscheinlich in Ordnung. Sende den aktuellen Helfer („Helfer senden“ im Banner oder auf dem Verbindungsbildschirm); sein Installationspfad umgeht die häufigste Art von 0x80B2-Ablehnungen.",
+err_install_80b2_generic_v2: "Die PS5 hat die Installation dieses Pakets abgelehnt (Fehler 0x80B2…). Die Datei selbst ist meist in Ordnung. Sende den neuesten Helfer an die PS5 („Helfer senden“ im Banner oder auf dem Verbindungsbildschirm) und versuche es erneut: Er umgeht die häufigste Ursache dieses Fehlers.",
 err_bgft_not_loadable:
   "Deine PS5-Firmware stellt Sonys BGFT-Installer nicht so bereit, dass ps5upload ihn nutzen kann. Stelle sicher, dass auf der PS5 der aktuelle Helfer läuft („Helfer senden“ im Banner, oder sende ihn erneut vom Verbindungsbildschirm), und versuche es dann erneut. Schlägt es weiterhin fehl, kann diese Firmware eine .pkg so nicht installieren: Installiere sie auf der PS5 selbst (Einstellungen → System → Debug-Einstellungen → Spiel → Package Installer) oder nutze für einen Spielordner oder ein Disk-Image „Zum Startbildschirm hinzufügen“ auf der Seite des Spiels unter Spiele.",
 err_install_enoent_dlc:
@@ -6169,6 +6168,14 @@ c2c_test_deep_bad: "Die 4-KiB-Testsendung ist nicht angekommen: {detail}",
 "cw_settings_using": "Controller und Tipps",
 "cw_settings_start": "Startseite",
 "cw_settings_start_note": "Wird auf der PS5 gespeichert. Mit Cheats öffnet sich PS5Upload Minion bei den Cheats des laufenden Spiels.",
+"cw_settings_tz": "Zeitzone",
+"cw_settings_tz_auto": "Automatisch",
+"cw_settings_tz_offset": "UTC-Abweichung",
+"cw_settings_tz_earlier": "Früher",
+"cw_settings_tz_later": "Später",
+"cw_settings_tz_note_auto": "Zeiten im Browser der PS5 folgen der Zeitzone der Konsole: {zone}, jetzt {now}. Stimmt das nicht, wähle UTC-Abweichung.",
+"cw_settings_tz_note_unknown": "Die PS5 hat ihre Zeitzone nicht genannt, daher zeigt ihr Browser Zeiten in UTC. Wähle UTC-Abweichung, um deine einzustellen.",
+"cw_settings_tz_note_offset": "Zeiten im Browser der PS5 nutzen {zone}, jetzt {now}. Ein Handy oder PC nutzt seine eigene Uhr.",
 "cw_settings_controls": "Steuerung",
 "cw_settings_controls_note": "Was jede Controller-Taste hier tut. Drücke eine Taste, um sie zu testen.",
 "cw_settings_tips": "Tipps erneut zeigen",
@@ -8192,6 +8199,7 @@ helper_copies_failed_body: "Weiterhin der alte Helfer: {list}. Die PS5 startet i
 "join_guide_title": "Noch ein Schritt am Fernseher",
 "join_guide_body": "Drücke einmal PS auf deinem Controller. Der Fernseher fragt „Wer benutzt diesen Controller?“. Wähle „Schnellspiel“ oder deinen eigenen Benutzer. Der Gastgeber muss nichts tun.",
 "join_guide_menus": "Auf dem Startbildschirm der PS5 steuert nur der Gastgeber die Menüs; dein Controller spielt in den Spielen.",
+"join_guide_stuck": "Auf diesem Bildschirm bewegt sich nichts? Bitte den Host, in PS5Upload einen Fehlerbericht zu senden: Er zeigt, ob seine PS5 deinen Controller annimmt.",
 "join_guide_ok": "Verstanden",
 "join_reconnecting": "Verbinde neu…",
 "join_reconnecting_left": "Dein Platz wird {time} lang freigehalten.",

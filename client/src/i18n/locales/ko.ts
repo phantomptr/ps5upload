@@ -1875,8 +1875,7 @@ err_install_1401:
   "PS5의 ShellUI 설치 경로가 요청을 거부했습니다(0x80B21401). 보통 펌웨어 포인트에 우리가 의존하는 BGFT 레지스터가 없는 FW 9.60에서 다른 계층 실패와 함께 나타납니다. Connection → 페이로드 전송에서 최신 페이로드를 시도하거나 PS5 자체의 Debug Settings 패널로 설치하세요.",
 err_install_2101:
   "동일한 콘텐츠에 대한 이전 다운로드가 아직 PS5에 대기 중입니다. PS5의 알림 패널을 열어 정리한 뒤 설치를 다시 시도하세요.",
-err_install_80b2_generic:
-  "PS5의 PlayGo 서브시스템이 0x80B2_xxxx 오류로 설치를 거부했습니다. 이것은 pkg 파서가 아니라 설치 가져오기 경로의 문제이므로 파일 자체는 아마 정상입니다. 최신 헬퍼를 보내세요(배너의 '헬퍼 보내기' 또는 '연결' 화면에서). 그 설치 경로는 가장 흔한 0x80B2 거부 유형을 우회합니다.",
+err_install_80b2_generic_v2: "PS5가 이 패키지 설치를 거부했습니다(오류 0x80B2…). 파일 자체는 대개 문제없습니다. 최신 헬퍼를 PS5로 보낸 뒤('헬퍼 보내기' 배너 또는 '연결' 화면에서) 다시 시도하세요. 이 오류의 가장 흔한 원인을 피할 수 있습니다.",
 err_bgft_not_loadable:
   "이 PS5 펌웨어는 ps5upload가 사용할 수 있는 방식으로 Sony의 BGFT 설치 프로그램을 제공하지 않습니다. PS5에서 최신 헬퍼가 실행 중인지 확인한 뒤(배너의 '헬퍼 보내기' 또는 '연결' 화면에서 다시 보내기) 다시 시도하세요. 그래도 실패하면 이 펌웨어에서는 그 방식으로 .pkg를 설치할 수 없습니다. PS5 본체에서 설치하거나(설정 → 시스템 → 디버그 설정 → 게임 → Package Installer), 게임 폴더나 디스크 이미지라면 '게임'의 해당 게임 페이지에서 '홈 화면에 추가'를 쓰세요.",
 err_install_enoent_dlc:
@@ -6178,6 +6177,14 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_settings_using": "컨트롤러와 팁",
 "cw_settings_start": "시작 페이지",
 "cw_settings_start_note": "PS5에 저장됩니다. 치트를 고르면 PS5Upload Minion이 실행 중인 게임의 치트로 열립니다.",
+"cw_settings_tz": "시간대",
+"cw_settings_tz_auto": "자동",
+"cw_settings_tz_offset": "UTC 시차",
+"cw_settings_tz_earlier": "이르게",
+"cw_settings_tz_later": "늦게",
+"cw_settings_tz_note_auto": "PS5 브라우저의 시간은 본체의 시간대를 따릅니다: {zone}, 지금 {now}. 틀리면 'UTC 시차'를 고르세요.",
+"cw_settings_tz_note_unknown": "PS5가 시간대를 알려 주지 않아 브라우저의 시간이 UTC로 표시됩니다. 'UTC 시차'를 골라 설정하세요.",
+"cw_settings_tz_note_offset": "PS5 브라우저의 시간은 {zone}을(를) 사용합니다. 지금 {now}. 휴대폰이나 PC는 자체 시계를 사용합니다.",
 "cw_settings_controls": "조작법",
 "cw_settings_controls_note": "여기서 각 컨트롤러 버튼이 하는 일. 버튼을 눌러 테스트하세요.",
 "cw_settings_tips": "팁 다시 보기",
@@ -8201,6 +8208,7 @@ helper_copies_failed_body: "여전히 이전 헬퍼입니다: {list}. PS5는 재
 "join_guide_title": "TV에서 한 단계만 더",
 "join_guide_body": "컨트롤러의 PS 버튼을 한 번 누르세요. TV에 \"이 컨트롤러를 누가 사용하나요?\"가 나타나요. 빠른 플레이나 내 사용자를 선택하세요. 호스트는 아무것도 하지 않아도 돼요.",
 "join_guide_menus": "PS5 홈 화면에서는 호스트만 메뉴를 조작할 수 있어요. 내 컨트롤러는 게임 안에서 플레이합니다.",
+"join_guide_stuck": "그 화면에서 아무것도 움직이지 않나요? 호스트에게 PS5Upload에서 버그 리포트를 보내 달라고 하세요. 호스트의 PS5가 내 컨트롤러를 받아들이는지 알 수 있어요.",
 "join_guide_ok": "알겠어요",
 "join_reconnecting": "다시 연결 중…",
 "join_reconnecting_left": "{time} 동안 자리가 유지돼요.",

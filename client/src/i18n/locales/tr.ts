@@ -1874,8 +1874,7 @@ err_install_1401:
   "PS5'in ShellUI kurulum yolu isteği reddetti (0x80B21401). Ürün yazılımı noktası bağımlı olduğumuz BGFT register'larından yoksun olduğunda FW 9.60'ta genellikle başka bir tier hatasıyla birlikte görülür. Connection → Send payload bölümünden en son payload'ı deneyin veya PS5'in kendi Debug Settings panelinden kurun.",
 err_install_2101:
   "Aynı içerik için daha önceki bir indirme hâlâ PS5'te kuyrukta. PS5'in bildirim panelini açın, temizleyin, sonra kurulumu tekrar deneyin.",
-err_install_80b2_generic:
-  "PS5'in PlayGo alt sistemi kurulumu bir 0x80B2_xxxx hatasıyla reddetti. Bu, kurulum getirme yoludur, pkg ayrıştırıcısı değil — dosyanız büyük olasılıkla sorunsuzdur. Güncel yardımcıyı gönderin (uyarı bandındaki Yardımcıyı gönder ya da Bağlantı ekranından); onun kurulum yolu en yaygın 0x80B2 reddetme sınıfını atlar.",
+err_install_80b2_generic_v2: "PS5 bu paketi kurmayı reddetti (0x80B2… hatası). Dosyanın kendisi genellikle sorunsuzdur. En son yardımcıyı PS5'e gönderin (uyarı bandındaki Yardımcıyı gönder ya da Bağlantı ekranından) ve yeniden deneyin: bu hatanın en yaygın nedenini atlar.",
 err_bgft_not_loadable:
   "PS5 ürün yazılımın, Sony'nin BGFT yükleyicisini ps5upload'ın kullanabileceği bir şekilde sunmuyor. PS5'in güncel yardımcıyı çalıştırdığından emin ol (uyarı bandındaki Yardımcıyı gönder ya da Bağlantı ekranından yeniden gönder), sonra tekrar dene. Yine başarısız olursa bu ürün yazılımı .pkg'yi bu yolla kuramaz: PS5'in kendisinde kur (Ayarlar → Sistem → Hata Ayıklama Ayarları → Oyun → Paket Yükleyici) ya da oyun klasörü veya disk imajı için Oyunlar'da oyunun sayfasındaki Ana ekrana ekle'yi kullan.",
 err_install_enoent_dlc:
@@ -6168,6 +6167,14 @@ c2c_test_deep_bad: "4 KiB'lik test gönderimi ulaşmadı: {detail}",
 "cw_settings_using": "Kumanda ve ipuçları",
 "cw_settings_start": "Açılış sayfası",
 "cw_settings_start_note": "PS5'te saklanır. Hileler seçiliyse PS5Upload Minion çalışan oyunun hileleriyle açılır.",
+"cw_settings_tz": "Saat dilimi",
+"cw_settings_tz_auto": "Otomatik",
+"cw_settings_tz_offset": "UTC farkı",
+"cw_settings_tz_earlier": "Daha erken",
+"cw_settings_tz_later": "Daha geç",
+"cw_settings_tz_note_auto": "PS5 tarayıcısındaki saatler konsolun saat dilimini izler: {zone}, şu an {now}. Yanlışsa UTC farkı'nı seç.",
+"cw_settings_tz_note_unknown": "PS5 saat dilimini bildirmedi, bu yüzden tarayıcısı saatleri UTC olarak gösteriyor. Kendi saat dilimini ayarlamak için UTC farkı'nı seç.",
+"cw_settings_tz_note_offset": "PS5 tarayıcısındaki saatler {zone} kullanır, şu an {now}. Telefon veya bilgisayar kendi saatini kullanır.",
 "cw_settings_controls": "Kontroller",
 "cw_settings_controls_note": "Her kumanda tuşunun burada ne yaptığı. Denemek için bir tuşa basın.",
 "cw_settings_tips": "İpuçlarını yeniden göster",
@@ -8191,6 +8198,7 @@ helper_copies_failed_body: "Hâlâ eski yardımcı: {list}. PS5 her yeniden baş
 "join_guide_title": "Televizyonda bir adım daha",
 "join_guide_body": "Kumandandaki PS tuşuna bir kez bas. Televizyon \"Bu kumandayı kim kullanıyor?\" diye sorar. Hızlı Oyna'yı ya da kendi kullanıcını seç. Ev sahibinin bir şey yapması gerekmez.",
 "join_guide_menus": "PS5 ana ekranında menüleri yalnızca ev sahibi kontrol eder; senin kumandan oyunların içinde çalışır.",
+"join_guide_stuck": "O ekranda hiçbir şey kıpırdamıyor mu? Ev sahibinden PS5Upload'dan bir hata raporu göndermesini iste: PS5'inin kumandanı alıp almadığını gösterir.",
 "join_guide_ok": "Anladım",
 "join_reconnecting": "Yeniden bağlanıyor…",
 "join_reconnecting_left": "Yerin {time} boyunca tutuluyor.",

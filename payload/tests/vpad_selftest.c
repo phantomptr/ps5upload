@@ -475,7 +475,14 @@ static void test_close_output_status(void) {
     CHECK(vpad_status_json(1500, g_out, sizeof g_out) > 0);
     CHECK(HAS("{\"ok\":true,\"slots\":[{\"slot\":2,\"player\":2,\"open\":false},{\"slot\":3,\"player\":3,\"open\":false},"
               "{\"slot\":4,\"player\":4,\"open\":true,\"owner\":\""));
-    CHECK(HAS("\"user\":9,\"since_ms\":500,\"last_state_ms\":300,\"neutral\":false,\"neutral_ms\":0,\"bound\":0}]}"));
+    CHECK(HAS("\"user\":9,\"since_ms\":500,\"last_state_ms\":300,\"neutral\":false,\"neutral_ms\":0,\"bound\":0,"
+              "\"taken\":1,\"refused\":0,\"last_err\":0}]}"));
+    /* a state the console refuses is counted with its errno (the helper log says so too) */
+    f_insert_err = -EIO;
+    CHECK(vstate("{\"slot\":4,\"token\":\"" TOK_A "\",\"seq\":2}", 1300) > 0 && HAS("vpad_failed"));
+    CHECK(vstate("{\"slot\":4,\"token\":\"" TOK_A "\",\"seq\":3}", 1300) > 0 && HAS("vpad_failed"));
+    f_insert_err = 0;
+    CHECK(vpad_status_json(1500, g_out, sizeof g_out) > 0 && HAS("\"taken\":1,\"refused\":2,\"last_err\":-5}]}"));
     CHECK(!HAS(TOK_A) && !HAS("0123456789")); /* the token never shows */
     {
         char tiny[16];

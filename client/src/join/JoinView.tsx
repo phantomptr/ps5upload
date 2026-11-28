@@ -1099,6 +1099,13 @@ export function JoinView({
                 "On the PS5's home screen only the host controls the menus; your controller plays inside games.",
               )}
             </p>
+            <p className="mt-1 text-white/60" data-testid="join-guide-stuck">
+              {tr(
+                "join_guide_stuck",
+                undefined,
+                "Nothing moves on that screen? Ask the host to send a bug report from PS5Upload: it shows whether their PS5 takes your controller.",
+              )}
+            </p>
             <button
               type="button"
               onClick={() => {

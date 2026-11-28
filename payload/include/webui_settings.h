@@ -8,6 +8,11 @@
  * start_cheats: 1 opens the page on Cheats (the running game's) instead of Home (#584). Only the
  *          page reads it. A boolean like the rest, so an older helper reading the file ignores it
  *          instead of reading the whole file as garbled.
+ * tz_min:  the page's time zone in minutes ahead of UTC, chosen by hand (#978: Settings -> Time
+ *          zone); absent (or null) is Automatic, the console's own zone. Only written when set. An
+ *          older helper looks up its own keys only and so ignores it. A value that is no real
+ *          offset (webui_tz_setting_ok) reads as Automatic instead of making the file garbled: a
+ *          bad time zone must never reset the LAN and tile settings.
  *
  * Pure file I/O (host-tested in payload/tests/webui_settings_selftest.c). Callers serialize
  * saves to one path themselves (webui_api.c holds its settings lock across a save). */
@@ -23,9 +28,11 @@ typedef struct {
     int tile;
     int enabled;
     int start_cheats;
+    int tz_set; /* 1: tz_min was chosen by hand; 0: Automatic */
+    int tz_min;
 } webui_settings_t;
 
-/* lan = 0, tile = 1, enabled = 1, start_cheats = 0. */
+/* lan = 0, tile = 1, enabled = 1, start_cheats = 0, time zone Automatic. */
 void webui_settings_defaults(webui_settings_t *out);
 
 /* Whether the tile should be on the home screen: Minion on and its tile setting on. */

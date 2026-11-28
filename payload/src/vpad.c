@@ -150,7 +150,14 @@ typedef struct {
     /* Who the console says owned the pad when it was seated (the companion's answer): what a resume
      * reports as `owner` again, never the bound user in its place. */
     uint32_t bind_owner;
+    /* For the helper log (a guest whose presses do nothing): states the console took and refused,
+     * the last refusal's errno, and when one was last logged (at most one line a minute). */
+    unsigned taken, refused, resumes;
+    int last_err;
+    long long refuse_logged_ms, resume_logged_ms;
 } slot_t;
+
+#define VPAD_REFUSE_LOG_MS 60000
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static slot_t g_slots[VPAD_SLOTS];
@@ -583,6 +590,13 @@ static int refuse_bind(char *out, size_t cap, const char *err, const char *compa
 static int resume_locked(slot_t *s, long long now_ms, char *out, size_t cap) {
     s->last_alive_ms = now_ms;
     s->have_seq = 0;
+    /* The engine opens again after any refused state, so a pad the console refuses resumes once
+     * per state: a line a minute at most here too. */
+    if (s->resumes++ == 0 || now_ms - s->resume_logged_ms >= VPAD_REFUSE_LOG_MS) {
+        s->resume_logged_ms = now_ms;
+        fprintf(stderr, "[vpad] player %d: pad %d resumed (%u times; %u states taken, %u refused)\n", player_of(s),
+                s->handle, s->resumes, s->taken, s->refused);
+    }
     return opened_answer(out, cap, s, 1, s->bind_owner);
 }
 
@@ -730,9 +744,21 @@ static const char *apply_locked(const state_req_t *q, long long now_ms, int *app
     if (s->have_seq && q->seq <= s->seq) return NULL;
     rc = insert_locked(s, &q->st);
     if (rc != 0) {
+        /* The pad was made but the console will not take its input: on a firmware whose pad layout
+         * differs this is all a guest sees (nothing moves). Logged, a line a minute at most. */
+        s->refused++;
+        s->last_err = rc;
+        if (s->refused == 1 || now_ms - s->refuse_logged_ms >= VPAD_REFUSE_LOG_MS) {
+            s->refuse_logged_ms = now_ms;
+            fprintf(stderr, "[vpad] player %d: pad %d refused a state (%d; %u refused, %u taken)\n", q->slot,
+                    s->handle, rc, s->refused, s->taken);
+        }
         *code = rc;
         return "vpad_failed";
     }
+    if (s->taken++ == 0)
+        fprintf(stderr, "[vpad] player %d: pad %d took its first input (%lld ms after it was made)\n", q->slot, s->handle,
+                now_ms - s->opened_ms);
     s->have_seq = 1;
     s->seq = q->seq;
     s->last = q->st;
@@ -887,10 +913,12 @@ int vpad_status_json(long long now_ms, char *out, size_t cap) {
         if (s->open)
             w = snprintf(out + len, cap - len,
                          "%s{\"slot\":%d,\"player\":%d,\"open\":true,\"owner\":\"%08x\",\"user\":%u,\"since_ms\":%lld,"
-                         "\"last_state_ms\":%lld,\"neutral\":%s,\"neutral_ms\":%lld,\"bound\":%u}",
+                         "\"last_state_ms\":%lld,\"neutral\":%s,\"neutral_ms\":%lld,\"bound\":%u,\"taken\":%u,\"refused\":%u,"
+                         "\"last_err\":%d}",
                          i ? "," : "", player_of(s), player_of(s), (unsigned)token_hash(s->token), (unsigned)s->user,
                          now_ms - s->opened_ms, s->last_state_ms < 0 ? -1LL : now_ms - s->last_state_ms,
-                         s->neutral ? "true" : "false", s->neutral ? now_ms - s->neutral_ms : 0LL, (unsigned)s->bound);
+                         s->neutral ? "true" : "false", s->neutral ? now_ms - s->neutral_ms : 0LL, (unsigned)s->bound,
+                         s->taken, s->refused, s->last_err);
         else
             w = snprintf(out + len, cap - len, "%s{\"slot\":%d,\"player\":%d,\"open\":false}", i ? "," : "",
                          player_of(s), player_of(s));
