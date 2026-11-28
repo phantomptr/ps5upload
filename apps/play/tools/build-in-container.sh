@@ -142,12 +142,17 @@ bash "$root/tools/make-stub.sh" "$build/stubs/libSceVideodec2.so" libSceVideodec
     sceVideodec2ReleaseComputeQueue sceVideodec2QueryDecoderMemoryInfo \
     sceVideodec2CreateDecoder sceVideodec2DeleteDecoder sceVideodec2Decode \
     sceVideodec2Flush sceVideodec2Reset sceVideodec2GetPictureInfo
+# libSceAudioIn (the microphone, src/ps5/mic.cpp): loaded for every app, but the SDK has no stub.
+bash "$root/tools/make-stub.sh" "$build/stubs/libSceAudioIn.so" libSceAudioIn.sprx \
+    sceAudioInInit sceAudioInOpen sceAudioInHqOpen sceAudioInInput sceAudioInGetSilentState \
+    sceAudioInClose sceAudioInGetHandleStatusInfo
 
 "$sdk/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr --gc-sections \
     --version-script "$native/app-symbols.map" -e _start -o "$build/llvm-pie.elf" \
     "$build/obj/app_crt.o" "$build/obj/app_cpp_runtime.o" "${objs[@]}" "$opus_lib" \
     "$build/libps5_kernel_api.a" "$sdk/target/lib/libc.a" \
-    --as-needed "$sdk/target/lib/libkernel.so" "$sdk"/target/lib/*.so "$build/stubs/libSceVideodec2.so"
+    --as-needed "$sdk/target/lib/libkernel.so" "$sdk"/target/lib/*.so "$build/stubs/libSceVideodec2.so" \
+    "$build/stubs/libSceAudioIn.so"
 
 # A raw syscall outside libkernel kills an app on the console (PS5Term finding).
 raw=$(llvm-objdump -d --no-show-raw-insn "$build/llvm-pie.elf" |
@@ -155,7 +160,7 @@ raw=$(llvm-objdump -d --no-show-raw-insn "$build/llvm-pie.elf" |
 [[ -z $raw ]] || { echo "raw syscall instructions in: $raw" >&2; exit 2; }
 
 "$tool" link --in "$build/llvm-pie.elf" --out "$build/eboot.elf" \
-    --stub "$build/stubs/libSceVideodec2.so" --stub-dir "$sdk/target/lib" \
+    --stub "$build/stubs/libSceVideodec2.so" --stub "$build/stubs/libSceAudioIn.so" --stub-dir "$sdk/target/lib" \
     --module-sdk "$module_sdk" --companion-sdk "$companion_sdk" --file-name eboot.elf >/dev/null
 
 app="$dist/$title_id"

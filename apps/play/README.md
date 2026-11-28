@@ -53,5 +53,6 @@ With a file `/data/ps5upload-play/dev` present, the app also reads one command a
 `/data/ps5upload-play/cmd`: `join ADDR PORT CODE`, `nearby ADDR PORT`, `host ADDR PORT`, `pick`, `pickhost`, `pair`,
 `drop` (let the socket go, to test resuming), `leave`, `home`, `exit`.
 
-Measured facts from the phase 0 spike are in [docs/PHASE0.md](docs/PHASE0.md); where the code
+Measured facts from the phase 0 spike are in [docs/PHASE0.md](docs/PHASE0.md), microphone capture
+in [docs/MIC.md](docs/MIC.md); where the code
 comes from is in [NOTICE.md](NOTICE.md).
