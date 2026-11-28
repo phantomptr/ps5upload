@@ -220,6 +220,8 @@ ps5upload.elf.gz.blake3.tmp
 # the dev experience for fresh clones is still clean.
 payload/ps5upload.elf
 payload/ps5upload.elf.gz
+# PS5Upload Play's release zip, handed on with the ELFs in CI (publish.yml) for the engine embed.
+payload/play/
 # The SMB daemon: built from payload/smb/ and embedded in the helper (never shipped on its own).
 payload/smb/ps5upload-smb.elf
 payload/smb/build/
