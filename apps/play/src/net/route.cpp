@@ -24,8 +24,6 @@ const char *kind_word(Kind k) noexcept
         return "tailscale";
     case Kind::internet:
         return "internet";
-    case Kind::relay:
-        return "relay";
     }
     return "lan";
 }

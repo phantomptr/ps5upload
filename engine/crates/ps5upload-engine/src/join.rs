@@ -864,6 +864,18 @@ pub(crate) struct PageReport {
     snd_underruns: Option<u64>,
     snd_dropped: Option<u64>,
     snd_jumps: Option<u64>,
+    /// The way the guest's app or page chose and how good it measures it (join_route.rs):
+    /// `route` ("lan", "tailscale", "internet"), `tier` (a tier word), its round trip, jitter and
+    /// loss (per thousand), how often it changed way, how many backups it keeps and the best
+    /// one's tier.
+    route: Option<&'static str>,
+    tier: Option<crate::join_route::Tier>,
+    route_rtt_ms: Option<u64>,
+    route_jitter_ms: Option<u64>,
+    route_loss: Option<u64>,
+    route_switches: Option<u64>,
+    backups: Option<u64>,
+    backup_tier: Option<crate::join_route::Tier>,
     /// Stalled time since the report before (ms), and when this one came.
     stall_ms_recent: u64,
     at: Option<Instant>,
@@ -930,6 +942,23 @@ impl PageReport {
             snd_underruns: n("snd_underruns").map(|x| x as u64),
             snd_dropped: n("snd_dropped").map(|x| x as u64),
             snd_jumps: n("snd_jumps").map(|x| x as u64),
+            route: o
+                .get("route")
+                .and_then(|d| d.as_str())
+                .and_then(crate::join_route::route_word),
+            tier: o
+                .get("tier")
+                .and_then(|d| d.as_str())
+                .and_then(crate::join_route::Tier::from_word),
+            route_rtt_ms: n("route_rtt_ms").map(|x| x.min(60_000.0) as u64),
+            route_jitter_ms: n("route_jitter_ms").map(|x| x.min(60_000.0) as u64),
+            route_loss: n("route_loss").map(|x| x.min(1000.0) as u64),
+            route_switches: n("route_switches").map(|x| x as u64),
+            backups: n("backups").map(|x| x.min(16.0) as u64),
+            backup_tier: o
+                .get("backup_tier")
+                .and_then(|d| d.as_str())
+                .and_then(crate::join_route::Tier::from_word),
             ..PageReport::default()
         })
     }
@@ -993,6 +1022,14 @@ impl PageReport {
             "snd_dropped": self.snd_dropped,
             "snd_concealed": self.snd_concealed,
             "snd_jumps": self.snd_jumps,
+            "route": self.route,
+            "tier": self.tier.map(|t| t.word()),
+            "route_rtt_ms": self.route_rtt_ms,
+            "route_jitter_ms": self.route_jitter_ms,
+            "route_loss": self.route_loss,
+            "route_switches": self.route_switches,
+            "backups": self.backups,
+            "backup_tier": self.backup_tier.map(|t| t.word()),
             "stall_ms_recent": self.stall_ms_recent,
             "age_s": self.at.map(|t| now.saturating_duration_since(t).as_secs()),
             "quality": self.quality(now),
@@ -1003,24 +1040,45 @@ impl PageReport {
 impl Stats {
     /// A page report: kept unless the last came under [`PAGE_REPORT_GAP`] ago. A report whose
     /// totals went down is a new picture (a reconnect): its stalled time counts from zero.
-    fn page_report(&self, v: &serde_json::Value, now: Instant) {
-        let Some(mut r) = PageReport::from_page(v) else {
-            return;
-        };
+    /// Returns the way it says it uses now when that changed (for the log): (before, now).
+    fn page_report(
+        &self,
+        v: &serde_json::Value,
+        now: Instant,
+    ) -> Option<(Option<&'static str>, &'static str)> {
+        let mut r = PageReport::from_page(v)?;
         let mut g = self.page.lock().unwrap_or_else(|e| e.into_inner());
         let before = g.as_ref();
         if before
             .and_then(|b| b.at)
             .is_some_and(|t| now.saturating_duration_since(t) < PAGE_REPORT_GAP)
         {
-            return;
+            return None;
         }
         r.stall_ms_recent = match before {
             Some(b) if r.stall_ms >= b.stall_ms && r.frames >= b.frames => r.stall_ms - b.stall_ms,
             _ => r.stall_ms,
         };
+        let was = before.and_then(|b| b.route);
+        let changed = r.route.filter(|w| Some(*w) != was).map(|w| (was, w));
         r.at = Some(now);
         *g = Some(r);
+        changed
+    }
+
+    /// The way and tier the guest said in a report under 10 s old.
+    fn said_route(&self, now: Instant) -> (Option<&'static str>, Option<crate::join_route::Tier>) {
+        let g = self.page.lock().unwrap_or_else(|e| e.into_inner());
+        match g.as_ref() {
+            Some(r)
+                if r.at.is_some_and(|t| {
+                    now.saturating_duration_since(t) <= Duration::from_secs(10)
+                }) =>
+            {
+                (r.route, r.tier)
+            }
+            _ => (None, None),
+        }
     }
 
     fn page_json(&self, now: Instant) -> serde_json::Value {
@@ -1154,6 +1212,45 @@ impl Guest {
     /// "tailscale", "internet") and `rtt_ms`. An internet guest's is its peer connection's (the
     /// pair ICE selected, with its numbers); a LAN guest's socket says only where it comes from
     /// (never the address itself).
+    /// The guest's way ("lan", "tailscale", "internet") and tier word, and whose reading the tier
+    /// is: "guest" (its app or page measured and said it), "engine" (from the round trip and
+    /// whether it keeps up), or null before either knows (join_route.rs).
+    fn route_tier(
+        &self,
+        now: Instant,
+    ) -> (
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+    ) {
+        let (said_route, said_tier) = self.stats.said_route(now);
+        let route = said_route
+            .or_else(|| self.net.as_ref().and_then(|n| n.net_path()))
+            .or_else(|| {
+                self.ip.filter(|_| self.net.is_none()).map(|ip| {
+                    match crate::join_net::rtc::reach_rank(ip) {
+                        1 => "tailscale",
+                        0 => "lan",
+                        _ => "internet",
+                    }
+                })
+            });
+        if let Some(t) = said_tier {
+            return (route, Some(t.word()), Some("guest"));
+        }
+        let rtt = self
+            .net
+            .as_ref()
+            .and_then(|n| n.rtt_ms())
+            .or(self.stats.rtt_now());
+        let t = crate::join_route::engine_tier(
+            rtt,
+            self.stats.behind.load(Ordering::Relaxed),
+            self.stats.quality(now),
+        );
+        (route, t.map(|t| t.word()), t.map(|_| "engine"))
+    }
+
     fn link_json(&self) -> serde_json::Value {
         match &self.net {
             Some(n) => n.link_json(),
@@ -2030,6 +2127,12 @@ impl Party {
                     // "lan", or "internet" with the connection's path ("direct", "failed", …)
                     // and ICE's own round trip.
                     "via": if g.net.is_some() { "internet" } else { "lan" },
+                    // The way the guest plays over ("lan", "tailscale", "internet") and how good it is
+                    // ("excellent", "good", "playable", "poor"; `tier_from`: "guest" when its app measured
+                    // it, "engine" from the round trip), join_route.rs.
+                    "route": g.route_tier(now).0,
+                    "tier": g.route_tier(now).1,
+                    "tier_from": g.route_tier(now).2,
                     "path": g.net.as_ref().map(|n| n.path()),
                     "ice_rtt_ms": g.net.as_ref().and_then(|n| n.rtt_ms()),
                     // An internet guest's connection now (round trip, rate, what waits to go).
@@ -2130,6 +2233,12 @@ impl Party {
                     "pad_frames": s.pad_frames.load(Ordering::Relaxed),
                     "key_asks": s.key_asks.load(Ordering::Relaxed),
                     "via": if g.net.is_some() { "internet" } else { "lan" },
+                    // The way the guest plays over ("lan", "tailscale", "internet") and how good it is
+                    // ("excellent", "good", "playable", "poor"; `tier_from`: "guest" when its app measured
+                    // it, "engine" from the round trip), join_route.rs.
+                    "route": g.route_tier(now).0,
+                    "tier": g.route_tier(now).1,
+                    "tier_from": g.route_tier(now).2,
                     "link": g.link_json(),
                     "page": s.page_json(now),
                     "slot_open": g.slot_open,
@@ -2238,6 +2347,11 @@ fn with_parties<R>(f: impl FnOnce(&mut HashMap<String, Party>) -> R) -> R {
 
 fn with_party<R>(key: &str, f: impl FnOnce(&mut Party) -> R) -> Option<R> {
     with_parties(|m| m.get_mut(key).map(f))
+}
+
+/// A Play Together is open on some console here (the checks socket answers only then).
+pub(crate) fn together_open() -> bool {
+    with_parties(|m| !m.is_empty())
 }
 
 fn apply(console: &str, fx: Vec<Effect>) {
@@ -4030,7 +4144,19 @@ async fn play<S: GuestSocket>(
                         // The guest's picture waits for a keyframe (#648): ask the console, at
                         // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
                         if let Some(s) = &m.stats {
-                            stats.page_report(s, Instant::now());
+                            if let Some((was, now_on)) = stats.page_report(s, Instant::now()) {
+                                let tier = s.get("tier").and_then(|t| t.as_str()).unwrap_or("?");
+                                match was {
+                                    Some(was) => crate::log_at!(Info, "together",
+                                        "join: Player {player} on {console} changed way: {was} -> {now_on} ({tier}, {} change(s) so far)",
+                                        s.get("route_switches").and_then(|x| x.as_u64()).unwrap_or(0)
+                                    ),
+                                    None => crate::log_at!(Info, "together",
+                                        "join: Player {player} on {console} plays over {now_on} ({tier}, {} backup(s))",
+                                        s.get("backups").and_then(|x| x.as_u64()).unwrap_or(0)
+                                    ),
+                                }
+                            }
                         }
                         if m.keyframe {
                             if key_ask.take(Instant::now()) {
@@ -4387,6 +4513,12 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
                     "state": g.state(),
                     "rtt_ms": g.stats.rtt_now(),
                     "via": if g.net.is_some() { "internet" } else { "lan" },
+                    // The way the guest plays over ("lan", "tailscale", "internet") and how good it is
+                    // ("excellent", "good", "playable", "poor"; `tier_from`: "guest" when its app measured
+                    // it, "engine" from the round trip), join_route.rs.
+                    "route": g.route_tier(now).0,
+                    "tier": g.route_tier(now).1,
+                    "tier_from": g.route_tier(now).2,
                     "client_kind": g.client.kind,
                     "client_app": g.client.app,
                     "codec_warning": g.codec_warning,
@@ -4454,6 +4586,20 @@ pub async fn get_state(
     }
     touch_reach(&q.addr, &headers);
     Json(state_json(&q.addr)).into_response()
+}
+
+/// `GET /api/join/routes?addr=`: how each guest on that console is connected and how well
+/// (join_route.rs): the tiers' lines, each guest's way, tier and what its app measured, and the
+/// checks socket's counts. Read-only, this computer (or `PS5UPLOAD_ALLOW_IP`) only.
+pub async fn routes(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<AddrQuery>,
+) -> Response {
+    if let Some(r) = guard(&peer, &headers) {
+        return r;
+    }
+    Json(crate::join_route::routes_json(&state_json(&q.addr))).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -5182,6 +5328,8 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/join/ws", get(ws))
         .route("/api/join/relay", get(relay))
         .route("/api/join/signal", get(signal))
+        .route("/api/join/probe", get(crate::join_route::probe))
+        .route("/api/join/routes", get(routes))
         .route("/api/join", get(get_state))
         .route("/api/join/open", post(open))
         .route("/api/join/close", post(close))
@@ -6536,6 +6684,48 @@ mod tests {
         // Not said: no warning (a browser page says nothing and decides itself).
         assert_eq!(c(None, None).codec_warning(Some("h265_hdr")), None);
         assert_eq!(c(Some(false), Some(false)).codec_warning(None), None);
+    }
+
+    #[test]
+    fn a_report_says_its_way_and_tier_and_a_change_is_seen_once() {
+        let r = PageReport::from_page(&serde_json::json!({
+            "frames": 10, "route": "tailscale", "tier": "good", "route_rtt_ms": 31,
+            "route_jitter_ms": 4, "route_loss": 2, "route_switches": 1, "backups": 2,
+            "backup_tier": "playable",
+        }))
+        .unwrap();
+        assert_eq!(r.route, Some("tailscale"));
+        assert_eq!(r.tier, Some(crate::join_route::Tier::Good));
+        assert_eq!(r.backup_tier, Some(crate::join_route::Tier::Playable));
+        let j = r.json(Instant::now());
+        assert_eq!(j["route"], "tailscale");
+        assert_eq!(j["tier"], "good");
+        assert_eq!(j["route_switches"], 1);
+        // Words it does not know are left out.
+        let r = PageReport::from_page(
+            &serde_json::json!({"frames": 1, "route": "moon", "tier": "great"}),
+        )
+        .unwrap();
+        assert_eq!((r.route, r.tier), (None, None));
+        // The log hears of a way once: the first, then each change.
+        let s = Stats::default();
+        let t0 = Instant::now();
+        let rep = |w: &str| serde_json::json!({"frames": 1, "route": w, "tier": "excellent"});
+        assert_eq!(s.page_report(&rep("lan"), t0), Some((None, "lan")));
+        assert_eq!(
+            s.page_report(&rep("lan"), t0 + Duration::from_secs(2)),
+            None
+        );
+        assert_eq!(
+            s.page_report(&rep("tailscale"), t0 + Duration::from_secs(4)),
+            Some((Some("lan"), "tailscale"))
+        );
+        assert_eq!(
+            s.said_route(t0 + Duration::from_secs(5)),
+            (Some("tailscale"), Some(crate::join_route::Tier::Excellent))
+        );
+        // A report older than 10 s says nothing about now.
+        assert_eq!(s.said_route(t0 + Duration::from_secs(20)), (None, None));
     }
 
     #[test]

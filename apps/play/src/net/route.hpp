@@ -15,7 +15,7 @@ enum class Kind : std::uint8_t
     lan,       // the host's engine on this console's home network
     tailscale, // over Tailscale (the helper's forward on this console, or a 100.x address directly)
     internet,  // straight across the internet: through this home's PS5Upload (the bridge)
-    relay,     // through the hub's relay (off unless the owner turns it on; never chosen first)
+    // No relay: the hub only introduces the two sides (docs/ROUTES.md, "Why no relay").
 };
 const char *kind_word(Kind k) noexcept;
 
