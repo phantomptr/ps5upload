@@ -230,6 +230,48 @@ async fn an_internet_guest_joins_over_webrtc_plays_and_gets_the_picture() {
     })
     .await;
 
+    // Play Rooms voice on the page's own unordered `voice` channel (join_comms.rs): the host hears
+    // the guest's frames, and the host's bundles come back on that channel.
+    g.text(serde_json::json!({"notice": 1}));
+    g.text(serde_json::json!({"mic": "on"}));
+    let _ = g.tx.send(GOut::OpenVoice);
+    let mut host = crate::join_comms::attach(console, crate::join_comms::HOST_PID, "H", None, true);
+    host.on_text(r#"{"notice": 1}"#);
+    host.on_text(r#"{"room_mic": "on"}"#);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seq = 0u16;
+    'heard: loop {
+        assert!(Instant::now() < deadline, "the host never heard the guest");
+        seq += 1;
+        let _ = g.tx.send(GOut::Voice(crate::join_voice::up_frame(seq, 90, &[1; 40])));
+        while let Ok(m) = tokio::time::timeout(Duration::from_millis(40), host.next(false)).await {
+            if let Message::Binary(b) = m {
+                let f = crate::join_voice::parse_bundle(&b).unwrap();
+                assert_eq!(f[0].2.len(), 40);
+                break 'heard;
+            }
+        }
+    }
+    'back: loop {
+        assert!(Instant::now() < deadline, "the guest never heard the host");
+        seq += 1;
+        host.on_binary(&crate::join_voice::up_frame(seq, 90, &[2; 30]));
+        while let Ok(Some(m)) = tokio::time::timeout(Duration::from_millis(40), g.rx.recv()).await {
+            match m {
+                GIn::Voice(b) => {
+                    let f = crate::join_voice::parse_bundle(&b).unwrap();
+                    assert_eq!((f[0].0, f[0].2.len()), (0, 30), "the host's sid 0");
+                    break 'back;
+                }
+                GIn::Binary(b) => {
+                    assert_ne!(b.first(), Some(&crate::join_voice::KIND_VOICE_DOWN), "voice on the reliable channel")
+                }
+                _ => {}
+            }
+        }
+    }
+    drop(host);
+
     // The host's panel: an internet guest, direct, with round trips (the channel's ping).
     let st = until_state(console, "a direct guest with a round trip", |s| {
         let g = &s["guests"][0];

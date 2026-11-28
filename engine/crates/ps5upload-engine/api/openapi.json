@@ -1703,6 +1703,50 @@
         ],
         "type": "object"
       },
+      "ChatBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "notice": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "quick": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "addr"
+        ],
+        "type": "object"
+      },
+      "ChatMode": {
+        "description": "What a room allows in chat (host setting).",
+        "enum": [
+          "off",
+          "quick",
+          "on"
+        ],
+        "type": "string"
+      },
       "CheatDownloadResponse": {
         "properties": {
           "error": {
@@ -2514,6 +2558,64 @@
           "path",
           "removed_files",
           "removed_dirs"
+        ],
+        "type": "object"
+      },
+      "CommsBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "chat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\"off\" | \"quick\" | \"on\" (or \"text\")."
+          },
+          "notice": {
+            "description": "The notice version the host accepted on this device.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "public": {
+            "description": "A Public room (invite codes are stripped from chat).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "start_muted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VoiceMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\"off\" | \"ptt\" | \"open\"."
+          }
+        },
+        "required": [
+          "addr"
         ],
         "type": "object"
       },
@@ -9962,6 +10064,56 @@
         },
         "required": [
           "position"
+        ],
+        "type": "object"
+      },
+      "MuteBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "all": {
+            "description": "Every guest (and new players, until unmuted).",
+            "type": "boolean"
+          },
+          "chat": {
+            "description": "Mute (true) or unmute their chat.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "player": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sid": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "voice": {
+            "description": "Mute (true) or unmute their voice. `mute` is the same.",
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "x-aliases": [
+              "mute"
+            ]
+          }
+        },
+        "required": [
+          "addr"
         ],
         "type": "object"
       },
@@ -17428,6 +17580,41 @@
           "may_not_launch",
           "failed",
           "unverified"
+        ],
+        "type": "string"
+      },
+      "VoiceBody": {
+        "properties": {
+          "addr": {
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "mic": {
+            "description": "\"on\" | \"off\" (or true / false)."
+          },
+          "notice": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "addr",
+          "mic"
+        ],
+        "type": "object"
+      },
+      "VoiceMode": {
+        "description": "What a room allows for voice (host setting).",
+        "enum": [
+          "off",
+          "ptt",
+          "open"
         ],
         "type": "string"
       },
@@ -26402,6 +26589,67 @@
         }
       }
     },
+    "/api/join/chat": {
+      "post": {
+        "description": "`POST /api/join/chat {addr, quick? (1-16) | text?, notice?}`: the host's own chat line, to\neveryone in the room. 409 `{error: why, notice?, retry_ms?}` as a guest's refusal says it\n(`notice`: accept the responsibility notice first; `not_open`: no room open).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The host's own chat line, to everyone in the room",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/join/close": {
       "post": {
         "description": "`POST /api/join/close {addr}`: every guest out, invites void.",
@@ -26449,6 +26697,66 @@
             "required": true
           },
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/join/comms": {
+      "post": {
+        "description": "`POST /api/join/comms {addr, chat?, voice?, start_muted?, public?, notice?}`: the host's chat\nand voice settings for the room on `addr` (`chat` \"off\" | \"quick\" | \"on\", `voice` \"off\" | \"ptt\" |\n\"open\"; voice off turns every mic off), and the notice the host accepted. Answers with the\nroom's talk as `GET /api/join` has it under `room`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
         }
       }
     },
@@ -26762,6 +27070,97 @@
           }
         },
         "summary": "Let a guest go (their token stops working)",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/join/mute": {
+      "post": {
+        "description": "`POST /api/join/mute {addr, player? | sid? | all: true, voice? (or mute?), chat?}`: the host\nmutes or unmutes a player's voice and/or chat (enforced here: their frames are dropped and their\nlines refused, and they are told `{\"muted\": …}`). `all` mutes every guest and those who join\nafter. 404 `no_player`, 409 `host` (the host can't be muted), 400 `nothing`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "changed": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The host mutes or unmutes a player's voice and/or chat (enforced here: their frames are dropped and their lines refused, and they are told `{\"muted\": …}`)",
         "tags": [
           "play-together"
         ],
@@ -27182,6 +27581,92 @@
           "access": "lan-open",
           "response_schema": "websocket",
           "websocket": true
+        }
+      }
+    },
+    "/api/join/voice": {
+      "post": {
+        "description": "`POST /api/join/voice {addr, mic: \"on\" | \"off\", notice?}`: the host's mic switch for the room.\nThe host's voice frames ride the host page's `/api/ps5/rp/ws` socket (binary `[0x0A]…`, as a\nguest's), its talk key there too (`{\"room_mic\": \"ptt_down\" | \"ptt_up\"}`).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "mic": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The host's mic switch for the room",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console",
+              "host"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
         }
       }
     },
