@@ -360,12 +360,14 @@ pub(crate) fn guest_room(p: &Party, id: u64, now: Instant) -> Option<serde_json:
     let cfg = &p.settings.room;
     let (_, tier, _) = me.route_tier(now);
     let mut players = vec![serde_json::json!({
-        "name": crate::join_names::effective(&p.host_name), "player": 1, "host": true, "you": false,
+        "name": crate::join_names::effective(&p.host_name), "player": 1, "seat": 1, "host": true, "you": false,
     })];
     players.extend(p.guests.iter().filter(|g| g.active()).map(|g| {
         serde_json::json!({
             "name": crate::join_names::effective(&g.name),
             "player": g.player,
+            "seat": g.player,
+            "id": g.id,
             "you": g.id == id,
         })
     }));

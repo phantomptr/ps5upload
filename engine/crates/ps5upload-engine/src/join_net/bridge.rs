@@ -18,6 +18,16 @@
 //! be taken), `busy` (this engine's bridge limits). Before "open" nothing else from the app is read
 //! (its close ends the try).
 //!
+//! **v2: a Play Room's lobby** (Rooms, Friends, Play again over the internet):
+//! `{"bridge":{"v":2,"lobby":"<22 base64url>","knock":{"via","name","device"?,"client"?,"ver"?,
+//! "proto"?,"caps"?,"remember"?},"hub"?}}`. The bridge joins the lobby as a guest and knocks
+//! (join_net/lobby.rs) before any offer; it passes the host's knock answers to the app
+//! (`{"knock":"challenge","c","pk","gid"}` — `gid` is the bridge's own on the hub, which the app
+//! seals with — then `wait`, `no`, `ok` with the `token` the app's hello resumes with), and takes the
+//! app's `{"knock":"sealed","blob"}` on to the host, so the password never reaches the bridge in the
+//! clear. `ok` carries the host engine's certificate fingerprint, which the answer is checked
+//! against. After `{"knock":"no"}` the bridge says `{"bridge":"failed","why":"refused"}`.
+//!
 //! **After "open"** every WebSocket message from the app goes onto the channel unchanged (text
 //! whole, binary in pieces: [`super::chunk`]), and every whole message from the channel goes to
 //! the app unchanged. The host's ping (`0x02`) is answered with its pong (`0x03`) here at once and
@@ -100,8 +110,10 @@ const STUN_RETRY: [Duration; 3] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Ask {
     pub room: String,
-    /// Upper-case hex with colons.
+    /// Upper-case hex with colons (v2: empty until the host's knock answer names it).
     pub fp: String,
+    /// v2: the knock to make on the room's lobby before the offer.
+    pub knock: Option<serde_json::Value>,
 }
 
 /// The app's first message, against the hub in the settings (`hub_url`). Err: the `why` the app
@@ -109,19 +121,30 @@ pub(crate) struct Ask {
 pub(crate) fn parse_ask(text: &str, hub_url: &str) -> Result<Ask, &'static str> {
     let v: serde_json::Value = serde_json::from_str(text).map_err(|_| "bad")?;
     let b = v.get("bridge").filter(|b| b.is_object()).ok_or("bad")?;
-    if b.get("v").and_then(|x| x.as_u64()) != Some(1) {
-        return Err("bad");
-    }
+    let v2 = match b.get("v").and_then(|x| x.as_u64()) {
+        Some(1) => false,
+        Some(2) => true,
+        _ => return Err("bad"),
+    };
     let room = b
-        .get("room")
+        .get(if v2 { "lobby" } else { "room" })
         .and_then(|x| x.as_str())
         .filter(|r| room_ok(r))
         .ok_or("bad")?;
-    let fp = b
-        .get("fp")
-        .and_then(|x| x.as_str())
-        .and_then(fingerprint_norm)
-        .ok_or("bad")?;
+    let knock = if v2 {
+        let k = b
+            .get("knock")
+            .filter(|k| k.is_object() && k.to_string().len() <= 1024)
+            .ok_or("bad")?;
+        Some(k.clone())
+    } else {
+        None
+    };
+    let fp = match b.get("fp").and_then(|x| x.as_str()) {
+        Some(f) => fingerprint_norm(f).ok_or("bad")?,
+        None if v2 => String::new(),
+        None => return Err("bad"),
+    };
     if !super::hub_url_ok(hub_url) {
         return Err("hub");
     }
@@ -137,6 +160,7 @@ pub(crate) fn parse_ask(text: &str, hub_url: &str) -> Result<Ask, &'static str> 
     Ok(Ask {
         room: room.to_string(),
         fp,
+        knock,
     })
 }
 
@@ -412,6 +436,20 @@ async fn first_message(
 
 /// Resolves when the app's socket closes; anything it sends meanwhile is not read (before the
 /// channel is open nothing else is taken).
+/// How long a v2 knock waits for the app's sealed answer, and for the host to answer the ask.
+const KNOCK_WAIT: Duration = Duration::from_secs(95);
+
+/// The app's next text message before `until` (None: gone, or nothing in time).
+async fn app_text(rx: &mut SplitStream<WebSocket>, until: tokio::time::Instant) -> Option<String> {
+    loop {
+        match tokio::time::timeout_at(until, rx.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) if t.len() <= 4096 => return Some(t.to_string()),
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+            _ => return None,
+        }
+    }
+}
+
 async fn app_gone(rx: &mut SplitStream<WebSocket>) {
     loop {
         match rx.next().await {
@@ -434,7 +472,7 @@ async fn session(ws: WebSocket, ip: IpAddr, allowed: bool, conf: Conf) {
     };
     app.say(serde_json::json!({"bridge": "connecting"}));
     let started = Instant::now();
-    let mut b = match Bridge::connect(&ask, &conf, &mut app_rx).await {
+    let mut b = match Bridge::connect(&ask, &conf, &mut app_rx, &app).await {
         Ok(b) => b,
         Err(Fail::Why(why)) => return refuse(app, why).await,
         Err(Fail::Gone) => {
@@ -693,6 +731,7 @@ impl Bridge {
         ask: &Ask,
         conf: &Conf,
         app_rx: &mut SplitStream<WebSocket>,
+        app: &ToApp,
     ) -> Result<Bridge, Fail> {
         let mut socks = Vec::new();
         for ip in rtc::local_ips() {
@@ -779,7 +818,7 @@ impl Bridge {
         hub.send(serde_json::json!({"v": 1, "t": "join", "room": ask.room}))
             .await;
         let r = b
-            .signal_until_open(ask, &mut hub, pending, &offer, &mid, deadline, app_rx)
+            .signal_until_open(ask, &mut hub, pending, &offer, &mid, deadline, app_rx, app)
             .await;
         hub.leave().await;
         r?;
@@ -801,9 +840,15 @@ impl Bridge {
         mid: &str,
         deadline: tokio::time::Instant,
         app_rx: &mut SplitStream<WebSocket>,
+        app: &ToApp,
     ) -> Result<(), Fail> {
+        let mut deadline = deadline;
         let mut pending = Some(pending);
         let mut offer_sent = false;
+        // v2: knocking on the lobby first; the fingerprint comes with the host's `ok`.
+        let mut knocking = ask.knock.is_some();
+        let mut fp = ask.fp.clone();
+        let mut my_gid = String::new();
         let mut answered = false;
         // This engine's candidates found before the offer went, and the host's before its answer.
         let mut own_early: Vec<serde_json::Value> = Vec::new();
@@ -830,11 +875,63 @@ impl Bridge {
                             continue;
                         };
                         match v.get("t").and_then(|x| x.as_str()).unwrap_or("") {
+                            "joined" if !offer_sent && knocking => {
+                                my_gid = v.get("gid").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                                hub.signal(serde_json::json!({"knock": ask.knock.clone().unwrap_or_default()})).await;
+                            }
                             "joined" if !offer_sent => {
                                 hub.signal(serde_json::json!({"type": "offer", "sdp": offer})).await;
                                 offer_sent = true;
                                 for c in own_early.drain(..) {
                                     hub.signal(c).await;
+                                }
+                            }
+                            "signal" if knocking && v.get("from").and_then(|x| x.as_str()) == Some("host") => {
+                                let d = v.get("data").cloned().unwrap_or_default();
+                                match d.get("knock").and_then(|k| k.as_str()).unwrap_or("") {
+                                    "challenge" => {
+                                        let mut c = d.clone();
+                                        c["gid"] = my_gid.clone().into();
+                                        app.say(c);
+                                        // The app seals and answers (a person may type the password).
+                                        let until = tokio::time::Instant::now() + KNOCK_WAIT;
+                                        match app_text(app_rx, until).await {
+                                            Some(t) => {
+                                                let a: serde_json::Value = serde_json::from_str(&t).unwrap_or_default();
+                                                if a.get("knock").and_then(|k| k.as_str()) != Some("sealed") {
+                                                    return Err(Fail::Why("bad"));
+                                                }
+                                                hub.signal(serde_json::json!({"knock": "sealed", "blob": a["blob"]})).await;
+                                            }
+                                            None => return Err(Fail::Gone),
+                                        }
+                                        deadline = tokio::time::Instant::now() + KNOCK_WAIT;
+                                    }
+                                    "wait" => {
+                                        app.say(d);
+                                        // The host decides: their answer can take the ask's wait.
+                                        deadline = tokio::time::Instant::now() + KNOCK_WAIT + TRY_FOR;
+                                    }
+                                    "ok" => {
+                                        if let Some(f) = d.get("fp").and_then(|x| x.as_str()).and_then(fingerprint_norm) {
+                                            if fp.is_empty() {
+                                                fp = f;
+                                            }
+                                        }
+                                        app.say(d);
+                                        knocking = false;
+                                        deadline = tokio::time::Instant::now() + TRY_FOR;
+                                        hub.signal(serde_json::json!({"type": "offer", "sdp": offer})).await;
+                                        offer_sent = true;
+                                        for c in own_early.drain(..) {
+                                            hub.signal(c).await;
+                                        }
+                                    }
+                                    _ => {
+                                        // `no` (and anything else): the app hears it, the try ends.
+                                        app.say(d);
+                                        return Err(Fail::Why("refused"));
+                                    }
                                 }
                             }
                             "signal" if v.get("from").and_then(|x| x.as_str()) == Some("host") => {
@@ -844,7 +941,7 @@ impl Bridge {
                                     "answer" if !answered => {
                                         let sdp = field("sdp");
                                         // Only the host's own engine: its certificate is the one the link carries.
-                                        if sdp_fingerprint(&sdp).as_deref() != Some(ask.fp.as_str()) {
+                                        if fp.is_empty() || sdp_fingerprint(&sdp).as_deref() != Some(fp.as_str()) {
                                             return Err(Fail::Why("mismatch"));
                                         }
                                         let (Some(p), Ok(answer)) = (pending.take(), SdpAnswer::from_sdp_string(&sdp)) else {
@@ -1266,6 +1363,7 @@ mod tests {
         let want = Ok(Ask {
             room: ROOM.into(),
             fp: fp(),
+            knock: None,
         });
         assert_eq!(
             ask(serde_json::json!({"v": 1, "room": ROOM, "fp": fp()})),
@@ -1301,6 +1399,25 @@ mod tests {
         assert_eq!(parse_ask("not json", HUB), Err("bad"));
         assert_eq!(parse_ask(r#"{"hello":{}}"#, HUB), Err("bad"));
         assert_eq!(parse_ask(r#"{"bridge":"x"}"#, HUB), Err("bad"));
+        // v2: a room's lobby and the knock to make there; the fingerprint comes later.
+        let k = serde_json::json!({"via": "rooms", "name": "Jo", "client": "ps5"});
+        assert_eq!(
+            ask(serde_json::json!({"v": 2, "lobby": ROOM, "knock": k})),
+            Ok(Ask {
+                room: ROOM.into(),
+                fp: String::new(),
+                knock: Some(k.clone()),
+            })
+        );
+        assert_eq!(ask(serde_json::json!({"v": 2, "lobby": ROOM})), Err("bad"));
+        assert_eq!(
+            ask(serde_json::json!({"v": 2, "room": ROOM, "knock": k})),
+            Err("bad")
+        );
+        assert_eq!(
+            ask(serde_json::json!({"v": 3, "lobby": ROOM, "knock": k})),
+            Err("bad")
+        );
         assert_eq!(with("v", serde_json::json!(2)), Err("bad"));
         assert_eq!(
             ask(serde_json::json!({"room": ROOM, "fp": fp()})),

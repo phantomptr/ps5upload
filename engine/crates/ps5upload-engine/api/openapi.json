@@ -26993,7 +26993,6 @@
     },
     "/api/join/chat": {
       "post": {
-        "description": "`POST /api/join/chat {addr, quick? (1-16) | text?, notice?}`: the host's own chat line, to\neveryone in the room. 409 `{error: why, notice?, retry_ms?}` as a guest's refusal says it\n(`notice`: accept the responsibility notice first; `not_open`: no room open).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -27033,7 +27032,6 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "The host's own chat line, to everyone in the room",
         "tags": [
           "play-together"
         ],

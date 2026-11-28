@@ -143,6 +143,32 @@ engine differs from the design:
    close; `play.grant` is 204 with a 64-hex grant (the helper's form).
 10. **Name rules** come from `ps5upload_hub::names` (one copy); the look-alike table for unique
     names is a small vendored subset (Latin/Cyrillic/Greek and digit look-alikes), not full UTS #39.
+11. **One sealed-knock format, PS5Upload Play's** (`apps/play/src/net/seal.cpp`): `0x01 ‖ point
+    (65) ‖ nonce (12) ‖ AES-128-GCM`, HKDF info without the point, no AAD, plaintext `{"secret",
+    "gid", "challenge"}` (gid "" on the guest socket). One secret per knock: the password, or for
+    Play again the friend pass — so **a Play again knock needs no room password** (its pass is the
+    proof; the host let them in before).
+12. **The guest socket answers a knock that needs the password and didn't say it with a
+    challenge** (`{"knock": "challenge", "c", "pk"}` → `{"knock": "sealed", "blob"}`); a plain
+    `knock.password` is still taken on that socket. Refusals there are the usual stages (`{"stage":
+    "refused", "why": …}`), and a taken name is `{"stage": "refused", "why": "name_taken",
+    "suggest", "name_taken": {"suggest"}}`.
+13. **Bridge v2** (`{"bridge": {"v": 2, "lobby", "knock"}}`): the bridge knocks on the lobby with
+    its own hub connection and relays the answers; `challenge` gains `gid` (the bridge's), `ok`
+    carries `token` and the host engine's DTLS `fp` (the lobby card has no fingerprint), and after
+    `no` the bridge says `{"bridge": "failed", "why": "refused"}`.
+14. **Companion intents** take `room` as `{"set": {…}}` or the fields themselves; `decide` with
+    `allow: "group"` is a plain yes until groups land; `chat {quick | text, notice?}` is the host's
+    line through join_comms. The status adds `session.user` (the PS5 user in front); there is no
+    `console.owner` yet.
+
+PS5Upload Play's assumptions (apps/play/docs/ROOMS.md on rooms-app) — in the engine now: knock +
+device + proto + caps in the hello, challenge + pk, sealed blob, bridge v2, companion `room` /
+`kick`+`block` / `unblock` / `mute` (join_comms) / `decide` group (as yes) / `chat`, status `room`
+and per-guest `tag`, `from_rooms`, `muted`, asks' `came` (not `via`), `tag`, `password_ok`,
+`rtt_hint`, `session.user`, discovery `you`, `joined.lobby`, the room push (players with `id`,
+`seat`, `you`). **Not yet:** `console.owner`, many controllers (`media: false`, `group`,
+`{"release": 1}`, each guest's `group`, an ask's `players`), the push's `host_link`.
 
 Not done in this pass (open items): the engine-side auto-restart after a friend takes the host's
 user (needs a page-less session start in rp_stream_api); "It's me" Player 1 for the host's own

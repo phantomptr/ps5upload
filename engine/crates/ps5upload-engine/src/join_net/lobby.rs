@@ -814,6 +814,8 @@ impl KnockSocket {
                 "token": v.get("token"),
                 "friend": v.get("friend"),
                 "lobby": self.room,
+                // The engine's certificate, for a bridge to check the answer against (no link here).
+                "fp": super::fingerprint(),
             })),
             _ => None,
         }

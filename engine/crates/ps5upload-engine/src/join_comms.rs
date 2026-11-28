@@ -1456,6 +1456,32 @@ pub struct ChatBody {
 /// `POST /api/join/chat {addr, quick? (1-16) | text?, notice?}`: the host's own chat line, to
 /// everyone in the room. 409 `{error: why, notice?, retry_ms?}` as a guest's refusal says it
 /// (`notice`: accept the responsibility notice first; `not_open`: no room open).
+/// The host's own chat line from PS5Upload Play's My room (the companion socket): as
+/// `POST /api/join/chat`; Err the refusal's word.
+pub(crate) fn host_says(
+    console: &str,
+    quick: Option<u8>,
+    text: Option<String>,
+    notice: Option<u32>,
+) -> Result<(), &'static str> {
+    if !party_open(console) {
+        return Err(Refusal::NotOpen.word());
+    }
+    let body = match (quick, text) {
+        (Some(n), _) => Body::Quick(n),
+        (None, Some(t)) => Body::Text(t),
+        _ => return Err(Refusal::Empty.word()),
+    };
+    let now = Instant::now();
+    with_host(console, |room| {
+        if let Some(n) = notice {
+            room.accept(HOST_PID, n, now)?;
+        }
+        room.chat_in(HOST_PID, body, now)
+    })
+    .map_err(|r| r.word())
+}
+
 pub async fn host_chat(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,

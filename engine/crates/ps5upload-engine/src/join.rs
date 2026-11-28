@@ -5325,6 +5325,8 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
     // The Play Room (its settings, lock, listing, blocks) and its chat and voice (counts and
     // modes only, never lines): PS5Upload Play's My room shows and changes them.
     let room = with_party(&host_key(&c), |p| room_api::room_view(p, now));
+    // The stream's PS5 user (the one in front), for actions only they may take on the TV.
+    let front = with_party(&host_key(&c), |p| p.front_user.clone()).flatten();
     let mut v = serde_json::json!({
         "open": true,
         "playing": playing,
@@ -5334,6 +5336,7 @@ pub(crate) fn app_view(console: &str, secrets: bool) -> serde_json::Value {
         "settings": settings,
         "max_guests": MAX_GUESTS,
         "room": room,
+        "session": {"user": front},
     });
     crate::join_comms::extend_state(&c, &mut v);
     if let Some(r) = v.get_mut("room").and_then(|r| r.as_object_mut()) {

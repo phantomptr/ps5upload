@@ -559,15 +559,21 @@ the room's own secret. The engine publishes the card (with the hub's proof of wo
 withdraws it when the room turns Private, locks, or the host's device is away, answers the hub's
 relayed previews, and runs knocks before any WebRTC: `{"knock": {via, name, device?, proto?, caps?,
 client?, remember?}}` → `{"knock": "challenge", c, pk}` when a password or friend pass is needed →
-`{"knock": "sealed", blob}` (P-256 ECDH + HKDF-SHA256 + AES-128-GCM; format in
+`{"knock": "sealed", blob}` (P-256 ECDH + HKDF-SHA256 + AES-128-GCM, PS5Upload Play's format; in
 `room_seal.rs`) → `{"knock": "wait"}` / `{"knock": "no", why, …}` / `{"knock": "ok", token, friend?,
 lobby}`. Only an approved guest's offer reaches WebRTC; on its data channel it says
 `{"hello": {"resume": token}}`.
 
 **PS5Upload Play** (`/api/play/app`, paired): the status's `room` carries the room (chat and voice
-as modes and counts, never lines); intents `room {set: {…}}`, `kick {player, block?}`, `mute
-{player | all, voice?, chat?}`, `seat {player, to}`, `unblock {tag}`, and `close {confirm_friends}`
-(with friends in, without it: `friends_playing`).
+as modes and counts, never lines) and `session.user` (the PS5 user in front); intents `room {set:
+{…}}` (or the fields themselves), `kick {player, block?}`, `mute {player | all, voice?, chat?}`,
+`seat {player, to}`, `unblock {tag}`, `chat {quick | text, notice?}`, `decide {ask, allow: true |
+false | "group"}`, and `close {confirm_friends}` (with friends in, without it: `friends_playing`).
+On the guest socket a knock that needs the password and didn't say it gets `{"knock":
+"challenge", "c", "pk"}` and answers `{"knock": "sealed", "blob"}`. PS5Upload Play reaches an
+internet room's lobby through this home's engine: `GET /api/join/bridge` with `{"bridge": {"v": 2,
+"lobby", "knock"}}` relays the knock (`challenge` with the bridge's `gid`, `wait`, `no`, `ok` with
+`token`), then opens the connection as v1 does.
 
 **On the console**: while a room is open the engine tells the helper about it (`play.room`, every
 change and every 30 s; `{room: null}` when it closes) for Minion and PS5Upload Play.

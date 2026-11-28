@@ -1431,7 +1431,13 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
     match kind {
         "decide" => {
             let ask = b["ask"].as_u64().ok_or("ask")?;
-            let allow = b["allow"].as_bool().ok_or("allow")?;
+            // "group" (let all from that PS5 in): taken as a yes until groups land (each further
+            // controller still asks).
+            let allow = match &b["allow"] {
+                Value::Bool(x) => *x,
+                Value::String(x) if x == "group" => true,
+                _ => return Err("allow".into()),
+            };
             crate::join::decide_on(console, ask, allow).map_err(str::to_string)?;
             Ok(json!({}))
         }
@@ -1455,7 +1461,8 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
         }
         // Play Rooms (My room on the TV): the room's settings and lock, as `POST /api/join/room`.
         "room" => {
-            let mut set = b.get("set").cloned().unwrap_or_else(|| json!({}));
+            // `{"room": {"set": {…}}}` or the fields themselves (`{"room": {"lock": true}}`).
+            let mut set = b.get("set").cloned().unwrap_or_else(|| b.clone());
             if !set.is_object() {
                 return Err("set".into());
             }
@@ -1495,6 +1502,14 @@ async fn act(kind: &str, b: &Value, console: &str) -> Result<Value, String> {
                 .await
                 .map_err(str::to_string)?;
             Ok(json!({"player": to}))
+        }
+        // The host's own chat line (join_comms.rs; the notice accepted on the TV when `notice`).
+        "chat" => {
+            let quick = b["quick"].as_u64().and_then(|n| u8::try_from(n).ok());
+            let text = b["text"].as_str().map(str::to_string);
+            let notice = b["notice"].as_u64().and_then(|n| u32::try_from(n).ok());
+            crate::join_comms::host_says(console, quick, text, notice).map_err(str::to_string)?;
+            Ok(json!({}))
         }
         "unblock" => {
             let tag = b["tag"].as_str().ok_or("tag")?;
