@@ -87,6 +87,7 @@ import { CollectionCover } from "../Collection/CollectionCover";
 import { CoverFrame, PlatformTag } from "../../components/GameIconFrame";
 import { ConsolesCard } from "./ConsolesCard";
 import { DrivesCard } from "./DrivesCard";
+import { GameDoctorCard } from "./GameDoctorCard";
 import { OnThisPs5Card } from "./OnThisPs5Card";
 import { RestoreHomeScreenCard, useRestoreCheck } from "./RestoreHomeScreen";
 import { restoreNeeded } from "../../lib/titleRestore";
@@ -619,6 +620,16 @@ export default function GameHubScreen() {
                 onLaunch={() => void handleLaunch()}
                 onChanged={onConsoleChanged}
               />
+            )}
+            {connectedHost && title_id && (installedHere || notOnHomeScreen || connectedEntry?.installed) && (
+              <SectionErrorBoundary logName="doctor card" resetKey={`${connectedHost}/${title_id}`}>
+                <GameDoctorCard
+                  key={`${connectedHost}/${title_id}`}
+                  host={connectedHost}
+                  titleId={title_id.toUpperCase()}
+                  name={game?.name ?? title_id}
+                />
+              </SectionErrorBoundary>
             )}
             {connectedHost && (
               <Ps5DrivesCard host={connectedHost} titleId={game.titleId} />

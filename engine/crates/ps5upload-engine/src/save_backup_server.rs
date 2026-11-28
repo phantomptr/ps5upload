@@ -69,7 +69,7 @@ const READ_CHUNK: u64 = 4 << 20;
 pub enum Mode {
     #[default]
     Off,
-    /// Every `every_hours`.
+    /// Every `every_minutes` (or `every_hours`).
     Interval,
     /// Each time a game is closed on a console.
     AfterClose,
@@ -84,6 +84,10 @@ pub struct ServerSettings {
     pub target: String,
     #[serde(default = "default_hours")]
     pub every_hours: u32,
+    /// Minutes between interval passes (10 to 10080), the app's choice of 10 min, 30 min, 1 hour,
+    /// 6 hours or a day; 0: `every_hours`. A settings file from before it was a choice reads as 0.
+    #[serde(default)]
+    pub every_minutes: u32,
     #[serde(default = "default_keep")]
     pub keep: u32,
     /// The consoles to back up (bare IPs); empty: every console the app knows.
@@ -92,8 +96,9 @@ pub struct ServerSettings {
     /// The console users to back up; empty: every user.
     #[serde(default)]
     pub users: Vec<u32>,
-    /// A drive in the PS5 itself (`/mnt/ext<N>` M.2, `/mnt/usb<N>` USB) that also gets a copy of
-    /// each backup this makes, in `ps5upload/save-backups` (#885); "" for none. The copy is made
+    /// A drive in the PS5 itself (`/data` internal, `/mnt/ext<N>` M.2, `/mnt/usb<N>` USB) that
+    /// also gets a copy of each backup this makes, in `ps5upload/save-backups` (#885); "" for
+    /// none. The copy is made
     /// even when the server can't be reached, and the server is tried again at the next pass.
     #[serde(default)]
     pub console_drive: String,
@@ -127,6 +132,16 @@ impl ServerSettings {
         }
     }
 
+    /// The wait between interval passes, in milliseconds: `every_minutes` when set, else
+    /// `every_hours`, each kept in its range.
+    pub fn every_ms(&self) -> u64 {
+        if self.every_minutes > 0 {
+            u64::from(clamp_minutes(self.every_minutes)) * 60_000
+        } else {
+            u64::from(clamp_hours(self.every_hours)) * 3_600_000
+        }
+    }
+
     /// Versions of each save kept on the PS5 drive.
     pub fn drive_keep(&self) -> u32 {
         if self.console_keep == 0 {
@@ -150,6 +165,7 @@ impl Default for ServerSettings {
             mode: Mode::Off,
             target: String::new(),
             every_hours: DEFAULT_HOURS,
+            every_minutes: 0,
             keep: local::DEFAULT_KEEP,
             hosts: Vec::new(),
             users: Vec::new(),
@@ -165,6 +181,11 @@ impl Default for ServerSettings {
 
 pub fn clamp_hours(n: u32) -> u32 {
     n.clamp(1, 24 * 7)
+}
+
+/// `every_minutes` kept from 10 minutes to a week.
+pub fn clamp_minutes(n: u32) -> u32 {
+    n.clamp(10, 60 * 24 * 7)
 }
 
 /// A backup written to the server and read back whole.
@@ -240,11 +261,11 @@ struct Persisted {
 
 // ── when to back up (pure, tested) ──────────────────────────────────────
 
-/// Whether an interval pass of a console is due: never backed up, or `hours` since the last full
-/// one, and not tried in the last `RETRY_MS` (a server or console that keeps failing is not
-/// hammered every minute).
-pub fn host_due(run: &HostRun, now_ms: u64, hours: u32) -> bool {
-    let every = clamp_hours(hours) as u64 * 3_600_000;
+/// Whether an interval pass of a console is due: never backed up, or `every` ms (at least a
+/// minute) since the last full one, and not tried in the last `RETRY_MS` or `every`, the shorter
+/// (a server or console that keeps failing is not hammered every minute).
+pub fn host_due(run: &HostRun, now_ms: u64, every: u64) -> bool {
+    let every = every.max(60_000);
     let interval_up = run.ok_ms == 0 || now_ms.saturating_sub(run.ok_ms) >= every;
     let retry_up = run.tried_ms == 0 || now_ms.saturating_sub(run.tried_ms) >= RETRY_MS.min(every);
     interval_up && retry_up
@@ -1096,7 +1117,7 @@ pub fn tick() {
             }
             Mode::Interval => {
                 let run = lock().state.hosts.get(&host).copied().unwrap_or_default();
-                if !host_due(&run, now, s.every_hours) || local::console_busy(&host) {
+                if !host_due(&run, now, s.every_ms()) || local::console_busy(&host) {
                     continue;
                 }
                 work.push((host.clone(), None));
@@ -1273,7 +1294,7 @@ fn view() -> Value {
     let s = &g.settings;
     // When the next interval pass is due, the soonest of the chosen consoles.
     let next_at = (s.mode == Mode::Interval && !s.target.trim().is_empty()).then(|| {
-        let every = clamp_hours(s.every_hours) as u64 * 3_600_000;
+        let every = s.every_ms();
         hosts_of(s)
             .iter()
             .map(|h| {
@@ -1299,12 +1320,15 @@ pub async fn get_view() -> Response {
 pub struct Patch {
     pub mode: Option<Mode>,
     pub target: Option<String>,
+    /// Hours between interval passes, 1 to 168 (clears `every_minutes`).
     pub every_hours: Option<u32>,
+    /// Minutes between interval passes, 10 to 10080 (10 min, 30 min, 1 hour, 6 hours, a day…).
+    pub every_minutes: Option<u32>,
     pub keep: Option<u32>,
     pub hosts: Option<Vec<String>>,
     pub users: Option<Vec<u32>>,
-    /// The PS5 drive that also gets a copy of each backup (`/mnt/ext<N>`, `/mnt/usb<N>`); "" for
-    /// none (#885).
+    /// The PS5 drive that also gets a copy of each backup (`/data`, `/mnt/ext<N>`,
+    /// `/mnt/usb<N>`); "" for none (#885).
     pub console_drive: Option<String>,
     /// Versions of each save kept on that drive, 1 to 50; 0: as many as `keep`.
     pub console_keep: Option<u32>,
@@ -1352,6 +1376,10 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
     }
     if let Some(h) = p.every_hours {
         next.every_hours = clamp_hours(h);
+        next.every_minutes = 0;
+    }
+    if let Some(m) = p.every_minutes {
+        next.every_minutes = clamp_minutes(m);
     }
     if let Some(k) = p.keep {
         next.keep = local::clamp_keep(k);
@@ -1376,7 +1404,7 @@ pub async fn put_settings(Json(p): Json<Patch>) -> Response {
         if !d.is_empty() && !crate::save_backup_console::drive_path_ok(&d) {
             return json_error(
                 StatusCode::BAD_REQUEST,
-                "console_drive must be a PS5 M.2 or USB drive (/mnt/ext0, /mnt/usb0, …) or empty",
+                "console_drive must be a PS5 drive (/data, /mnt/ext0, /mnt/usb0, …) or empty",
             );
         }
         next.console_drive = d;
@@ -1539,23 +1567,44 @@ mod tests {
     fn an_interval_pass_is_due_after_its_hours_and_retries_sooner() {
         let h = 3_600_000u64;
         // Never backed up: due at once.
-        assert!(host_due(&HostRun::default(), 10 * h, 6));
+        assert!(host_due(&HostRun::default(), 10 * h, 6 * h));
         // Backed up 5 h ago, every 6 h: not yet; 6 h ago: due.
         let run = HostRun {
             ok_ms: 10 * h,
             tried_ms: 10 * h,
         };
-        assert!(!host_due(&run, 15 * h, 6));
-        assert!(host_due(&run, 16 * h, 6));
+        assert!(!host_due(&run, 15 * h, 6 * h));
+        assert!(host_due(&run, 16 * h, 6 * h));
         // A failed try 10 min ago waits; 30 min ago tries again, not a whole interval later.
         let failing = HostRun {
             ok_ms: 0,
             tried_ms: 10 * h,
         };
-        assert!(!host_due(&failing, 10 * h + 10 * 60_000, 6));
-        assert!(host_due(&failing, 10 * h + RETRY_MS, 6));
-        // Hours are clamped: 0 means 1.
-        assert!(host_due(&run, 11 * h, 0));
+        assert!(!host_due(&failing, 10 * h + 10 * 60_000, 6 * h));
+        assert!(host_due(&failing, 10 * h + RETRY_MS, 6 * h));
+        // Every 10 minutes: due after 10, and a failed try waits 10, not 30.
+        let m = 60_000u64;
+        assert!(!host_due(&run, 10 * h + 9 * m, 10 * m));
+        assert!(host_due(&run, 10 * h + 10 * m, 10 * m));
+        assert!(host_due(&failing, 10 * h + 10 * m, 10 * m));
+        // Never under a minute.
+        assert!(!host_due(&run, 10 * h + 30_000, 0));
+    }
+
+    #[test]
+    fn the_interval_is_minutes_when_chosen_else_hours() {
+        let mut s = ServerSettings::default();
+        assert_eq!(s.every_ms(), u64::from(DEFAULT_HOURS) * 3_600_000);
+        s.every_minutes = 30;
+        assert_eq!(s.every_ms(), 30 * 60_000);
+        s.every_minutes = 1440;
+        assert_eq!(s.every_ms(), 24 * 3_600_000);
+        // Kept from 10 minutes to a week.
+        s.every_minutes = 1;
+        assert_eq!(s.every_ms(), 10 * 60_000);
+        s.every_minutes = 1_000_000;
+        assert_eq!(s.every_ms(), 7 * 24 * 3_600_000);
+        assert_eq!(clamp_minutes(0), 10);
     }
 
     #[test]
@@ -2194,6 +2243,7 @@ mod tests {
             serde_json::from_str(r#"{"mode":"after_close","target":"remote://a/b"}"#).unwrap();
         assert_eq!(s.mode, Mode::AfterClose);
         assert_eq!(s.every_hours, DEFAULT_HOURS);
+        assert_eq!(s.every_minutes, 0);
         assert_eq!(clamp_hours(0), 1);
         assert_eq!(clamp_hours(10_000), 168);
     }

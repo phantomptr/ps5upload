@@ -242,20 +242,34 @@ pub fn check(
             gib(l.cap),
         )
     });
-    // No console named: 13.x's ceiling is the check, and older lines are lower.
-    let note = (basis == Basis::Assumed && refusal.is_none() && package > 256 * GIB).then(|| {
-        let older = match sizes.app_gib.filter(|g| (257..=320).contains(g)) {
-            Some(app) if package <= app * GIB => "7.xx to 10.xx (256 GiB at most)".to_string(),
-            Some(app) => format!(
-                "7.xx to 12.xx (256 GiB at most; {app} GiB for this game on 11.xx and 12.xx)"
-            ),
-            None => "7.xx to 12.xx (256 GiB at most)".to_string(),
-        };
-        format!(
-            "At {about}{} GiB, this package opens on PS5 firmware 13.x but not on {older} or \
+    // No console named: 13.x's ceiling is the check, and older lines are lower. 5.50 to 6.xx is
+    // the lowest (242.55 GiB): a package between it and 256 GiB misses that line alone.
+    let assumed_fit = basis == Basis::Assumed && refusal.is_none();
+    let note = if assumed_fit && package > FW550_CAP && package <= 256 * GIB {
+        Some(format!(
+            "At {about}{} GiB, this package opens on PS5 firmware 7.xx and later but not on \
+             5.50 to 6.xx ({} GiB at most).",
+            gib(package),
+            gib(FW550_CAP)
+        ))
+    } else {
+        None
+    };
+    let note = note.or_else(|| {
+        (assumed_fit && package > 256 * GIB).then(|| {
+            let older = match sizes.app_gib.filter(|g| (257..=320).contains(g)) {
+                Some(app) if package <= app * GIB => "7.xx to 10.xx (256 GiB at most)".to_string(),
+                Some(app) => format!(
+                    "7.xx to 12.xx (256 GiB at most; {app} GiB for this game on 11.xx and 12.xx)"
+                ),
+                None => "7.xx to 12.xx (256 GiB at most)".to_string(),
+            };
+            format!(
+                "At {about}{} GiB, this package opens on PS5 firmware 13.x but not on {older} or \
              5.50 to 6.xx.",
-            gib(package)
-        )
+                gib(package)
+            )
+        })
     });
     Fit {
         package,
@@ -451,6 +465,15 @@ mod tests {
             "{note}"
         );
         assert!(check(200 * GIB, false, None, None, None, &s).note.is_none());
+        assert!(check(FW550_CAP, false, None, None, None, &s).note.is_none());
+        // Between 5.50's 242.55 GiB and 256 GiB: only 5.50 to 6.xx misses it.
+        let note = check(250 * GIB, true, None, None, None, &s).note.unwrap();
+        assert_eq!(
+            note,
+            "At about 250 GiB, this package opens on PS5 firmware 7.xx and later but not on \
+             5.50 to 6.xx (242.6 GiB at most)."
+        );
+        assert!(check(256 * GIB, false, None, None, None, &s).note.is_some());
         // A game whose own profile covers it on 11.xx and 12.xx.
         let note = check(size, false, None, None, None, &sizes(None, Some(320)))
             .note

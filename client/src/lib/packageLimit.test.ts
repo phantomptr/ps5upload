@@ -42,7 +42,16 @@ describe("packageLimit", () => {
       basis: "assumed",
       fits: true,
       olderMiss: true,
+      fw550Miss: false,
     });
+    // Past 5.50 to 6.xx's 242.55 GiB but within 256 GiB: only that line misses it.
+    expect(packageFit({ size: 250 * GIB, estimated: false, sizes })).toMatchObject({
+      olderMiss: false,
+      fw550Miss: true,
+    });
+    expect(packageFit({ size: 242 * GIB, estimated: false, sizes }).fw550Miss).toBe(false);
+    expect(packageFit({ size: 256 * GIB, estimated: false, sizes }).fw550Miss).toBe(true);
+    expect(packageFit({ size: 250 * GIB, estimated: false, console: "6.50", sizes }).fw550Miss).toBe(false);
     // The add-on space is what puts 400 GiB over on 13.x.
     expect(packageFit({ size: 400 * GIB, estimated: false, console: "13.60", sizes }).fits).toBe(false);
     expect(packageFit({ size: 400 * GIB, estimated: false, console: "13.60", sizes: {} }).fits).toBe(true);

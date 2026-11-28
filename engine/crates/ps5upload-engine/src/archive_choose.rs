@@ -280,7 +280,13 @@ pub(crate) fn zip_package_briefs(
     let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(f)) else {
         return out;
     };
-    let wanted: BTreeSet<&str> = wanted.iter().map(String::as_str).collect();
+    // At most PKG_HEADS_MAX headers (4 MiB inflated each), whoever asks: `/api/rar/packages`
+    // passes every package of the ZIP.
+    let wanted: BTreeSet<&str> = wanted
+        .iter()
+        .take(PKG_HEADS_MAX)
+        .map(String::as_str)
+        .collect();
     for i in 0..zip.len() {
         if out.len() == wanted.len() {
             break;
@@ -442,6 +448,33 @@ mod tests {
         assert!(by["Game/notapkg.pkg"].package.is_none());
         assert_eq!(by["readme.txt"].kind, "file");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `/api/rar/packages` asks for every package of a ZIP: no more than PKG_HEADS_MAX headers
+    /// are read, whoever asks.
+    #[test]
+    fn a_zip_has_at_most_its_cap_of_package_headers_read() {
+        use std::io::Write;
+        let dir = crate::test_tmp::temp_path(format!("ps5upload-choosecap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("many.zip");
+        let mut zw = zip::ZipWriter::new(std::fs::File::create(&path).expect("create"));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let mut wanted = Vec::new();
+        for i in 0..PKG_HEADS_MAX + 6 {
+            let name = format!("dlc/{i:03}.pkg");
+            zw.start_file(name.as_str(), stored).unwrap();
+            let id = format!("UP0001-CUSA01234_00-DLC{i:013}");
+            zw.write_all(&fake_pkg_head(&id, 0x1B)).unwrap();
+            wanted.push(name);
+        }
+        zw.finish().unwrap();
+        let got = zip_package_briefs(&path, &wanted);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got.len(), PKG_HEADS_MAX);
+        assert!(got.contains_key("dlc/000.pkg"));
+        assert!(!got.contains_key(&format!("dlc/{:03}.pkg", PKG_HEADS_MAX)));
     }
 
     #[test]

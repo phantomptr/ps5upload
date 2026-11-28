@@ -141,7 +141,21 @@ static unsigned g_k3_next, g_k5_next;
 void xrc_forget(void) {
     xrc_wipe(g_k3, sizeof g_k3);
     xrc_wipe(g_k5, sizeof g_k5);
+    g_k3_next = g_k5_next = 0;
 }
+
+static int (*g_cancel)(void *);
+static void *g_cancel_arg;
+
+void xrc_set_cancel(int (*cancelled)(void *), void *arg) {
+    g_cancel = cancelled;
+    g_cancel_arg = arg;
+}
+
+int xrc_cancelled(void) { return g_cancel && g_cancel(g_cancel_arg); }
+
+/* Rounds of a key derivation between two looks at the cancel hook. */
+#define XRC_CANCEL_EVERY 4096u
 
 /* UTF-8 to UTF-16LE (at most XRC_PW_CHARS units); bad bytes count as U+FFFD. Returns the bytes. */
 static size_t utf16le(const char *s, uint8_t *out) {
@@ -206,6 +220,16 @@ int xrc_kdf3(const char *password, const uint8_t *salt8, uint8_t key[16], uint8_
     rsha1_init(&s);
     for (uint32_t i = 0; i < ROUNDS; i++) {
         uint8_t num[3] = {(uint8_t)i, (uint8_t)(i >> 8), (uint8_t)(i >> 16)};
+        /* Stop is honoured within a few milliseconds: a hostile archive can ask for one of these
+         * per header, half a second each with a long password. Nothing is cached. */
+        if (i % XRC_CANCEL_EVERY == 0 && xrc_cancelled()) {
+            xrc_wipe(buf, sizeof buf);
+            xrc_wipe(&s, sizeof s);
+            xrc_wipe(d, sizeof d);
+            xrc_wipe(key, 16);
+            xrc_wipe(iv, 16);
+            return XRC_KDF_CANCELLED;
+        }
         rsha1_update(&s, buf, len, 1);
         rsha1_update(&s, num, 3, 0);
         if (i % (ROUNDS / 16) == 0) {
@@ -236,6 +260,10 @@ int xrc_kdf3(const char *password, const uint8_t *salt8, uint8_t key[16], uint8_
 
 typedef struct {
     CSha256 in, out;
+    /* hmac_run's working state: here rather than on its stack, so the caller's one wipe of the
+     * hmac_t also clears the last inner hash (a password-derived value) without a wipe per call. */
+    CSha256 s;
+    uint8_t inner[32];
 } hmac_t;
 
 static void hmac_init(hmac_t *h, const uint8_t *key, size_t n) {
@@ -259,14 +287,13 @@ static void hmac_init(hmac_t *h, const uint8_t *key, size_t n) {
     xrc_wipe(pad, sizeof pad);
 }
 
-static void hmac_run(const hmac_t *h, const uint8_t *msg, size_t n, uint8_t out[32]) {
-    CSha256 s = h->in;
-    uint8_t inner[32];
-    Sha256_Update(&s, msg, n);
-    Sha256_Final(&s, inner);
-    s = h->out;
-    Sha256_Update(&s, inner, 32);
-    Sha256_Final(&s, out);
+static void hmac_run(hmac_t *h, const uint8_t *msg, size_t n, uint8_t out[32]) {
+    h->s = h->in;
+    Sha256_Update(&h->s, msg, n);
+    Sha256_Final(&h->s, h->inner);
+    h->s = h->out;
+    Sha256_Update(&h->s, h->inner, 32);
+    Sha256_Final(&h->s, out);
 }
 
 /* The UTF-8 password, cut at XRC_PW_CHARS characters. */
@@ -310,6 +337,13 @@ int xrc_kdf5(const char *password, const uint8_t salt[16], unsigned lg2, uint8_t
     counts[2] = 16;
     for (unsigned r = 0; r < 3; r++) {
         for (uint32_t i = 0; i < counts[r]; i++) {
+            if (i % XRC_CANCEL_EVERY == 0 && xrc_cancelled()) {
+                xrc_wipe(&h, sizeof h);
+                xrc_wipe(u, sizeof u);
+                xrc_wipe(f, sizeof f);
+                xrc_wipe(v, sizeof v);
+                return XRC_KDF_CANCELLED;
+            }
             hmac_run(&h, u, 32, u);
             for (unsigned b = 0; b < 32; b++) f[b] ^= u[b];
         }

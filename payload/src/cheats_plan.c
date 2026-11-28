@@ -92,8 +92,10 @@ static int split_pieces(uint64_t base, const char *a, const char *b, int bytes, 
 
 int cheat_loc_split(const char *offset, const char *on, const char *off, cheat_split_cb cb, void *ctx) {
     if (!offset || !on || !off || !cb) return -1;
-    /* Fits as it is: the parser's field holds 255 characters, separators included. */
-    if (strlen(on) < 256 && strlen(off) < 256) return 0;
+    /* Fits as it is: the parser's field is 256 bytes, and resolve_mod_locs (cheats.c) refuses a
+     * value that fills all 255 characters of it (it cannot tell it from one cut short), so 255
+     * characters, separators included, already need splitting. */
+    if (strlen(on) < 255 && strlen(off) < 255) return 0;
     uint64_t base = 0;
     if (cheat_parse_offset(offset, &base) != 0) return -1;
     char *a = (char *)malloc(strlen(on) + 1);

@@ -1074,6 +1074,11 @@ pub fn api_router(state: PkgInstallStateHandle) -> Router {
             "/api/ps5/app/restore/finish",
             post(crate::title_restore_api::finish_handler),
         )
+        // "Something wrong?" on the game page: why a game does not show or start, read-only.
+        .route(
+            "/api/ps5/app/doctor",
+            get(crate::game_doctor::doctor_handler),
+        )
         .route(
             "/api/pkg/links",
             get(links_list_handler).post(link_create_handler),
@@ -2143,6 +2148,11 @@ pub(crate) async fn install_start_handler(
         shared_link: false,
         shared_any: false,
     };
+    // The install writes the title's folder (#974).
+    let tid = ps5upload_pkg::kind::title_id_of_content_id(&session.content_id);
+    if crate::looks_like_title_id(&tid) {
+        crate::folder_sizes::changed(&session.ps5_mgmt_addr, &[format!("/user/app/{tid}")]);
+    }
 
     // Insert *before* sending the install frame so the HTTP listener
     // is ready to serve when BGFT starts pulling immediately on its end.

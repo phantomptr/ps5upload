@@ -6,6 +6,44 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**TV mode (#976)**
+- **A Remote Play-first screen for TVs.** On Android TV and Google TV the app opens in TV mode: your console as one large card with **Play** (it wakes the console if it's resting) or **Resume**, the essential picture, sound and controller settings, and remote access through Tailscale. Everything works with a TV remote or controller, with large buttons and a clear highlight, and Back goes where you expect. Transfers, installs, files and tools are one press away under **Full app**. Settings › App › General turns TV mode on for any device.
+
+**Files**
+- **Folder sizes, without scanning in the background (#974).** A folder shows its size when it's already known (for example "48.2 GiB · 2 days ago"), from "What takes space?", clean-up scans or an earlier measure. **Measure size** (a folder's menu) and **Measure everything here** measure on request, one folder at a time, pausing while anything else runs on that console; a packed game shows the space it really takes. A size is forgotten when PS5Upload changes something inside the folder. "Keep folder sizes fresh" (off by default) re-measures folders you open, at most once a day.
+- Going back in the second pane of the two-pane view highlights the folder you came from, as the PS5 side already did.
+
+**Games**
+- **"Something wrong?" on the game page** checks the usual reasons a game won't show or start, in order: kstuff for fake packages, the mount layer, the package size limit, missing from the home screen, file permissions and free space. Each says OK, problem or can't tell, with what to do.
+- **Fake packages on firmware 11.61 to 13.60:** the install screen says they need the latest kstuff (fake-package support up to 13.60), and a launch that fails (CE-100022-5) says the same.
+- Game folders made by Convert on the PS5 can be read and started by the console.
+
+**Save backups**
+- Network-share backups run every 10 minutes, 30 minutes, 1 hour, 6 hours or once a day (and after a game closes, as before).
+- The PS5's internal storage can hold an extra copy too; a console reset wipes it, so the computer or network copy stays the safe one.
+
+**Bug reports**
+- The GitHub report no longer claims a zip is attached: the app shows where it saved the zip, with **Show in folder**, and the issue form has a box to drag it into.
+
+**Help**
+- The FAQ covers installing from a laptop over a direct Ethernet cable.
+
+**Fixes from a full review**
+- **Uninstall with "delete the files" re-checks the whole folder right before deleting**, and refuses a folder that holds another game, another game's disk image, or a game whose name differs only in letter case.
+- **Restore:** only one restore can start or finish on a console at a time; a game that can't be checked no longer fails the whole list; when the PS5's uninstall isn't available it says so.
+- **Play Together:** a friend pressing PS no longer resets the guard that keeps a plain ✕ from picking your user; saved switches can't be lost or corrupted when two change at once, and one bad entry no longer resets the rest; a friend mashing buttons can't flood the log.
+- **Folder sizes:** a size measured while something was being written isn't kept; installs, uninstall, clean-up and restore now forget the sizes they change; the same console over Wi-Fi and Tailscale shares its sizes; folders above PS5Upload's own data can be measured.
+- **Something wrong?:** a game on PS5Upload's own disk-image mount no longer asks for ShadowMount+, and the check never waits more than 30 seconds on a console that doesn't answer.
+- **Convert on the PS5** checks a package's size against that console's own firmware.
+- **Archives:** a crafted RAR archive can no longer make the PS5's unpacker hang or grow in memory, Stop works while it checks a password, and passwords and keys are wiped after use. The console page's "Choose items" asks for an archive's password first.
+- **Network shares on the console page:** one failed read no longer loses a game's title for good, lost covers come back, and very long image files read fast.
+- **Cheats:** a cheat line of exactly 255 characters applies.
+- **Workshop:** content ids are written only into fake-signed programs; a typed-in source starts without the last game's options.
+- **TV mode:** a "TV home" button on Play and its setup, and Esc in a text field leaves the field, not the screen.
+- Smaller fixes: Sound on works in one press at volume 0; the guest page's hint goes away; a refused account ID write no longer shows "Saved"; network-share save backups keep other consoles' users; a folder called "constructor" shows no bogus size.
+
+## 12.6.43
+
 **Install from archives**
 - **Choose what to install or unpack from an archive (#969).** When a .zip, .7z, .rar or tar holds several packages or folders (a game, its update and add-ons), "Choose files…" lists what's inside with checkboxes; only what you tick is installed, uploaded or unpacked. Packages inside a .zip show their game, version and type first. Extract on the PS5 (in the app and on the console's own page) can leave out top-level items the same way.
 

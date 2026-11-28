@@ -200,8 +200,8 @@ export function topListing(result: unknown): TopListing | null {
 
 /** Read the top-level names of the archive at `path` (`dir`: its own folder). Throws the
  *  helper's cause (fs_extract_password_required…), or "fs_extract_list_unsupported". */
-export async function listArchiveTop(path: string, dir: string, deps?: OpDeps): Promise<TopListing> {
-  const job = await startOp("/api/fs/extract", { path, dest: dir, list: true });
+export async function listArchiveTop(path: string, dir: string, password?: string, deps?: OpDeps): Promise<TopListing> {
+  const job = await startOp("/api/fs/extract", { path, dest: dir, list: true, ...(password ? { password } : {}) });
   const end = await watchOp(job, {}, deps);
   if (end.end !== "done") {
     const cause = end.end === "gone" ? "" : opCause(end.status);

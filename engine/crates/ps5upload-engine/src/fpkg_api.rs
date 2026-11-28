@@ -1671,6 +1671,8 @@ fn to_console_job(
     let Some(_busy) = crate::helper_stop::try_enter(addr) else {
         anyhow::bail!("{}", crate::helper_stop::STOPPING_MESSAGE);
     };
+    // Our own write there: the folder sizes above it are no longer right (#974).
+    crate::folder_sizes::changed(addr, &[path]);
     ps5upload_ava1::console::require_ava1(addr)
         .map_err(|f| anyhow::Error::from(ps5upload_ava1::upload::ConsoleFailure::on(addr, f)))?;
     match fs_ops::fs_stat(addr, path) {

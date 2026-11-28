@@ -323,6 +323,11 @@ typedef struct {
     int app;     /* app.pkg was moved aside */
     int patch;   /* patch.pkg was moved aside */
     int cleared; /* Sony's uninstall was asked to remove its unfinished copy (clear) */
+    /* ...but could not be called (no Sony uninstall in this helper): nothing is being removed,
+     * so the answer is "uninstall_unavailable", never "clearing". `cleared` stays set all the
+     * same: whatever the user then removes on the PS5 is waited for (uninstall_settled) before
+     * the package goes back. A later clear tries the uninstall again. */
+    int unavailable;
     char backup[256];
 } tr_record_t;
 
@@ -333,7 +338,8 @@ static int write_record(const title_restore_env_t *env, const tr_vol_t *v, const
     snprintf(tmp, sizeof tmp, "%s.tmp", p);
     FILE *f = fopen(tmp, "w");
     if (!f) return -1;
-    int ok = fprintf(f, "app=%d\npatch=%d\ncleared=%d\nbackup=%s\n", r->app, r->patch, r->cleared, r->backup) > 0;
+    int ok = fprintf(f, "app=%d\npatch=%d\ncleared=%d\nunavailable=%d\nbackup=%s\n", r->app, r->patch, r->cleared,
+                     r->unavailable, r->backup) > 0;
     ok = fflush(f) == 0 && ok;
     fsync(fileno(f));
     ok = fclose(f) == 0 && ok;
@@ -356,6 +362,7 @@ static int read_record(const title_restore_env_t *env, const tr_vol_t *v, tr_rec
         if (strncmp(line, "app=", 4) == 0) r->app = atoi(line + 4) == 1;
         else if (strncmp(line, "patch=", 6) == 0) r->patch = atoi(line + 6) == 1;
         else if (strncmp(line, "cleared=", 8) == 0) r->cleared = atoi(line + 8) == 1;
+        else if (strncmp(line, "unavailable=", 12) == 0) r->unavailable = atoi(line + 12) == 1;
         else if (strncmp(line, "backup=", 7) == 0 && !strchr(line + 7, '"') && !strchr(line + 7, '\\'))
             snprintf(r->backup, sizeof r->backup, "%s", line + 7);
     }
@@ -564,6 +571,12 @@ static int uninstall_settled(const title_restore_env_t *env, const tr_vol_t *v, 
     return 1;
 }
 
+/* Why a cleared restore still waits: Sony removing its copy, or no uninstall to ask at all (the
+ * user removes the failed download on the PS5; the wait for it to settle is the same). */
+static const char *clear_word(const tr_record_t *rec) {
+    return rec->unavailable ? "uninstall_unavailable" : "clearing";
+}
+
 /* The package and its update back where they were: the end of a rollback, after the caller's own
  * checks. Writes the reply's state and closes it. `refused`: clear's uninstall answered with an
  * error, so a title Sony still holds is named that way rather than as still being cleared. */
@@ -571,7 +584,7 @@ static int put_back(const title_restore_env_t *env, const char *id, const tr_vol
                     const tr_record_t *rec, const char *aside_pkg, const char *aside_patch, int have_patch_aside,
                     int refused, tr_out_t *o) {
     int db = env && env->appdb_has ? env->appdb_has(id) : -1;
-    const char *busy = refused ? "uninstall_refused" : "clearing";
+    const char *busy = refused ? "uninstall_refused" : clear_word(rec);
     if (db < 0) {
         put(o, ",\"state\":\"unsettled\",\"reason\":\"db_unreadable\",\"kept\":\"%s\"}", aside_pkg);
         return done(o);
@@ -639,13 +652,13 @@ static int op_finish(const title_restore_env_t *env, const char *id, int flags, 
          * moved by us, and the copy aside is not deleted on a put-back either. After a clear, the
          * record is Sony's uninstall still running. */
         put(o, ",\"state\":\"unsettled\",\"reason\":\"%s\",\"kept\":\"%s\"}",
-            rec.cleared ? "clearing" : landed >= 0 ? "on_home_screen" : "recorded_without_package", aside_pkg);
+            rec.cleared ? clear_word(&rec) : landed >= 0 ? "on_home_screen" : "recorded_without_package", aside_pkg);
         return done(o);
     }
     if (rec.cleared && !(flags & TITLE_RESTORE_ROLLBACK)) {
         /* The console's copy was uninstalled (clear): this restore failed, whatever is in place
          * now is Sony still removing it, and our copy is the only good one. It only goes back. */
-        put(o, ",\"state\":\"unsettled\",\"reason\":\"clearing\",\"kept\":\"%s\"}", aside_pkg);
+        put(o, ",\"state\":\"unsettled\",\"reason\":\"%s\",\"kept\":\"%s\"}", clear_word(&rec), aside_pkg);
         return done(o);
     }
     if (db == 1 && landed >= 0 && !(flags & TITLE_RESTORE_INSTALL_ENDED)) {
@@ -732,25 +745,30 @@ static int op_clear(const title_restore_env_t *env, const char *id, tr_out_t *o)
     for (int i = 0; i < nv && !leftovers; i++)
         if (dir_entries(env, v[i].app_dir) > 0) leftovers = 1;
     int refused = 0;
-    if (leftovers && !rec.cleared) {
+    if (leftovers && (!rec.cleared || rec.unavailable)) {
         if (!env || !env->uninstall) {
             put(o, ",\"state\":\"unsettled\",\"reason\":\"uninstall_unavailable\",\"kept\":\"%s\"}", aside_pkg);
             return done(o);
         }
         /* Recorded before the call: an interruption is known to be a cleared restore. */
         rec.cleared = 1;
+        rec.unavailable = 0;
         (void)write_record(env, pv, &rec);
         uint32_t rc = 0;
         int ran = env->uninstall(id, &rc);
         fprintf(stderr, "[restore] %s: clearing the console's unfinished install: uninstall %s rc=0x%08X\n", id,
                 ran == 0 ? "ran" : "unavailable", (unsigned)rc);
         if (ran != 0) {
+            /* Nothing was asked of Sony: said so from now on (not "clearing"), and the settle
+             * wait stays for whatever the user removes on the PS5 (tr_record_t.unavailable). */
+            rec.unavailable = 1;
+            (void)write_record(env, pv, &rec);
             put(o, ",\"state\":\"unsettled\",\"reason\":\"uninstall_unavailable\",\"kept\":\"%s\"}", aside_pkg);
             return done(o);
         }
         put(o, ",\"cleared\":true,\"sony_rc\":%u", (unsigned)rc);
         refused = rc != 0;
-    } else if (rec.cleared) {
+    } else if (rec.cleared && !rec.unavailable) {
         put(o, ",\"cleared\":true");
     }
     return put_back(env, id, v, nv, pv, &rec, aside_pkg, aside_patch, exists(env, aside_patch, NULL), refused, o);

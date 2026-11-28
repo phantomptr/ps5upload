@@ -895,6 +895,10 @@ function AccountIdLine({
     if (!ok) return;
     setIdBusy(true);
     setError(null);
+    // An earlier change's "Saved" and trophy line are not this one's: a refused write must not
+    // show under them.
+    setSavedOk(false);
+    setTrophyNote(null);
     try {
       // profileActivate writes the id and sets the slot's activated flags —
       // the same path offact uses. Passing an explicit id skips the

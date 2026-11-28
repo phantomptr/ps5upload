@@ -188,6 +188,7 @@
   "cw_convert_err_partial_in_the_way": "Folder dengan nama hasil dan akhiran .partial sudah ada, dan bukan PS5Upload yang meninggalkannya. Pindahkan atau ganti namanya, lalu mulai lagi.",
   "cw_convert_err_rar": "File .rar tidak bisa dikonversi di PS5: lisensi dekoder RAR tidak mengizinkannya di dalam konverter. Ekstrak dulu di File, atau konversi di komputer Anda.",
   "cw_convert_err_too_big_for_drive": "Image-nya akan melebihi 4 GiB, batas satu file di drive itu. Simpan ke drive exFAT atau penyimpanan internal, atau buat folder sebagai gantinya.",
+  "cw_convert_err_too_big_for_firmware": "Paket ini akan lebih besar dari yang bisa dibuka firmware PS5 ini: paket akan terpasang tetapi tidak pernah bisa dijalankan. Buat image game saja, atau gunakan paket aslinya.",
   "cw_convert_err_unreadable": "Sebagian game tidak bisa dibaca. Periksa drive lalu coba lagi.",
   "cw_convert_err_unsupported_source": "Ini bukan folder game, image game (.exfat, .ffpkg, .ffpfs, .ffpfsc), atau arsip .zip atau .7z.",
   "cw_convert_exists": "{name} sudah ada di sana. Pilih folder lain, atau simpan keduanya.",

@@ -820,6 +820,13 @@ impl Pool {
             .map_err(|_| Ava1Error::Timeout)?
     }
 
+    /// The key pinned for the console at `console` (any address form; the port is ignored):
+    /// the console's own identity, the same at every address this engine met it at (its home
+    /// address and its tailnet one). None until it was met. Reads the small pins file.
+    pub fn pinned_key(&self, console: &str) -> Option<[u8; 32]> {
+        self.pinned(&host_of(console))
+    }
+
     /// The addresses whose pinned key is `key` (the same console, met at each of them).
     pub fn hosts_pinned_to(&self, key: &[u8; 32]) -> Vec<String> {
         let text = std::fs::read_to_string(self.dir.join("consoles")).unwrap_or_default();

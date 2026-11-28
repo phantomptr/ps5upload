@@ -13,7 +13,7 @@ import {
   isHomebrewRefusal,
   type RefusalOutcome,
 } from "./launchRefusal";
-import { ps5FakeGameNeedsNewKstuff } from "./ps5Firmware";
+import { fakeGameLaunchHint } from "./ps5Firmware";
 import { fetchRunningGames, type RunningGame } from "./runningGames";
 import { useStaleHostGuard } from "./staleHostGuard";
 import { useMakeWay } from "./useMakeWay";
@@ -88,15 +88,10 @@ export function useGameLaunch(
           ?.ps5Kernel;
       // 11.61 to 13.60: an installed fake PS5 game starts only with the latest kstuff (fake-package
       // support up to 13.60). The hint names both ways: load it, or mount the package with Kraken Mount.
-      const kfw = ps5FakeGameNeedsNewKstuff(kernel, titleId);
-      if (!kfw) return body;
-      return `${body} ${tr(
-        "fakegame.fw.launch_kstuff_v3",
-        { fw: kfw },
-        `If this game was installed from a fake package: on FW ${kfw} it starts only with the latest kstuff (fake-package support up to 13.60) loaded. Load it and press Play again, or play it by mounting the package with Kraken Mount.`,
-      )}`;
+      const hint = fakeGameLaunchHint(kernel, titleId);
+      return hint ? `${body} ${hint}` : body;
     },
-    [tr],
+    [],
   );
 
   const launch = useCallback(

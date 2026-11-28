@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
+import { TvHomeButton } from "../../../layout/TvModeFrame";
 import { Check, ChevronDown, ChevronRight, CircleDot, MonitorPlay, Play as PlayIcon } from "lucide-react";
 
 import { profileActivate, remoteplayEnable } from "../../../api/ps5";
@@ -370,6 +371,7 @@ export default function PlaySetupScreen() {
           undefined,
           "Play streams your PS5 into this app over Remote Play. These steps get a console there once; each one ticks by itself when it's done.",
         )}
+        right={<TvHomeButton />}
       />
       {/* Before anyone pairs a console for nothing: a browser cannot decode video on this page. */}
       {typeof window !== "undefined" && window.isSecureContext === false && (

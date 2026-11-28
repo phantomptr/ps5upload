@@ -45,6 +45,7 @@
 #include "storage_cleanup.h"
 #include "webui_cheats_store.h"
 #include "webui_codec.h"
+#include "monocypher.h" /* crypto_wipe: a clear the compiler keeps */
 #include "webui_files.h"
 #include "webui_inputlog.h"
 #include "webui_offline.h"
@@ -752,12 +753,17 @@ static void start_path_job(int fd, uint8_t *out, int op, const char *path, const
     q.args_len = len > 0 ? (uint32_t)len : 0;
     ava1_w_init(&w, req, args_cap + 64);
     if (len <= 0 || ava1_job_run_encode(&q, &w) != 0) {
+        /* the tail can hold an archive's password (r_fs_extract wipes its own copy) */
+        crypto_wipe(args, args_cap);
+        crypto_wipe(req, args_cap + 64);
         free(args);
         free(req);
         send_bad(fd, "bad_path");
         return;
     }
     st = call(AVA1_METHOD_JOB_RUN, req, w.len, out, &ol);
+    crypto_wipe(args, args_cap);
+    crypto_wipe(req, args_cap + 64);
     free(args);
     free(req);
     if (st != AVA1_STATUS_OK) {
@@ -912,7 +918,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     }
     if (webui_json_bool(b, n, "merge", &merge) < 0 || webui_json_bool(b, n, "replace", &replace) < 0 ||
         webui_json_bool(b, n, "list", &list) < 0) {
-        memset(password, 0, sizeof password);
+        crypto_wipe(password, sizeof password);
         send_bad(fd, "bad_merge");
         return;
     }
@@ -921,7 +927,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     if (!top || !tail) {
         free(top);
         free(tail);
-        memset(password, 0, sizeof password);
+        crypto_wipe(password, sizeof password);
         send_error(fd, 500, "out_of_memory", 13);
         return;
     }
@@ -930,14 +936,14 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
     if (rt < 0) {
         free(top);
         free(tail);
-        memset(password, 0, sizeof password);
+        crypto_wipe(password, sizeof password);
         send_bad(fd, "bad_top");
         return;
     }
     /* archive_extract.c reads it back with fsj_json_str (\" \\ \uXXXX understood). */
     len = webui_extract_tail(tail, cap, dest, rc == 1 ? password : NULL, merge, replace, list,
                              rt == 1 ? top : NULL);
-    memset(password, 0, sizeof password);
+    crypto_wipe(password, sizeof password);
     free(top);
     if (len < 0) {
         free(tail);
@@ -945,7 +951,7 @@ static void r_fs_extract(const char *b, size_t n, uint8_t *out, int fd) {
         return;
     }
     start_path_job(fd, out, AVA1_JOB_OP_ARCHIVE_EXTRACT, path, NULL, tail);
-    memset(tail, 0, cap);
+    crypto_wipe(tail, cap);
     free(tail);
 }
 

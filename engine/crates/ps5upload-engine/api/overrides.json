@@ -64,6 +64,7 @@
   "/api/ps5/fan-boost": "hardware",
   "/api/ps5/files": "console-files",
   "/api/ps5/focus": "games",
+  "/api/ps5/folder-sizes": "console-files",
   "/api/ps5/fs": "console-files",
   "/api/ps5/game-icon": "games",
   "/api/ps5/game-meta": "games",
@@ -376,6 +377,12 @@
   },
   "GET /api/ps5/files/prefs": {
    "summary": "The console file manager's pinned and recent folders"
+  },
+  "GET /api/ps5/folder-sizes": {
+   "summary": "Known sizes of a console folder and the folders in it, with when each was measured"
+  },
+  "GET /api/ps5/folder-sizes/queue": {
+   "summary": "The folders being measured and waiting"
   },
   "GET /api/ps5/fs/op-status": {
    "summary": "Progress of a console file operation"
@@ -929,6 +936,12 @@
   },
   "POST /api/ps5/files/prefs/set": {
    "summary": "Pin, unpin or note a visit to a folder"
+  },
+  "POST /api/ps5/folder-sizes/cancel": {
+   "summary": "Stop measuring folders"
+  },
+  "POST /api/ps5/folder-sizes/measure": {
+   "summary": "Queue console folders to be measured in the background"
   },
   "POST /api/ps5/fs/chmod": {
    "summary": "Change a console path's permissions"

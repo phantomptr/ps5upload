@@ -1,5 +1,6 @@
 /* The helper's request (a flat JSON object) and the status the extractor writes back. */
 #include "xreq.h"
+#include "xrcrypt.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -175,7 +176,7 @@ int xreq_read_file(const char *path, xjob_t *j) {
     buf[at] = 0;
     rc = n < 0 ? -1 : xreq_parse(buf, j);
     /* The password is not kept anywhere once read. */
-    memset(buf, 0, cap);
+    xrc_wipe(buf, cap);
     free(buf);
     return rc;
 }

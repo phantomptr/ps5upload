@@ -2651,6 +2651,7 @@ async fn each_post_tool_sends_what_its_route_reads() {
     for (tool, path) in [
         ("games_restore_check", "/api/ps5/app/restore/check"),
         ("games_restore_status", "/api/ps5/app/restore/status"),
+        ("games_doctor", "/api/ps5/app/doctor"),
     ] {
         let asked = route_of(
             &server,

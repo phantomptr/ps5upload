@@ -338,6 +338,12 @@ pub mod ffi {
         pub fn ava1_test_set_same_device(v: c_int);
         pub fn ava1_test_fsj_delay_us(us: u32);
         pub fn ava1_test_fsj_cross_name(name: *const c_char);
+        pub fn fsj_json_str(
+            json: *const c_char,
+            key: *const c_char,
+            out: *mut c_char,
+            cap: usize,
+        ) -> c_int;
         pub fn ava1_test_copy_atomic(
             src: *const c_char,
             dst: *const c_char,
@@ -1433,6 +1439,16 @@ thread_local! {
 pub fn c_set_cross_name(name: &str) {
     let c = std::ffi::CString::new(name).unwrap();
     unsafe { ffi::ava1_test_fsj_cross_name(c.as_ptr()) }
+}
+
+/// `fsj_json_str(json, key, out, cap)` into a `cap`-byte buffer pre-filled with 'X': its return
+/// and the whole buffer afterwards, so a caller can see what was left behind on a refusal.
+pub fn c_fsj_json_str(json: &str, key: &str, cap: usize) -> (i32, Vec<u8>) {
+    let j = std::ffi::CString::new(json).unwrap();
+    let k = std::ffi::CString::new(key).unwrap();
+    let mut out = vec![b'X'; cap];
+    let rc = unsafe { ffi::fsj_json_str(j.as_ptr(), k.as_ptr(), out.as_mut_ptr().cast(), cap) };
+    (rc, out)
 }
 
 /// `fsj_copy_atomic(src, dst)` with a cancel after `blocks` 64 KiB blocks (negative: never):

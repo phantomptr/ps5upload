@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clampHours, isChosen, toggleChosen } from "./serverSaveBackup";
+import { clampHours, isChosen, toggleChosen, toggleUser } from "./serverSaveBackup";
 import { mergeBackups } from "../screens/GameHub/SaveBackupsList";
 import type { SaveBackupFile } from "../api/saveBackup";
 
@@ -24,6 +24,24 @@ describe("server save backup choices", () => {
 
   it("drops a console that is no longer in the list", () => {
     expect(toggleChosen(["10.0.0.1", "10.0.0.9"], "10.0.0.2", true, all)).toEqual(["10.0.0.1", "10.0.0.2"]);
+  });
+
+  it("a user ticked or unticked on one console leaves the other consoles' users alone", () => {
+    // The engine's list names users of two consoles: A (1, 2, 3, shown) and B (9).
+    const shownA = [1, 2, 3];
+    expect(toggleUser([1, 2, 9], 2, false, shownA)).toEqual([1, 9]);
+    expect(toggleUser([1, 9], 3, true, shownA)).toEqual([1, 9, 3]);
+    // Every user of A ticked, B's still listed: stays a list (B's other users stay left out).
+    expect(toggleUser([1, 2, 9], 3, true, shownA)).toEqual([1, 2, 9, 3]);
+    // The last of A's users stays ticked.
+    expect(toggleUser([1, 9], 1, false, shownA)).toEqual([1, 9]);
+    // B's users only listed (none of A's): ticking one of A's adds it.
+    expect(toggleUser([9], 2, true, shownA)).toEqual([9, 2]);
+  });
+
+  it("one console's users only: as before, every user ticked is \"every user\"", () => {
+    expect(toggleUser([], 2, false, [1, 2, 3])).toEqual([1, 3]);
+    expect(toggleUser([1, 3], 2, true, [1, 2, 3])).toEqual([]);
   });
 
   it("clamps the hours", () => {

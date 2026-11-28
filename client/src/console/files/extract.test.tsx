@@ -12,7 +12,7 @@ import { ApiError, call } from "../api";
 import type { Volume } from "../home/Home";
 import { t } from "../strings";
 import { ActionsSheet } from "./ActionsSheet";
-import { ExtractDialog, extractCauseText, extractErrorText } from "./ExtractDialog";
+import { ExtractDialog, extractCauseText, extractErrorText, itemsPasswordAsk } from "./ExtractDialog";
 import { busyText, extractMessage, FilesView, sheetActions, type FilesViewProps } from "./Files";
 import { extractInfo, listArchiveTop, skipTop, startOp, topListing, type ExtractInfo, type TopListing } from "./opJob";
 import { TextPrompt } from "./TextPrompt";
@@ -290,6 +290,55 @@ describe("extract: choose items (#969)", () => {
     expect(listed).not.toContain('data-action="extract-choose"');
   });
 
+  it("a password-protected archive asks for its password to list, then lists with it", async () => {
+    expect(itemsPasswordAsk(new ApiError(500, "fs_extract_password_required"))).toEqual({ wrong: false });
+    expect(itemsPasswordAsk(new ApiError(500, "fs_extract_wrong_password"))).toEqual({ wrong: true });
+    expect(itemsPasswordAsk(new ApiError(500, "fs_extract_list_failed"))).toBeNull();
+    expect(itemsPasswordAsk(new Error("x"))).toBeNull();
+    const asked = renderToStaticMarkup(
+      <ExtractDialog
+        dir="/data/x"
+        name="g.zip"
+        path="/data/x/g.zip"
+        busy={false}
+        onStart={vi.fn()}
+        onCancel={vi.fn()}
+        initial={INFO}
+        startItemsPw={{ wrong: false }}
+      />,
+    );
+    expect(asked).toContain("data-extract-items-password");
+    expect(asked).toContain('type="password"');
+    expect(asked).toContain(t("cw_files_extract_pw_body"));
+    // Choose items waits for the password.
+    expect(asked).toMatch(/<button[^>]*disabled=""[^>]*data-action="extract-choose"|<button[^>]*data-action="extract-choose"[^>]*disabled=""/);
+    const wrong = renderToStaticMarkup(
+      <ExtractDialog dir="/data/x" name="g.zip" path="/data/x/g.zip" busy={false} onStart={vi.fn()} onCancel={vi.fn()} initial={INFO} startItemsPw={{ wrong: true }} />,
+    );
+    expect(wrong).toContain(t("cw_files_extract_pw_wrong"));
+    // The listing goes with the password.
+    const mocked = vi.mocked(call);
+    mocked.mockReset();
+    mocked.mockResolvedValueOnce({ job: "lp" });
+    const deps = {
+      status: vi.fn(async () => ({
+        job: "lp",
+        state: "done" as const,
+        files_done: 0,
+        files_total: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        message: null,
+        result: JSON.stringify({ top: "Game/readme.txt", top_dirs: "Game", top_more: false, listed: true }),
+        code: null,
+      })),
+      cancel: vi.fn(async () => {}),
+      sleep: vi.fn(async () => {}),
+    };
+    await listArchiveTop("/data/x/g.zip", "/data/x", "s3cret", deps);
+    expect(mocked).toHaveBeenCalledWith("/api/fs/extract", { path: "/data/x/g.zip", dest: "/data/x", list: true, password: "s3cret" });
+  });
+
   it("listing asks the helper for list mode and reads its result", async () => {
     const mocked = vi.mocked(call);
     mocked.mockReset();
@@ -309,11 +358,11 @@ describe("extract: choose items (#969)", () => {
       cancel: vi.fn(async () => {}),
       sleep: vi.fn(async () => {}),
     };
-    await expect(listArchiveTop("/data/x/g.zip", "/data/x", deps)).resolves.toEqual(listing);
+    await expect(listArchiveTop("/data/x/g.zip", "/data/x", undefined, deps)).resolves.toEqual(listing);
     expect(mocked).toHaveBeenCalledWith("/api/fs/extract", { path: "/data/x/g.zip", dest: "/data/x", list: true });
     // A helper that ignored list mode refuses the folder that is there: no listing, nothing written.
     mocked.mockResolvedValueOnce({ job: "old" });
     deps.status.mockResolvedValueOnce({ ...(await deps.status()), state: "failed" as never, message: "fs_extract_destination_exists" as never, result: null as never });
-    await expect(listArchiveTop("/data/x/g.zip", "/data/x", deps)).rejects.toMatchObject({ code: "fs_extract_destination_exists" });
+    await expect(listArchiveTop("/data/x/g.zip", "/data/x", undefined, deps)).rejects.toMatchObject({ code: "fs_extract_destination_exists" });
   });
 });

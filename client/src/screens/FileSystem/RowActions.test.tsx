@@ -323,6 +323,54 @@ describe("Files row: snapshot and what takes space (menu only)", () => {
   });
 });
 
+describe("Files row: Measure size (#974)", () => {
+  const tr = ((key: string, _vars?: unknown, fallback?: string) =>
+    fallback ?? key) as unknown as RowActionsContext["tr"];
+  const ctx = (over: Partial<RowActionsContext> = {}): RowActionsContext => ({
+    tr,
+    desktopApp: false,
+    hasHost: true,
+    downloadActive: false,
+    downloadingName: null,
+    entryBusy: false,
+    pkgInstalling: false,
+    installingPkgName: null,
+    viewable: () => false,
+    download: vi.fn(),
+    rename: vi.fn(),
+    replace: vi.fn(),
+    view: vi.fn(),
+    preview: vi.fn(),
+    crc32: vi.fn(),
+    verify: vi.fn(),
+    install: vi.fn(),
+    remove: vi.fn(),
+    space: vi.fn(),
+    measure: vi.fn(),
+    ...over,
+  });
+
+  it("a console folder offers it in the menu only, and it measures that folder", () => {
+    const c = ctx();
+    const dir = { name: "PPSA01234", kind: "dir", size: 0 };
+    const actions = buildRowActions(dir, c);
+    const measure = actions.find((a) => a.id === "measure");
+    expect(measure?.label).toBe("Measure size");
+    expect(measure?.menuOnly).toBe(true);
+    measure?.run();
+    expect(c.measure).toHaveBeenCalledWith(dir);
+    expect(renderToStaticMarkup(<RowActionButtonList actions={actions} />)).not.toContain("Measure size");
+  });
+
+  it("a file, a place without a console, or a pane that cannot measure has none", () => {
+    const ids = (e: { name: string; kind: string; size: number }, c: RowActionsContext) =>
+      buildRowActions(e, c).map((a) => a.id);
+    expect(ids({ name: "a.pkg", kind: "file", size: 3 }, ctx())).not.toContain("measure");
+    expect(ids({ name: "d", kind: "dir", size: 0 }, ctx({ hasHost: false }))).not.toContain("measure");
+    expect(ids({ name: "d", kind: "dir", size: 0 }, ctx({ measure: undefined }))).not.toContain("measure");
+  });
+});
+
 describe("Files selection bar", () => {
   it("keeps the count on one line and scrolls the actions on a phone", () => {
     const action = "Set permissions (777)";

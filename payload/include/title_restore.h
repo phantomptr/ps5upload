@@ -110,7 +110,10 @@ uint64_t title_restore_internal_need(uint64_t size);
  *   clear:   rolled_back | nothing_pending, or unsettled with "reason": clearing (Sony is still
  *            removing its copy: finish with ROLLBACK later), no_copy_aside, update_in_place,
  *            addons_present, db_unreadable, uninstall_unavailable, uninstall_refused, and the
- *            rollback's own reasons; "cleared":true and "sony_rc" when the uninstall ran. */
+ *            rollback's own reasons; "cleared":true and "sony_rc" when the uninstall ran.
+ *            uninstall_unavailable (Sony's uninstall could not be called) is kept in the record:
+ *            finish and a later clear say it too, never "clearing", and still wait for the app
+ *            folders to settle before the package goes back; a later clear tries again. */
 int title_restore_run(const title_restore_env_t *env, const char *op, const char *title_id,
                       int flags, const char *stamp, char *out, size_t cap);
 

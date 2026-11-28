@@ -22,7 +22,7 @@ import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
 import { installAccidentalReloadGuard } from "./lib/preventAccidentalReload";
 import { installSystemBack } from "./lib/systemBack";
-import { installTvNav } from "./lib/tvNav";
+import { installTvModeNav, installTvNav } from "./lib/tvNav";
 import { installNumberInputWheelGuard } from "./lib/numberInputWheel";
 
 // Capture console.error / warn + unhandled promise rejections into
@@ -82,6 +82,8 @@ installSystemBack();
 
 // Android TV: the remote's D-pad moves focus from control to control.
 installTvNav();
+// TV mode on a phone or a computer (#976): the arrows move focus in its frame too.
+installTvModeNav();
 
 // A mouse wheel over a focused number box (the upload speed limit) must not change it.
 installNumberInputWheelGuard();

@@ -172,6 +172,14 @@ test("a plain game that carries an AMPR emulator can leave it out of its package
   const box = leaveOut.getByRole("checkbox");
   await expect(box).not.toBeChecked();
   await box.check();
+  // Another game typed in (not picked): it starts without the last game's tick.
+  await source.fill("/games/OtherPlainEmu");
+  await source.blur();
+  await expect(leaveOut).toContainText("ampr_emu 0.4.2.1");
+  await expect(box).not.toBeChecked();
+  await source.fill("/games/PlainEmu");
+  await source.blur();
+  await box.check();
   await main.getByRole("button", { name: "Convert only" }).first().click();
   await expect.poll(() => builds.length).toBe(1);
   expect(builds[0]).toMatchObject({ source: "/games/PlainEmu", leave_out_ampr_emu: true });

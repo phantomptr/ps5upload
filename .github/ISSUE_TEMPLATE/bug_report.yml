@@ -91,6 +91,12 @@ body:
       label: Other payloads running on the PS5
       description: How you jailbroke, and anything else loaded (kstuff, etaHEN, ShadowMount+, Payload Manager, ftpsrv, ...), with versions if you know them.
   - type: textarea
+    id: report-zip
+    attributes:
+      label: Bug report zip
+      description: Drag the zip the app's Bug Report saved into this box. The app can't attach it for you, so it isn't here until you drag it in.
+      placeholder: "Drag the zip here"
+  - type: textarea
     id: logs
     attributes:
       label: Logs (if you have no bug report zip)

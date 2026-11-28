@@ -58,6 +58,25 @@ describe("sortEntries", () => {
     ]);
   });
 
+  it("sorts folders by their known size, unknown ones last either way (#974)", () => {
+    const dirs = [
+      { name: "Unknown", kind: "dir", size: 0 },
+      { name: "Big", kind: "dir", size: 0 },
+      { name: "z.pkg", kind: "file", size: 5 },
+      { name: "Small", kind: "dir", size: 0 },
+      { name: "Also unknown", kind: "dir", size: 0 },
+    ];
+    const known: Record<string, number> = { Big: 50e9, Small: 2e6 };
+    const by = (desc: boolean) =>
+      sortEntries(dirs, { key: "size", desc }, (n) => known[n]).map((e) => e.name);
+    expect(by(false)).toEqual(["Small", "Big", "Also unknown", "Unknown", "z.pkg"]);
+    expect(by(true)).toEqual(["Big", "Small", "Also unknown", "Unknown", "z.pkg"]);
+    // By name, a known size changes nothing.
+    expect(
+      sortEntries(dirs, { key: "name", desc: false }, (n) => known[n]).map((e) => e.name),
+    ).toEqual(["Also unknown", "Big", "Small", "Unknown", "z.pkg"]);
+  });
+
   it("flips the order on the same column, starts ascending on a new one", () => {
     expect(nextSort({ key: "name", desc: false }, "name")).toEqual({ key: "name", desc: true });
     expect(nextSort({ key: "name", desc: true }, "size")).toEqual({ key: "size", desc: false });

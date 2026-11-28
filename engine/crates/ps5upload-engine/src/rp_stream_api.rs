@@ -316,7 +316,12 @@ struct Live {
     page_off: AtomicBool,
     /// When a keyframe was last asked for on behalf of a watcher or player.
     guest_key_asked: Mutex<Option<Instant>>,
+    /// Pictures skipped because the page fell behind (`page_skips`): the one that found its
+    /// queue full and each one after it until the next keyframe.
     dropped: AtomicU64,
+    /// The page fell behind and its pictures are being skipped to the next keyframe (not a page
+    /// that just attached and waits for its first one).
+    behind: AtomicBool,
     next_viewer: AtomicU64,
     /// The session was set up for the mic; if not, the mic is ignored.
     mic_enabled: AtomicBool,
@@ -1019,6 +1024,7 @@ impl Live {
             page_off: AtomicBool::new(false),
             guest_key_asked: Mutex::new(None),
             dropped: AtomicU64::new(0),
+            behind: AtomicBool::new(false),
             next_viewer: AtomicU64::new(1),
             mic_enabled: AtomicBool::new(false),
             mic: Default::default(),
@@ -1194,6 +1200,7 @@ impl Live {
                 self.send_ctl(bin(3, &h));
             }
             self.need_key.store(true, Ordering::Relaxed);
+            self.behind.store(false, Ordering::Relaxed);
             self.want_key.store(true, Ordering::Relaxed);
         } else if was_on {
             self.push_pad(PAGE_SOURCE, None);
@@ -1351,6 +1358,7 @@ impl Live {
         }
         if !off {
             self.need_key.store(true, Ordering::Relaxed);
+            self.behind.store(false, Ordering::Relaxed);
             self.want_key.store(true, Ordering::Relaxed);
         }
         let old = self.viewer.lock().ok().and_then(|mut g| {
@@ -1500,9 +1508,13 @@ impl Sink {
         if live.need_key.load(Ordering::Relaxed) {
             if !key {
                 live.want_key.store(true, Ordering::Relaxed);
+                if live.behind.load(Ordering::Relaxed) {
+                    live.dropped.fetch_add(1, Ordering::Relaxed);
+                }
                 return true;
             }
             live.need_key.store(false, Ordering::Relaxed);
+            live.behind.store(false, Ordering::Relaxed);
         }
         let m = if timing {
             bin_timed(t_us, au)
@@ -1512,6 +1524,7 @@ impl Sink {
         if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(m) {
             // The page is behind: skip to the next keyframe rather than queue.
             live.dropped.fetch_add(1, Ordering::Relaxed);
+            live.behind.store(true, Ordering::Relaxed);
             live.need_key.store(true, Ordering::Relaxed);
             live.want_key.store(true, Ordering::Relaxed);
         }
@@ -1720,8 +1733,8 @@ fn read_slot_file(p: &std::path::Path) -> std::collections::HashMap<String, u64>
 /// Whether a session that ended with `end` (its last word) had the console's slot, which the
 /// console keeps a while after: one that ended, given the slot (`slot_taken`, not one stopped
 /// during the wake), or one lost mid-stream.
-/// The second's stats for the page, with `page_skips`: pictures the engine skipped (to the next
-/// keyframe) since the start because the page fell behind. Next to `frames` (what the PS5 sent
+/// The second's stats for the page, with `page_skips`: pictures the engine skipped (each one,
+/// to the next keyframe) since the start because the page fell behind. Next to `frames` (what the PS5 sent
 /// this second) and the page's own decoded count, it says where a low frame rate comes from: the
 /// console sending few, or this device not keeping up with what arrived (#972).
 fn stats_for_page(s: &LiveStats, page_skips: u64) -> serde_json::Value {
@@ -3792,6 +3805,8 @@ mod tests {
         let (vt, mut vr, ct, _cr) = page();
         live.attach(vt, ct, false);
         sink.wants_keyframe();
+        // Waiting for its first keyframe is no skip.
+        sink.video(DELTA, false);
         sink.video(KEY, false);
         for _ in 0..VIDEO_QUEUE + 3 {
             sink.video(DELTA, false);
@@ -3802,6 +3817,13 @@ mod tests {
         assert!(kinds(&mut vr).is_empty(), "deltas wait for the keyframe");
         sink.video(KEY, false);
         assert_eq!(kinds(&mut vr).len(), 1);
+        // `page_skips` counts every picture skipped: the four that did not fit (the keyframe and
+        // VIDEO_QUEUE - 1 deltas did; the first of the four finds the queue full, the other three
+        // wait for the keyframe), then the one more delta.
+        assert_eq!(live.dropped.load(Ordering::Relaxed), 5);
+        // Caught up: a delta now goes through and counts nothing.
+        sink.video(DELTA, false);
+        assert_eq!(live.dropped.load(Ordering::Relaxed), 5);
     }
 
     #[test]

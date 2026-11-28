@@ -4,6 +4,7 @@
 // the offline sign-in on 13.60). Kept here, Play › Set up can say so and put the same ID back in
 // one press: the same ID matters, saves made under it are tied to it.
 
+import { hostOf } from "../../lib/addr";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { accountIdHexDigits } from "./accountId";
 
@@ -18,8 +19,10 @@ export interface KeptAccountId {
 
 type Kept = Record<string, KeptAccountId>;
 
+/** By the console's address alone: Accounts writes it from a helper address, Play › Set up reads
+ *  it with the host as typed, which may carry a port. */
 function keyOf(host: string, uid: number): string {
-  return `${host.trim()}|${uid >>> 0}`;
+  return `${hostOf(host.trim())}|${uid >>> 0}`;
 }
 
 function load(): Kept {

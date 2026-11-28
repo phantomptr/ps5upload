@@ -314,7 +314,7 @@ static int run_op(fake_t fake, const char *args, ava1_op_ctx_t *c) {
 
 static void test_wire(void) {
     char buf[4096], got[1024];
-    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0, NULL, "", "", "", 0, 0};
+    cc_build_t b = {"/data/out \"q\".exfat", "exfat", 1, 1, 0, NULL, "", "", "", 0, 0, ""};
     cc_status_t s;
     const char *full = "{\"id\":\"ab\",\"pid\":77,\"op\":\"build\",\"state\":\"running\",\"stage\":\"write\","
                        "\"bytes_done\":5,\"bytes_total\":9,\"result\":{\"a\":\"}\",\"b\":[1,{\"c\":2}]}}\n";
@@ -360,7 +360,7 @@ static void test_wire(void) {
     {
         /* A packed game as plain files: asked of a .pkg only, said only when asked (absent, the
          * converter packages the game as it is), the emulator left out only with it. */
-        cc_build_t p = {"/data/o.pkg", "pkg", 0, 0, 0, NULL, "", "", "fast", 0, 0};
+        cc_build_t p = {"/data/o.pkg", "pkg", 0, 0, 0, NULL, "", "", "fast", 0, 0, ""};
         int v = 0;
         len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
         CHECK(len > 0 && webui_json_bool(buf, (size_t)len, "unpack_packs", &v) == 0 &&
@@ -390,6 +390,17 @@ static void test_wire(void) {
         /* It fits or it is refused whole, as every other member. */
         p.format = "pkg";
         CHECK(cc_request_json(buf, 120, "ab12", "build", "/data/g", &p) == -1);
+        /* The console's firmware: said with a .pkg when known, never with another format. */
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && webui_json_str(buf, (size_t)len, "console_firmware", got, sizeof got) == 0);
+        snprintf(p.console_fw, sizeof p.console_fw, "%s", "9.60");
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && webui_json_str(buf, (size_t)len, "console_firmware", got, sizeof got) == 1 &&
+              strcmp(got, "9.60") == 0);
+        p.format = "exfat";
+        len = cc_request_json(buf, sizeof buf, "ab12", "build", "/data/g", &p);
+        CHECK(len > 0 && !strstr(buf, "console_firmware"));
+        p.format = "pkg";
     }
     len = cc_request_json(buf, sizeof buf, "ab12", "inspect", "/data/g", NULL);
     CHECK(len > 0 && webui_json_str(buf, (size_t)len, "dest", got, sizeof got) == 0);

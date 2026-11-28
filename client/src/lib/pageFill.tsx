@@ -48,7 +48,18 @@ export function fillWithoutApi(): boolean {
   } catch {
     // Not a real window (tests).
   }
+  return homeTipDue();
+}
+
+/** The Home Screen tip has yet to be shown: an iPhone or iPad, in the browser, not shown before. */
+export function homeTipDue(): boolean {
   return isAppleTouch() && !standalone() && safeGetItem(HOME_TIP_KEY) !== "1";
+}
+
+/** The pad page's Full screen button: with the API, or (an iPhone) while the Home Screen tip is
+ *  still to come. After Got it, or opened from the Home Screen, the button would do nothing. */
+export function padShowsFullButton(api = hasFullscreenApi()): boolean {
+  return api || homeTipDue();
 }
 
 /** The one-time tip: the browser's bars stay; the Home Screen has none. */

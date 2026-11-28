@@ -1935,7 +1935,8 @@ export function Files({ ctx }: { ctx: SectionContext }) {
       const body = {
         path: src,
         dest: start.dest,
-        ...(password ? { password } : {}),
+        // Asked for now, or already given to list the archive for "Choose items".
+        ...((password ?? start.password) ? { password: password ?? start.password } : {}),
         ...(start.merge ? { merge: true } : {}),
         ...(start.replace ? { replace: true } : {}),
         // "Choose items" (#969): the top-level entries left out.

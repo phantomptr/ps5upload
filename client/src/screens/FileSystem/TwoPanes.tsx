@@ -26,6 +26,7 @@ import {
   type Place,
   type PlaceEntry,
 } from "../../lib/placeList";
+import { childToReveal, REVEAL_MS } from "../../lib/revealChild";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { queueConsoleSend, whenQueueRowEnds } from "../../state/consoleSendQueue";
 import { useTr } from "../../state/lang";
@@ -400,7 +401,7 @@ function computerLabel(tr: ReturnType<typeof useTr>): string {
     : tr("two_panes_app_computer", undefined, "The app's computer");
 }
 
-type OtherPaneState = ReturnType<typeof useOtherPane>;
+export type OtherPaneState = ReturnType<typeof useOtherPane>;
 
 /** The other side's place, folder, listing and ticks; remembered per device. */
 function useOtherPane(here: string, servers: Connection[]) {
@@ -415,6 +416,10 @@ function useOtherPane(here: string, servers: Connection[]) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Going back out of a folder (Up, Backspace, a storage root above it): the folder left, or the
+  // one on the way to it, once the listing has it (lib/revealChild.ts, as the PS5 side does).
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const clearReveal = useCallback(() => setRevealed(null), []);
   const seq = useRef(0);
 
   // The console Files is on is never the other side too.
@@ -479,6 +484,7 @@ function useOtherPane(here: string, servers: Connection[]) {
 
   const open = (path: string) => {
     if (!usable) return;
+    setRevealed(childToReveal(dir, path));
     setDir(path);
     setSelected(new Set());
     writeOtherPane({ place: usable, path });
@@ -494,7 +500,10 @@ function useOtherPane(here: string, servers: Connection[]) {
     loading,
     error,
     selected,
+    revealed,
+    clearReveal,
     choose: (p: Place) => {
+      setRevealed(null);
       writeOtherPane({ place: p, path: "" });
       setEntries([]);
       setError(null);
@@ -527,7 +536,7 @@ function useOtherPane(here: string, servers: Connection[]) {
 const placeValue = (p: Place | null) =>
   !p ? "" : p.kind === "computer" ? "computer" : p.kind === "server" ? `server:${p.id}` : `console:${p.host}`;
 
-function OtherPane({
+export function OtherPane({
   pane,
   servers,
   consoles,
@@ -537,12 +546,28 @@ function OtherPane({
   consoles: { name: string; host: string }[];
 }) {
   const tr = useTr();
-  const { place, dir, entries, selected } = pane;
+  const { place, dir, entries, selected, revealed, loading, clearReveal } = pane;
   const parent = place && dir !== null ? placeParent(place, dir) : null;
   const listRef = useRef<HTMLUListElement | null>(null);
   const focusRow = (name: string) =>
     listRef.current?.querySelector<HTMLElement>(`[data-other-row="${CSS.escape(name)}"]`)?.focus();
   const allTicked = entries.length > 0 && entries.every((e) => selected.has(e.name));
+
+  // The folder come back out of: in view and focused once its listing is in, lit for a moment.
+  // Not ticked: the ticks stay what the user picked.
+  useEffect(() => {
+    if (!revealed || loading) return;
+    const row = listRef.current?.querySelector<HTMLElement>(`[data-other-row="${CSS.escape(revealed)}"]`);
+    if (!row) {
+      // Not on the first page, or the listing failed: nothing to show.
+      clearReveal();
+      return;
+    }
+    row.scrollIntoView?.({ block: "nearest" });
+    row.focus({ preventScroll: true });
+    const timer = setTimeout(clearReveal, REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [revealed, loading, clearReveal]);
 
   return (
     <section
@@ -689,11 +714,13 @@ function OtherPane({
           >
             {entries.map((e) => {
               const ticked = selected.has(e.name);
+              const isRevealed = e.is_dir && revealed === e.name;
               return (
                 <li
                   key={e.path}
                   data-other-row={e.name}
                   data-ticked={ticked ? "" : undefined}
+                  data-other-revealed={isRevealed ? "" : undefined}
                   tabIndex={-1}
                   onKeyDown={(ev) => {
                     if (ev.target !== ev.currentTarget) return;
@@ -711,6 +738,7 @@ function OtherPane({
                   }}
                   className={
                     "flex items-center gap-2 rounded-[var(--radius-card)] border px-2.5 py-1 text-sm focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] " +
+                    (isRevealed ? "fs-reveal " : "") +
                     (ticked
                       ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent-soft)]"
                       : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)] hover:bg-[var(--color-float)]")

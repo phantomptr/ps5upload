@@ -4,7 +4,7 @@ import { Volume2, VolumeX, X } from "lucide-react";
 
 import { Spinner } from "../components";
 import { useTr } from "../state/lang";
-import { useRemotePlayStore } from "../state/remotePlay";
+import { soundToggle, useRemotePlayStore } from "../state/remotePlay";
 import { installAndroidPip, useAndroidPipStore } from "../lib/androidPip";
 import {
   DRAG_SLOP_PX,
@@ -15,6 +15,7 @@ import {
   type MiniCorner,
 } from "../lib/miniPlayer";
 import { phaseText } from "../lib/rpPhaseText";
+import { isTvRoute, useTvMode } from "../state/tvMode";
 
 /**
  * The Remote Play mini player (#637): on any other screen of the app, the running stream's
@@ -44,6 +45,7 @@ export function RemotePlayMini() {
   const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const androidPip = useAndroidPipStore((s) => s.inPip);
   const [dismissed, setDismissed] = useState(false);
+  const tvMode = useTvMode();
   const [corner, setCorner] = useState<MiniCorner>(loadCorner);
   // A drop: animates from where it was let go to its corner (bumped on each drop).
   const [drop, setDrop] = useState(0);
@@ -65,7 +67,8 @@ export function RemotePlayMini() {
     onScreen,
     pip,
     androidPip,
-    enabled: prefs.miniPlayer !== false,
+    // TV mode's own screens: its home has Resume, and nothing floats over a TV's screen.
+    enabled: prefs.miniPlayer !== false && !(tvMode && isTvRoute(pathname)),
     dismissed,
     pictureHere,
   });
@@ -180,7 +183,7 @@ export function RemotePlayMini() {
           {...own}
           onClick={(e) => {
             e.stopPropagation();
-            setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 });
+            setPrefs(soundToggle(prefs));
           }}
           aria-label={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
           title={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}

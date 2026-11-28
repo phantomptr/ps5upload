@@ -396,9 +396,14 @@ export function JoinView({
     if (!autoHide || !touch || chrome.shown || !guided || hinted.current) return;
     hinted.current = true;
     setHoldHint(true);
+  }, [autoHide, touch, chrome.shown, guided]);
+  // Its own timer: the buttons shown within the 6 s (a long press, as the hint says) must not
+  // cancel it, or the hint came back every time they were hidden, for the rest of the game.
+  useEffect(() => {
+    if (!holdHint) return;
     const t = setTimeout(() => setHoldHint(false), 6000);
     return () => clearTimeout(t);
-  }, [autoHide, touch, chrome.shown, guided]);
+  }, [holdHint]);
 
   useEffect(() => {
     if (!live) return;

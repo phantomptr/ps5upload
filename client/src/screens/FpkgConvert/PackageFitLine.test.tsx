@@ -64,6 +64,11 @@ describe("PackageFitLine", () => {
     const html = line(game(), "balanced", est(300 * GIB), null)!;
     expect(html).toContain("Fits the PS5&#x27;s 450 GiB limit on FW 13.x");
     expect(html).toContain("it opens on FW 13.x only");
+    // Between 5.50 to 6.xx's 242.6 GiB and 256 GiB: only that line is named.
+    const mid = line(game(), "balanced", est(250 * GIB), null)!;
+    expect(mid).toContain("it opens on FW 7.xx and later, but not on FW 5.50 to 6.xx");
+    expect(mid).not.toContain("FW 13.x only");
+    expect(line(game(), "balanced", est(200 * GIB), null)).not.toContain("package-fit-older");
   });
 
   it("waits for the compressed size when the uncompressed one would not fit", () => {

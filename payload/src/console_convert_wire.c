@@ -51,6 +51,10 @@ int cc_request_json(char *out, size_t cap, const char *id, const char *op, const
         if (strcmp(b->format, "pkg") == 0 && b->pkg_level[0] &&
             put_member(out, cap, &at, 1, "pkg_level", b->pkg_level) != 0)
             return -1;
+        /* The console's own firmware: a package past what it opens is refused before any work. */
+        if (strcmp(b->format, "pkg") == 0 && b->console_fw[0] &&
+            put_member(out, cap, &at, 1, "console_firmware", b->console_fw) != 0)
+            return -1;
         /* Only when asked: absent, the converter packages the game as it is. */
         if (strcmp(b->format, "pkg") == 0 && (b->unpack_packs || b->leave_out_ampr_emu)) {
             w = snprintf(out + at, cap - at, "%s%s", b->unpack_packs ? ",\"unpack_packs\":true" : "",

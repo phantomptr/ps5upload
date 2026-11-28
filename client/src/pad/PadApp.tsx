@@ -10,7 +10,7 @@ import { useTr } from "../state/lang";
 import {
   HomeScreenTip,
   hasFullscreenApi,
-  isAppleTouch,
+  padShowsFullButton,
   sidewaysNow,
   useCollapseBars,
   useHomeScreenTip,
@@ -320,7 +320,7 @@ export function PadApp({
               : tr("pad_watch_watching", { host: stage.host }, `Watching ${stage.host}`)
             : stageText(tr, stage, computer)}
         </span>
-        {live && typeof document !== "undefined" && !document.fullscreenElement && (hasFullscreenApi() || isAppleTouch()) && (
+        {live && typeof document !== "undefined" && !document.fullscreenElement && padShowsFullButton() && (
           <button
             type="button"
             onClick={() => (hasFullscreenApi() ? void fillScreen() : homeTip.showIfNeeded())}

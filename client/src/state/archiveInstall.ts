@@ -158,15 +158,18 @@ export async function planTarget(host: string): Promise<void> {
   const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
   if (!cur?.packages?.length) return;
   const archive = cur.archive;
-  const { packages } = packagesForRun(cur.packages, cur.chosen);
+  const chosen = cur.chosen;
+  const { packages } = packagesForRun(cur.packages, chosen);
   let target: ArchiveTarget | null;
   try {
     target = await planArchiveTarget(host, archive, packages);
   } catch {
     target = null; // unknown: the run checks again before it sends anything
   }
-  if (archiveInstallFor(useArchiveInstallStore.getState(), host)?.archive !== archive)
-    return;
+  // Another archive, or another choice of files since (two ticks in quick succession can answer
+  // out of order): that one's plan is the one to show.
+  const now = archiveInstallFor(useArchiveInstallStore.getState(), host);
+  if (now?.archive !== archive || now.chosen !== chosen) return;
   put(host, { target });
 }
 

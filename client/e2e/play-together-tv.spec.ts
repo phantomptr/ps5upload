@@ -246,11 +246,12 @@ test("the app on a TV: Join Play Together from the first screen, and play with t
     });
   });
 
-  // A new install, no PS5 of its own: the first screen offers joining a friend, focused.
+  // A new install, no PS5 of its own: TV mode's first screen (#976) offers joining a friend,
+  // focused.
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("tv-join-go")).toBeFocused({ timeout: 30_000 });
-  // Add a PS5 doesn't open over it on a TV; it is a button away.
-  await expect(page.getByTestId("consoles-empty-add")).toBeVisible();
+  // Adding a PS5 is a button away.
+  await expect(page.getByTestId("tv-add")).toBeVisible();
   expect(await ringWidth(page)).toBeGreaterThanOrEqual(3);
   await page.keyboard.press("Enter");
 
@@ -307,11 +308,15 @@ test("the app on a TV: Join Play Together from the first screen, and play with t
   await expect(stage).toHaveClass(/fixed/);
   await expect(page.getByTestId("join-full")).toBeFocused();
 
-  // Then the app's own Back takes over, still in the game.
+  // Then the app's own Back takes over, still in the game; after that the history moves (as
+  // MainActivity does): TV mode's home (#976), the remote on Join again.
   expect(await systemBack(page)).toBe(true);
   await expect(stage).not.toHaveClass(/fixed/);
   expect(await systemBack(page)).toBe(false);
   await expect(page.getByTestId("join-player")).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/tv$/);
+  await expect(page.getByTestId("tv-join-go")).toBeFocused();
 });
 
 test("away from a TV the first screen is as before", async ({ page }) => {

@@ -240,12 +240,72 @@ impl Drop for BatchGuard {
     }
 }
 
+/// A restore is active on the console (what [`try_reserve`] refuses).
+#[cfg(test)]
 fn console_busy(addr: &str) -> bool {
     let cid = install::console_id(addr);
     with_runs(|m| {
         m.values()
             .any(|r| r.active() && install::console_id(&r.addr) == cid)
     })
+}
+
+/// Marks `title_id` on `addr` as `phase` (an active one) unless a restore is active on that
+/// console: the look and the mark under one lock, so two requests at once can't both start (one
+/// would otherwise overwrite the other's run, or run Sony's uninstall beside its install). The
+/// run's phase before (None: there was none); Err while the console is busy.
+fn try_reserve(addr: &str, title_id: &str, phase: &str) -> Result<Option<String>, ()> {
+    let cid = install::console_id(addr);
+    with_runs(|m| {
+        if m.values()
+            .any(|r| r.active() && install::console_id(&r.addr) == cid)
+        {
+            return Err(());
+        }
+        let k = key(addr, title_id);
+        let prev = m.get(&k).map(|r| r.phase.clone());
+        let run = m
+            .entry(k)
+            .or_insert_with(|| RestoreRun::new(addr, title_id, phase));
+        run.phase = phase.to_string();
+        run.updated_at = install::status::now_unix();
+        Ok(prev)
+    })
+}
+
+/// A finish's mark ([`try_reserve`]): taken back when the finish ends without setting a phase of
+/// its own (an error, nothing pending), so the console is never left looking busy.
+struct Reserved {
+    addr: String,
+    title_id: String,
+    prev: Option<String>,
+}
+
+impl Drop for Reserved {
+    fn drop(&mut self) {
+        let k = key(&self.addr, &self.title_id);
+        with_runs(|m| match (&self.prev, m.get_mut(&k)) {
+            (_, Some(r)) if r.phase != "finishing" => {}
+            (Some(prev), Some(r)) => r.phase = prev.clone(),
+            (None, Some(_)) => {
+                m.remove(&k);
+            }
+            (_, None) => {}
+        });
+    }
+}
+
+/// The folders a restore step moved, installed or deleted in (the title's folder, the package's
+/// place, the copy aside): their known sizes in Files are no longer right (#974).
+fn sizes_changed(addr: &str, id: &str, r: &RestoreReply) {
+    let mut paths = vec![format!("/user/app/{id}")];
+    paths.extend(
+        [&r.pkg, &r.aside, &r.install_path, &r.patch, &r.kept]
+            .into_iter()
+            .flatten()
+            .cloned(),
+    );
+    crate::folder_sizes::changed(addr, &paths);
 }
 
 fn fail(status: StatusCode, error: impl Into<String>) -> Response {
@@ -346,8 +406,23 @@ pub async fn candidates_handler(Query(q): Query<CandidatesQuery>) -> Response {
         ids.dedup();
         ids.retain(|id| !known.contains(id) && !crate::is_console_webui_tile(id));
         let mut out = Vec::new();
+        let mut first_error: Option<anyhow::Error> = None;
         for id in ids.into_iter().take(MAX_TITLES * 2) {
-            let check = tr::check(&mgmt, &id)?;
+            // One title the helper can't check is left out (and logged), not the whole list;
+            // a helper without the method fails them all.
+            let check = match tr::check(&mgmt, &id) {
+                Ok(c) => c,
+                Err(e) if format!("{e:#}").starts_with(tr::UNSUPPORTED) => return Err(e),
+                Err(e) => {
+                    crate::log_at!(
+                        Warn,
+                        "install",
+                        "restore candidates on {mgmt}: {id} not checked: {e:#}"
+                    );
+                    first_error.get_or_insert(e);
+                    continue;
+                }
+            };
             if matches!(check.state.as_str(), "not_installed" | "registered") {
                 continue;
             }
@@ -358,7 +433,11 @@ pub async fn candidates_handler(Query(q): Query<CandidatesQuery>) -> Response {
                 check,
             });
         }
-        Ok(out)
+        // Every check failed: that is the console's problem, not an empty list.
+        match first_error {
+            Some(e) if out.is_empty() => Err(e),
+            _ => Ok(out),
+        }
     })
     .await;
     match r {
@@ -440,14 +519,16 @@ pub async fn start_handler(
                 .into_response();
         }
     }
-    if console_busy(&req.addr) {
+    let addr = req.addr.clone();
+    let first = titles[0].clone();
+    // The first title marks the console busy before anything awaits; begin_one replaces the
+    // mark with what became of it.
+    if try_reserve(&addr, &first, "queued").is_err() {
         return fail(
             StatusCode::CONFLICT,
             "busy: a restore is already running on this console",
         );
     }
-    let addr = req.addr.clone();
-    let first = titles[0].clone();
     let (job, prepared) = match begin_one(&state, &addr, &first).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -618,6 +699,7 @@ async fn begin_one(
             }
         );
     }
+    sizes_changed(addr, id, &prepared);
     let mut run = RestoreRun::new(addr, id, "installing");
     run.job = Some(job.clone());
     run.prepared = Some(prepared.clone());
@@ -793,6 +875,10 @@ async fn run_one(
         _ => "pending",
     };
     let cleared = matches!(&result, Ok(r) if r.cleared == Some(true));
+    sizes_changed(addr, id, &prepared);
+    if let Ok(r) = &result {
+        sizes_changed(addr, id, r);
+    }
     let log_line = format!(
         "restore {id} on {addr}: {decision:?}: {phase}{} ({})",
         if cleared {
@@ -897,12 +983,25 @@ pub async fn finish_handler(
     if install::console_id(&req.addr).is_empty() {
         return fail(StatusCode::BAD_REQUEST, "addr is required");
     }
-    if state.jobs.active_for(&req.addr) || console_busy(&req.addr) {
-        return fail(
+    let busy = || {
+        fail(
             StatusCode::CONFLICT,
             "busy: an install is running on this console; finish the restore after it ends",
-        );
+        )
+    };
+    if state.jobs.active_for(&req.addr) {
+        return busy();
     }
+    // A finish runs Sony's uninstall and puts packages back for up to minutes: nothing else of
+    // Restore starts on the console meanwhile, nor a second finish.
+    let _reserved = match try_reserve(&req.addr, &id, "finishing") {
+        Ok(prev) => Reserved {
+            addr: req.addr.clone(),
+            title_id: id.clone(),
+            prev,
+        },
+        Err(()) => return busy(),
+    };
     let mgmt = crate::pkg_install::normalize_mgmt_addr(&req.addr);
     if req.clear {
         crate::log_at!(
@@ -921,6 +1020,7 @@ pub async fn finish_handler(
     };
     match answer {
         Ok(Ok(r)) => {
+            sizes_changed(&req.addr, &id, &r);
             let phase = match r.state.as_str() {
                 "restored" => Some("restored"),
                 "rolled_back" => Some("rolled_back"),
@@ -1076,6 +1176,52 @@ mod tests {
             assert!(line.contains(part), "{line}");
         }
         assert_eq!(install_summary(None), "install job unknown");
+    }
+
+    /// Two starts or finishes at once on one console: only one gets the console, the other is
+    /// refused without touching the first one's run; a finish that ends without a phase of its
+    /// own gives the console back as it was.
+    #[test]
+    fn only_one_restore_step_reserves_a_console() {
+        let a = "10.9.8.4";
+        assert_eq!(try_reserve(a, "PPSA55551", "queued"), Ok(None));
+        assert!(console_busy(a));
+        assert_eq!(try_reserve(a, "PPSA55551", "finishing"), Err(()));
+        assert_eq!(try_reserve(a, "PPSA55552", "queued"), Err(()));
+        assert_eq!(get_run(a, "PPSA55551").unwrap().phase, "queued");
+        // Another console is not held up.
+        assert!(try_reserve("10.9.8.3", "PPSA55551", "queued").is_ok());
+        end_if_active("10.9.8.3", "PPSA55551", "test");
+
+        // The first one ends; a finish takes the console, and gives it back when it ends with
+        // nothing of its own to record.
+        end_if_active(a, "PPSA55551", "test");
+        let prev = try_reserve(a, "PPSA55551", "finishing").unwrap();
+        assert_eq!(prev.as_deref(), Some("failed"));
+        drop(Reserved {
+            addr: a.into(),
+            title_id: "PPSA55551".into(),
+            prev,
+        });
+        assert_eq!(get_run(a, "PPSA55551").unwrap().phase, "failed");
+        assert!(!console_busy(a));
+        // A finish of a title with no run leaves none behind; one that recorded a phase keeps it.
+        let prev = try_reserve(a, "PPSA55553", "finishing").unwrap();
+        drop(Reserved {
+            addr: a.into(),
+            title_id: "PPSA55553".into(),
+            prev,
+        });
+        assert!(get_run(a, "PPSA55553").is_none());
+        let prev = try_reserve(a, "PPSA55553", "finishing").unwrap();
+        update_run(a, "PPSA55553", |r| r.phase = "rolled_back".into());
+        drop(Reserved {
+            addr: a.into(),
+            title_id: "PPSA55553".into(),
+            prev,
+        });
+        assert_eq!(get_run(a, "PPSA55553").unwrap().phase, "rolled_back");
+        assert!(!console_busy(a));
     }
 
     #[test]

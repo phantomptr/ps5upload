@@ -16,7 +16,8 @@ import { Folder, FolderSearch, HardDrive, Hammer, Send } from "lucide-react";
 import { fpkg, type AmprLz4Options, type FpkgEstimates, type FpkgInspection, type ZstdPacks } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Button, Callout, Card, PageHeader } from "../../components";
-import { transferAddr } from "../../lib/addr";
+import { hostOf, transferAddr } from "../../lib/addr";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { createLatest } from "../../lib/latest";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { pickPath } from "../../lib/pickPath";
@@ -45,7 +46,7 @@ import { pickLocalPath } from "../../state/localPicker";
 import { useTaskStore } from "../../state/tasks";
 import { GameCard } from "./GameCard";
 import { fitFor, PackageFitLine } from "./PackageFitLine";
-import { parsePS5Firmware } from "../../lib/ps5Firmware";
+import { fakeGameLaunchHint, parsePS5Firmware } from "../../lib/ps5Firmware";
 import { ImageBrowser } from "../LocalImage/ImageBrowser";
 import { isDriveImage, LocalDrivesCard, useLocalDrives } from "../LocalImage/LocalDrives";
 import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
@@ -491,6 +492,18 @@ export default function WorkshopScreen() {
     }
   };
 
+  /** The choices that belong to one game (its language, its packs, its emulator): a new source,
+   *  picked or typed, starts without the last game's. */
+  const resetGameChoices = useCallback(() => {
+    setLanguage("");
+    setLz4On(false);
+    setLz4Profile(null);
+    setUnpackPacks(false);
+    setPkgUnpack(true);
+    setLeaveOutEmu(false);
+    setFreeArchiveFor(null);
+  }, []);
+
   /** A new source: the previous result and its buttons go; ignored while a run is going. */
   const chooseSource = useCallback(
     (path: string) => {
@@ -499,16 +512,10 @@ export default function WorkshopScreen() {
       setDeleteArmed(false);
       setSource(path);
       setPassword("");
-      setLanguage("");
-      setLz4On(false);
-      setLz4Profile(null);
-      setUnpackPacks(false);
-      setPkgUnpack(true);
-      setLeaveOutEmu(false);
-      setFreeArchiveFor(null);
+      resetGameChoices();
       void check(path);
     },
-    [check, reset, setSource, setPassword],
+    [check, reset, setSource, setPassword, resetGameChoices],
   );
 
   /** One game picked, dropped or handed over: checked under ①, or, while a game is being made
@@ -761,7 +768,13 @@ export default function WorkshopScreen() {
     // One game at a time: a running one is closed first, with the user's say-so.
     void makeWay(target, titleId, titleId)
       .then((clear) => (clear ? appLaunch(transferAddr(target), titleId) : undefined))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => {
+        // In words, and on 11.61 to 13.60 with what a fake package needs there to start.
+        const body = humanizePs5Error(e instanceof Error ? e.message : String(e));
+        const kernel = useConnectionStore.getState().runtimeByHost[hostOf(target)]?.ps5Kernel;
+        const hint = fakeGameLaunchHint(kernel, titleId);
+        setError(hint ? `${body} ${hint}` : body);
+      });
   };
 
   const onAnother = () => {
@@ -1119,6 +1132,8 @@ export default function WorkshopScreen() {
         setChecking(false);
         setSource(v);
         setPassword("");
+        // Another game, typed instead of picked: not the last game's language, packs or emulator.
+        resetGameChoices();
       }}
       onCheck={() => void check(source)}
       onAdd={(picked) => {

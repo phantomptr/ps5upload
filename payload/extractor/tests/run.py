@@ -471,6 +471,51 @@ def test_rar_password_damaged(root):
     check("damaged", "sub/b.bin" not in files_in(out), "the damaged file was kept")
 
 
+def test_rar_hostile_header_sizes(root):
+    # Crafted RAR5 archives (fixtures/README.md), password "pw": a header whose data size runs past
+    # the volume and wraps the scan back onto itself after an encrypted file split mid-block, and a
+    # second encryption header inside the encrypted headers. Both looped forever (one with memory
+    # growing), deaf to Stop; each is a cut archive or damage now, at once.
+    copy_fixtures(root, ["crafted-rar5-size-wrap.rar", "crafted-rar5-enc-header-loop.rar"])
+    for name in ("crafted-rar5-size-wrap.rar", "crafted-rar5-enc-header-loop.rar"):
+        out = os.path.join(root, "o-" + name)
+        p, st, _ = run(root, os.path.join(root, name), out, password="pw", wait=False)
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            check(name, False, "still running after 20 s")
+            continue
+        with open(st) as f:
+            s = json.load(f)
+        check(name, s["state"] == "failed" and s["message"].startswith(("fs_extract_truncated", "fs_extract_corrupt")), s)
+
+
+def test_rar4_key_derivation_stops(root):
+    # A RAR 4 archive whose service blocks each need a fresh key derivation (fixtures/README.md):
+    # libarchive reads them all inside one call, so only the derivation and the header scanner can
+    # see Stop. It used to run on for over a minute after Stop and end "done".
+    copy_fixtures(root, ["crafted-rar4-many-salts.rar"])
+    p, st, cn = run(root, os.path.join(root, "crafted-rar4-many-salts.rar"), os.path.join(root, "o"),
+                    password="x" * 127, wait=False)
+    time.sleep(1.0)
+    open(cn, "w").close()
+    t0 = time.time()
+    try:
+        p.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        check("kdf stop", False, "still running 15 s after Stop")
+        return
+    took = time.time() - t0
+    with open(st) as f:
+        s = json.load(f)
+    check("kdf stop", s["message"] == "fs_extract_cancelled", s)
+    check("kdf stop", took < 5, f"took {took:.1f} s after Stop")
+
+
 # ---- damage ----
 
 
