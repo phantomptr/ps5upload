@@ -1137,6 +1137,20 @@ def test_free_plan_for_what_goes_at_the_end(root):
     check("hard link", s["state"] == "failed" and s["message"].startswith("fs_extract_free_refused"), s)
     check("hard link", os.path.exists(arc) and not os.path.exists(os.path.join(root, "o")), s)
 
+def test_free_never_with_items_left_out(root):
+    # "Choose items" leaves some out: freeing would delete them with the archive, unseen.
+    arc = os.path.join(root, "r.zip")
+    with zipfile.ZipFile(arc, "w") as z:
+        z.writestr("Game/eboot.bin", b"eboot")
+        z.writestr("extra.txt", b"extra")
+    s = run(root, arc, os.path.join(root, "o"), free=True, top="extra.txt//")
+    check("free, left out", s["state"] == "failed" and s["message"].startswith("fs_extract_free_refused"), s)
+    check("free, left out", os.path.exists(arc) and not os.path.exists(os.path.join(root, "o")), s)
+    # Renamed is fine: everything still comes out.
+    s = run(root, arc, os.path.join(root, "o2"), free=True, top="extra.txt/extra (2).txt/")
+    check("free, renamed", s["state"] == "done" and not os.path.exists(arc), s)
+    check("free, renamed", tree(os.path.join(root, "o2")).get("extra (2).txt") == b"extra", s)
+
 
 def main():
     if not os.path.exists(BIN):

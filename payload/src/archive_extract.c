@@ -97,7 +97,7 @@ static int put_jstr(char *out, size_t cap, size_t *at, const char *s) {
 }
 
 static int write_request(const char *id, const char *src, const char *dest, const char *password, int merge, int replace,
-                         int list, const char *top) {
+                         int list, const char *top, int free_archive) {
     const size_t cap = EXTRACT_REQUEST_MAX;
     char *buf = malloc(cap);
     size_t at = 0;
@@ -115,8 +115,9 @@ static int write_request(const char *id, const char *src, const char *dest, cons
         at += (size_t)snprintf(buf + at, cap - at, ",\"top\":");
         if (put_jstr(buf, cap, &at, top) != 0) goto out;
     }
-    at += (size_t)snprintf(buf + at, cap - at, ",\"merge\":%s,\"replace\":%s,\"list\":%s}\n", merge ? "true" : "false",
-                           replace ? "true" : "false", list ? "true" : "false");
+    at += (size_t)snprintf(buf + at, cap - at, ",\"merge\":%s,\"replace\":%s,\"list\":%s,\"free\":%s}\n",
+                           merge ? "true" : "false", replace ? "true" : "false", list ? "true" : "false",
+                           free_archive ? "true" : "false");
     if (at >= cap) goto out;
     (void)unlink(EXTRACT_REQUEST);
     fd = open(EXTRACT_REQUEST, O_WRONLY | O_CREAT | O_EXCL, 0600);
@@ -169,6 +170,10 @@ typedef struct {
     char current[256];
     uint64_t pid, files_done, files_total, bytes_done, bytes_total;
     uint64_t files, dirs, bytes, skipped, unsafe, links, created;
+    /* Freeing the archive as it is unpacked (payload/extractor/src/xfree.h). */
+    char free_mode[8], left_first[256], free_why[400];
+    uint64_t checking, parts, parts_freed, bytes_freed, parts_left, free_not_removed;
+    uint64_t archive_bytes, unpacked, free_peak, same_drive, plan_known;
 } xstatus_t;
 
 /* The extractor's status for job `id`: 1 read, 0 none yet (or another job's). */
@@ -192,6 +197,20 @@ static int read_status(const char *id, xstatus_t *s) {
     (void)fsj_json_u64(buf, "unsafe", &s->unsafe);
     (void)fsj_json_u64(buf, "links", &s->links);
     (void)fsj_json_u64(buf, "created_dest", &s->created);
+    (void)fsj_json_str(buf, "free_mode", s->free_mode, sizeof s->free_mode);
+    (void)fsj_json_str(buf, "left_first", s->left_first, sizeof s->left_first);
+    (void)fsj_json_str(buf, "free_why", s->free_why, sizeof s->free_why);
+    (void)fsj_json_u64(buf, "checking", &s->checking);
+    (void)fsj_json_u64(buf, "parts", &s->parts);
+    (void)fsj_json_u64(buf, "parts_freed", &s->parts_freed);
+    (void)fsj_json_u64(buf, "bytes_freed", &s->bytes_freed);
+    (void)fsj_json_u64(buf, "parts_left", &s->parts_left);
+    (void)fsj_json_u64(buf, "free_not_removed", &s->free_not_removed);
+    (void)fsj_json_u64(buf, "archive_bytes", &s->archive_bytes);
+    (void)fsj_json_u64(buf, "unpacked", &s->unpacked);
+    (void)fsj_json_u64(buf, "free_peak", &s->free_peak);
+    (void)fsj_json_u64(buf, "same_drive", &s->same_drive);
+    (void)fsj_json_u64(buf, "plan_known", &s->plan_known);
     return 1;
 }
 
@@ -217,10 +236,12 @@ static void sweep_parts(const char *dir, uint64_t pid, int depth) {
     closedir(d);
 }
 
-static void write_record(uint64_t xpid, int created, const char *dest) {
+/* "<extractor pid> <helper pid> <made the folder> <parts of the archive deleted>\n<folder>\n". A helper
+ * older than the last field reads it as part of the folder's line and leaves the folder alone. */
+static void write_record(uint64_t xpid, int created, int freed, const char *dest) {
     FILE *f = fopen(EXTRACT_RECORD, "w");
     if (!f) return;
-    fprintf(f, "%llu %ld %d\n%s\n", (unsigned long long)xpid, (long)getpid(), created, dest);
+    fprintf(f, "%llu %ld %d %d\n%s\n", (unsigned long long)xpid, (long)getpid(), created, freed, dest);
     fclose(f);
 }
 
@@ -235,11 +256,12 @@ void archive_extract_sweep(void) {
     char buf[1400], dest[1100];
     unsigned long long xpid = 0;
     long hpid = 0;
-    int created = 0;
+    int created = 0, freed = 0;
     archive_extract_sweep_request();
     if (read_small(EXTRACT_RECORD, buf, sizeof buf) <= 0) return;
     dest[0] = 0;
-    if (sscanf(buf, "%llu %ld %d\n%1023[^\n]", &xpid, &hpid, &created, dest) < 3) {
+    if (sscanf(buf, "%llu %ld %d %d\n%1023[^\n]", &xpid, &hpid, &created, &freed, dest) < 4 &&
+        (freed = 0, sscanf(buf, "%llu %ld %d\n%1023[^\n]", &xpid, &hpid, &created, dest) < 3)) {
         (void)unlink(EXTRACT_RECORD);
         return;
     }
@@ -252,7 +274,14 @@ void archive_extract_sweep(void) {
             (void)fsj_json_u64(sbuf, "pid", &spid);
             (void)fsj_json_str(sbuf, "state", state, sizeof state);
         }
-        if (archive_extract_sweep_keeps(xpid, spid, state)) {
+        uint64_t sfreed = 0;
+        if (read_small(EXTRACT_STATUS, sbuf, sizeof sbuf) > 0) (void)fsj_json_u64(sbuf, "parts_freed", &sfreed);
+        if (freed || sfreed) {
+            /* Part of the archive is gone: the files written are the only copy of what it held. */
+            fprintf(stderr, "extract: a helper died mid-extraction after parts of the archive were deleted; keeping %s\n",
+                    dest);
+            if (xpid) sweep_parts(dest, xpid, 0);
+        } else if (archive_extract_sweep_keeps(xpid, spid, state)) {
             /* The extractor finished after its helper died: the folder is whole (and no part
              * file is left). Only the record and the status go. */
             fprintf(stderr, "extract: a helper died mid-extraction, its extractor finished; keeping %s\n", dest);
@@ -310,16 +339,17 @@ const char *archive_extract_probe(const char *path, archive_probe_t *p) {
 static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *dest) {
     uint64_t started = now_ms(), cancel_at = 0, files_seen = 0, bytes_seen = 0, tot_files = 0, tot_bytes = 0;
     uint64_t rec_pid = 0;
-    int have = 0, cancel_sent = 0, rec_created = -1;
+    int have = 0, cancel_sent = 0, rec_created = -1, rec_freed = -1;
     for (;;) {
         xstatus_t cur;
         if (read_status(id, &cur)) {
             have = 1;
             /* What a helper that dies now leaves behind, for the next start's sweep. */
-            if (cur.pid != rec_pid || (int)cur.created != rec_created) {
+            if (cur.pid != rec_pid || (int)cur.created != rec_created || (int)(cur.parts_freed > 0) != rec_freed) {
                 rec_pid = cur.pid;
                 rec_created = (int)cur.created;
-                write_record(rec_pid, rec_created, dest);
+                rec_freed = cur.parts_freed > 0;
+                write_record(rec_pid, rec_created, rec_freed, dest);
             }
             *s = cur;
             if (cur.files_total != tot_files || cur.bytes_total != tot_bytes) {
@@ -334,7 +364,8 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
                 if (cur.bytes_done > bytes_seen) bytes_seen = cur.bytes_done;
             }
             if (strcmp(cur.state, "running") != 0) return strcmp(cur.state, "done") == 0 ? 1 : 0;
-            if (cur.current[0]) ava1_op_message(c, "extracting %s", cur.current);
+            if (cur.checking) ava1_op_message(c, "checking the archive before deleting any of it");
+            else if (cur.current[0]) ava1_op_message(c, "extracting %s", cur.current);
         }
         if (!cancel_sent && ava1_op_cancelled(c)) {
             int fd = open(EXTRACT_CANCEL, O_WRONLY | O_CREAT, 0600);
@@ -375,11 +406,31 @@ static int follow(ava1_op_ctx_t *c, const char *id, xstatus_t *s, const char *de
     }
 }
 
+/* A listing's plan for freeing the archive as it is unpacked, as the member ,"free":{...}: "mode"
+ * ("parts", "end", or "" when it can't be done and "why" says so), "parts", "archive_bytes",
+ * "unpacked" (0: not known), "peak" (the most room the unpack takes at once on the archive's own
+ * drive, beyond what is free), "same_drive", "known" (unpacked and peak are from the listing). */
+static int put_free_plan(char *out, size_t cap, size_t *at, const xstatus_t *s) {
+    *at += (size_t)snprintf(out + *at, cap - *at, ",\"free\":{\"mode\":");
+    if (*at >= cap || put_jstr(out, cap, at, s->free_mode) != 0) return -1;
+    *at += (size_t)snprintf(out + *at, cap - *at,
+                            ",\"parts\":%llu,\"archive_bytes\":%llu,\"unpacked\":%llu,\"peak\":%llu,\"same_drive\":%s,"
+                            "\"known\":%s,\"why\":",
+                            (unsigned long long)s->parts, (unsigned long long)s->archive_bytes,
+                            (unsigned long long)s->unpacked, (unsigned long long)s->free_peak,
+                            s->same_drive ? "true" : "false", s->plan_known ? "true" : "false");
+    if (*at >= cap || put_jstr(out, cap, at, s->free_why) != 0) return -1;
+    if (*at + 2 >= cap) return -1;
+    out[(*at)++] = '}';
+    out[*at] = 0;
+    return 0;
+}
+
 int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
     char src[1024], dest[1024], name[256], id[40], *password = NULL, *top = NULL;
     const char *json = (const char *)args;
     const char *slash;
-    uint64_t merge = 0, replace = 0, list = 0;
+    uint64_t merge = 0, replace = 0, list = 0, free_archive = 0;
     struct stat st;
     xstatus_t s;
     int dest_existed, status = AVA1_ERR_IO, r;
@@ -431,6 +482,9 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
      * the folder before it starts). A helper older than this ignores it and refuses the folder that
      * is already there (the apps send merge false), so a listing never extracts anything. */
     (void)fsj_json_u64(json, "list", &list);
+    /* free: delete the archive as it is unpacked (payload/extractor/src/xfree.h); with list, only
+     * the plan. An older extractor ignores it and deletes nothing. */
+    (void)fsj_json_u64(json, "free", &free_archive);
     dest_existed = lstat(dest, &st) == 0;
     if (dest_existed && !merge && !list) {
         ava1_op_message(c, "fs_extract_destination_exists");
@@ -514,7 +568,7 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         snprintf(id, sizeof id, "%02x%02x%02x%02x%02x%02x%02x%02x", rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
                  rnd[6], rnd[7]);
     }
-    if (write_request(id, src, dest, password, (int)merge, (int)replace, (int)list, top) != 0) {
+    if (write_request(id, src, dest, password, (int)merge, (int)replace, (int)list, top, (int)free_archive) != 0) {
         ava1_op_message(c, "fs_extract_write_failed: request");
         goto unlock;
     }
@@ -553,9 +607,14 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
                 ok = put_jstr(resp, EXTRACT_REQUEST_MAX, &at, dirs) == 0;
             }
             if (ok) {
-                at += (size_t)snprintf(resp + at, EXTRACT_REQUEST_MAX - at, ",\"top_more\":%s,\"listed\":true}",
+                at += (size_t)snprintf(resp + at, EXTRACT_REQUEST_MAX - at, ",\"top_more\":%s,\"listed\":true",
                                        more[0] ? more : "false");
-                if (at < EXTRACT_REQUEST_MAX) (void)ava1_op_set_result(c, resp, at);
+                if (free_archive && at < EXTRACT_REQUEST_MAX) ok = put_free_plan(resp, EXTRACT_REQUEST_MAX, &at, &s) == 0;
+            }
+            if (ok && at + 2 < EXTRACT_REQUEST_MAX) {
+                resp[at++] = '}';
+                resp[at] = 0;
+                (void)ava1_op_set_result(c, resp, at);
             }
         }
         free(st_buf);
@@ -570,13 +629,32 @@ int archive_extract_op(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t 
         at = (size_t)snprintf(resp, sizeof resp, "{\"path\":");
         if (put_jstr(resp, sizeof resp, &at, dest) == 0) {
             at += (size_t)snprintf(resp + at, sizeof resp - at,
-                                   ",\"files\":%llu,\"dirs\":%llu,\"bytes\":%llu,\"skipped\":%llu,\"unsafe\":%llu,\"links\":%llu}",
+                                   ",\"files\":%llu,\"dirs\":%llu,\"bytes\":%llu,\"skipped\":%llu,\"unsafe\":%llu,\"links\":%llu",
                                    (unsigned long long)s.files, (unsigned long long)s.dirs, (unsigned long long)s.bytes,
                                    (unsigned long long)s.skipped, (unsigned long long)s.unsafe, (unsigned long long)s.links);
-            if (at < sizeof resp) (void)ava1_op_set_result(c, resp, at);
+            if (free_archive && at < sizeof resp)
+                at += (size_t)snprintf(resp + at, sizeof resp - at,
+                                       ",\"parts_freed\":%llu,\"bytes_freed\":%llu,\"free_not_removed\":%llu",
+                                       (unsigned long long)s.parts_freed, (unsigned long long)s.bytes_freed,
+                                       (unsigned long long)s.free_not_removed);
+            if (at + 2 < sizeof resp) {
+                resp[at++] = '}';
+                resp[at] = 0;
+                (void)ava1_op_set_result(c, resp, at);
+            }
         }
         ava1_op_message(c, "%s", "");
         status = AVA1_STATUS_OK;
+    } else if (s.parts_freed) {
+        /* Part of the archive is gone, so what was written is the only copy of what it held: the
+         * folder stays, whatever stopped it, and the message says so first (the cause after it). */
+        char cause[400];
+        snprintf(cause, sizeof cause, "%s", r == 0 && s.message[0] ? s.message : (ava1_op_cancelled(c) ? "fs_extract_cancelled" : "fs_extract_died"));
+        fprintf(stderr, "extract: %s stopped (%s) after %llu part(s) of it were deleted; keeping %s\n", src, cause,
+                (unsigned long long)s.parts_freed, dest);
+        ava1_op_message(c, "fs_extract_partly_freed: %llu %llu %s | %s | %s", (unsigned long long)s.parts_freed,
+                        (unsigned long long)s.parts_left, s.left_first[0] ? s.left_first : "-", dest, cause);
+        status = AVA1_ERR_IO;
     } else {
         if (r == 0) ava1_op_message(c, "%s", s.message[0] ? s.message : "fs_extract_corrupt");
         status = (r == 0 && strncmp(s.message, "fs_extract_cancelled", 20) == 0) || ava1_op_cancelled(c) ? AVA1_ERR_CANCELLED
