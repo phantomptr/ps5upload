@@ -8877,9 +8877,10 @@ static int handle_pads_list(runtime_state_t *state) {
     at = (size_t)k;
     for (int i = 0; i < VPAD_SLOTS; i++) {
         const vpad_seat_t *t = &seats[i];
-        k = snprintf(out + at, sizeof out - at, "%s{\"slot\":%d,\"open\":%s,\"has_user\":%s,\"user\":%u}", i ? "," : "",
-                     t->slot, t->open ? "true" : "false",
-                     t->has_user < 0 ? "null" : t->has_user ? "true" : "false", (unsigned)t->user);
+        k = snprintf(out + at, sizeof out - at, "%s{\"slot\":%d,\"open\":%s,\"has_user\":%s,\"user\":%u,\"made_for\":%u}",
+                     i ? "," : "", t->slot, t->open ? "true" : "false",
+                     t->has_user < 0 ? "null" : t->has_user ? "true" : "false", (unsigned)t->user,
+                     (unsigned)t->made_for);
         if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
         at += (size_t)k;
     }
@@ -8887,7 +8888,7 @@ static int handle_pads_list(runtime_state_t *state) {
     if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     at += (size_t)k;
     for (int i = 0; i < VPAD_SLOTS; i++) {
-        if (!seats[i].open || seats[i].has_user != 1) continue;
+        if (!seats[i].open || !seats[i].user) continue;
         k = snprintf(out + at, sizeof out - at, "%s%u", first_user ? "" : ",", (unsigned)seats[i].user);
         if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
         at += (size_t)k;

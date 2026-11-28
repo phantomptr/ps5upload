@@ -38,13 +38,17 @@
  *   vpad.states {"items":[<vpad.state bodies>, at most VPAD_MAX_BATCH]}
  *               -> {"ok":true,"applied":N,"stale":M,"failed":[{"slot":S,"err":"<token>"}..]}
  *   vpad.hb     {"slot":S,"token":T[,"live":true]}
- *               -> {"ok":true,"neutral":B,"has_user":B|null,"user":U,"seen_ms":N}
+ *               -> {"ok":true,"neutral":B,"has_user":B|null,"user":U,"made_for":M,"seen_ms":N}
  *               keeps the pad (the 90 s timer). "live":true also says the guest is still there with
  *               its last state (the 400 ms timer), for an engine that sends no unchanged states.
- *               has_user/user: the console user the pad is seated in now, read back about once a
- *               second (see "Who is on each pad" below): true with that user, false (user 0) when
- *               nobody has been picked on it yet, null when it cannot be read (no companion yet,
- *               or the read failed: user 0). seen_ms: how old that reading is (-1: none yet).
+ *               user: the console user the pad is seated in now, read back about once a second
+ *               (see "Who is on each pad" below; 0 while not read); made_for: the user the pad was
+ *               made for. has_user: true once someone else than made_for is on it (a pick on the
+ *               console's question: a Quick Play guest or another profile) or a bound pad sits in
+ *               its bound user; false while the console still has the pad in made_for (nobody
+ *               picked yet, or the guest picked that same user: these cannot be told apart); null
+ *               when it cannot be read (no companion yet, the read failed). seen_ms: how old that
+ *               reading is (-1: none yet).
  *   vpad.hb     {"companion":true} -> {"ok":true,"companion":"<state>","bind":B}
  *               Play Together is open with a profile chosen: the companion is kept up (started if it
  *               is not) for a minute, so a bind never waits for its start. B: binds can be done now.
@@ -57,8 +61,8 @@
  *                "since_ms":N,"last_state_ms":N|-1,"neutral":B,"neutral_ms":N,"bound":U,
  *                "has_user":B|null,"seen_user":U,"seen_ms":N|-1,"seen_code":C]}..]}
  *               ages in ms; owner is a hash of the token (never the token); user the one the pad
- *               was made for; bound the user it was seated in by a bind (0: none); has_user /
- *               seen_user the user the console has on it now (as vpad.hb's has_user / user),
+ *               was made for (vpad.hb's made_for); bound the user it was seated in by a bind (0:
+ *               none); has_user / seen_user as vpad.hb's has_user / user,
  *               seen_code the last reading's answer (0 read, else the Sony or companion code).
  *
  * Who is on each pad: while any pad is open, the watchdog thread asks the companion about once a
@@ -66,6 +70,9 @@
  * OWNERS, sceMbusGetDeviceInfo_'s owner, include/vinput_wire.h), keeping it up meanwhile
  * (binder->hold). The engine drives Play Together's "PS works once a user is picked" rule and finds
  * guests stuck at "Who's using this controller?" with it (has_user false for long).
+ * Measured on the Pro (13.60, 2026-11-27): a pad just made for the user in front reads back that
+ * user as its owner at once, before anyone answered the console's question. A pick of another user
+ * changes it (not yet seen on hardware: no one was at the TV to pick).
  *
  * Watchdog (vpad_tick, from a thread that runs while any pad is open): a slot with no state (and no
  * "live" hb) for VPAD_NEUTRAL_MS gets one neutral state (no stuck stick or button while a guest's
@@ -208,8 +215,9 @@ typedef struct {
     int slot;     /* 2..4 */
     int open;
     int handle;
-    int has_user; /* 1, 0, or -1 not known */
-    uint32_t user;
+    int has_user; /* 1, 0, or -1 not known (vpad.hb's has_user) */
+    uint32_t user;     /* the owner read back (0: not read) */
+    uint32_t made_for; /* the user the pad was made for */
 } vpad_seat_t;
 /* The VPAD_SLOTS slots, in order. */
 void vpad_seats(vpad_seat_t out[VPAD_SLOTS]);

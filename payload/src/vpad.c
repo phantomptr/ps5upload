@@ -352,6 +352,18 @@ int vpad_read_owners(long long now_ms) {
     return rc == 0 ? n : -1;
 }
 
+/* Whether someone is on the pad: -1 not known (not read yet, unreadable), 1, 0. Measured on the Pro
+ * (13.60, 2026-11-27): a pad made for user U (the description's user, the user in front unless the
+ * host chose one) reads back owner U at once, before anyone answered "Who's using this
+ * controller?". So owner U is "nobody picked yet" (or the guest picked that same user: the two
+ * cannot be told apart); another user is a pick (a Quick Play guest, another profile); a bound pad
+ * still in its bound user is seated. Lock held. */
+static int has_user_locked(const slot_t *s) {
+    if (!s->open || !s->seen_ms || !s->seen_ok) return -1;
+    if (s->bound && s->seen_user == s->bound) return 1;
+    return s->seen_user != 0 && s->seen_user != s->user;
+}
+
 void vpad_seats(vpad_seat_t out[VPAD_SLOTS]) {
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < VPAD_SLOTS; i++) {
@@ -359,16 +371,17 @@ void vpad_seats(vpad_seat_t out[VPAD_SLOTS]) {
         out[i].slot = player_of(s);
         out[i].open = s->open;
         out[i].handle = s->open ? s->handle : -1;
-        out[i].has_user = !s->open || !s->seen_ms || !s->seen_ok ? -1 : s->seen_user != 0;
+        out[i].has_user = has_user_locked(s);
         out[i].user = s->open && s->seen_ok ? s->seen_user : 0;
+        out[i].made_for = s->open ? s->user : 0;
     }
     pthread_mutex_unlock(&g_lock);
 }
 
 /* has_user as JSON: true, false or null (not read yet, or unreadable). */
 static const char *has_user_json(const slot_t *s) {
-    if (!s->seen_ms || !s->seen_ok) return "null";
-    return s->seen_user ? "true" : "false";
+    int h = has_user_locked(s);
+    return h < 0 ? "null" : h ? "true" : "false";
 }
 
 int vpad_open_count(void) {
@@ -917,9 +930,11 @@ int vpad_hb_json(const char *body, size_t n, long long now_ms, char *out, size_t
     } else {
         s->last_alive_ms = now_ms;
         if (live) s->last_live_ms = now_ms;
-        rc = answer(cap, snprintf(out, cap, "{\"ok\":true,\"neutral\":%s,\"has_user\":%s,\"user\":%u,\"seen_ms\":%lld}",
+        rc = answer(cap, snprintf(out, cap,
+                                  "{\"ok\":true,\"neutral\":%s,\"has_user\":%s,\"user\":%u,\"made_for\":%u,\"seen_ms\":%lld}",
                                   s->neutral ? "true" : "false", has_user_json(s),
-                                  (unsigned)(s->seen_ok ? s->seen_user : 0), s->seen_ms ? now_ms - s->seen_ms : -1LL));
+                                  (unsigned)(s->seen_ok ? s->seen_user : 0), (unsigned)s->user,
+                                  s->seen_ms ? now_ms - s->seen_ms : -1LL));
     }
     pthread_mutex_unlock(&g_lock);
     return rc;

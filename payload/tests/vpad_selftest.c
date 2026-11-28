@@ -422,7 +422,7 @@ static void test_watchdog_by_hand(void) {
     CHECK(vpad_tick(t0 + 1401) == 1 && block_is_neutral(f_pads[h].block) && f_pads[h].inserts == 3);
     CHECK(vpad_tick(t0 + 1500) == 0 && vpad_tick(t0 + 5000) == 0 && f_pads[h].inserts == 3);
     CHECK(vpad_status_json(t0 + 5000, g_out, sizeof g_out) > 0 && HAS("\"neutral\":true,\"neutral_ms\":3599"));
-    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", t0 + 5000) > 0 && strcmp(g_out, "{\"ok\":true,\"neutral\":true,\"has_user\":null,\"user\":0,\"seen_ms\":-1}") == 0);
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", t0 + 5000) > 0 && HAS("{\"ok\":true,\"neutral\":true,\"has_user\":null,\"user\":0,\"made_for\":") && HAS("\"seen_ms\":-1}"));
     /* the next state takes over again */
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":2,\"buttons\":16384}", t0 + 6000) > 0 && HAS("\"applied\":true"));
     CHECK(rd32(f_pads[h].block + 0x0C) == VPAD_BTN_CROSS);
@@ -748,17 +748,17 @@ static void test_owners(void) {
     h3 = handle_from_answer();
     /* not read yet */
     CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 10) > 0 &&
-          HAS("\"has_user\":null,\"user\":0,\"seen_ms\":-1"));
+          HAS("\"has_user\":null,\"user\":0,\"made_for\":") && HAS("\"seen_ms\":-1"));
     CHECK(vpad_status_json(10, g_out, sizeof g_out) > 0 && HAS("\"has_user\":null,\"seen_user\":0,\"seen_ms\":-1"));
     /* nobody picked on either */
     fb_holds = 0;
     CHECK(vpad_read_owners(1000) == 2 && fo_last_n == 2 && fb_holds == 1);
     CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 1250) > 0 &&
-          HAS("\"has_user\":false,\"user\":0,\"seen_ms\":250"));
+          HAS("\"has_user\":false,\"user\":0,\"made_for\":268435458,\"seen_ms\":250"));
     /* a user picked on player 3's pad */
     fo_owner[h3] = 0x2000;
     CHECK(vpad_read_owners(2000) == 2);
-    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 2000) > 0 && HAS("\"has_user\":true,\"user\":8192,\"seen_ms\":0"));
+    CHECK(vhb("{\"slot\":3,\"token\":\"" TOK_B "\"}", 2000) > 0 && HAS("\"has_user\":true,\"user\":8192,\"made_for\":268435458,\"seen_ms\":0"));
     CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 2000) > 0 && HAS("\"has_user\":false"));
     CHECK(vpad_status_json(2000, g_out, sizeof g_out) > 0 &&
           HAS("\"has_user\":true,\"seen_user\":8192,\"seen_ms\":0,\"seen_code\":0") &&
@@ -767,6 +767,14 @@ static void test_owners(void) {
     CHECK(seats[0].slot == 2 && seats[0].open && seats[0].handle == h2 && seats[0].has_user == 0 && seats[0].user == 0);
     CHECK(seats[1].slot == 3 && seats[1].open && seats[1].has_user == 1 && seats[1].user == 0x2000);
     CHECK(seats[2].slot == 4 && !seats[2].open && seats[2].handle == -1 && seats[2].has_user == -1);
+    /* the console's own answer before anyone picked (measured on the Pro): the owner is the user the
+     * pad was made for. Not a pick: has_user stays false, the user is reported */
+    fo_owner[h2] = 0x10000002;
+    CHECK(vpad_read_owners(2500) == 2);
+    CHECK(vhb("{\"slot\":2,\"token\":\"" TOK_A "\"}", 2500) > 0 &&
+          HAS("\"has_user\":false,\"user\":268435458,\"made_for\":268435458"));
+    vpad_seats(seats);
+    CHECK(seats[0].has_user == 0 && seats[0].user == 0x10000002 && seats[0].made_for == 0x10000002);
     /* one pad the bus does not answer for: that one is unknown, the other still read */
     fo_code[h2] = (int)0x809b0005u;
     CHECK(vpad_read_owners(3000) == 2);
