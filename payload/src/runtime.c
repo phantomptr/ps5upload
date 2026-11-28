@@ -101,6 +101,7 @@
 #include "ownership_record.h"
 #include "storage_cleanup.h"
 #include "mesh.h"
+#include "play_host.h"
 #include "tailnet_node.h"
 #include "save_owner.h"
 #include "trophy_fix.h"
@@ -400,6 +401,14 @@
 /* an installed package game back on the home screen after Rebuild Database (title_restore.c, #961) */
 #define MGMT_FRAME_TITLE_RESTORE 376u
 #define MGMT_FRAME_TITLE_RESTORE_ACK 377u
+/* Play Rooms' hosted-by marker and PS5Upload Play's one-time grants (play_host.c), the console's
+ * controllers (vpad.c) */
+#define MGMT_FRAME_PLAY_ROOM 378u
+#define MGMT_FRAME_PLAY_ROOM_ACK 379u
+#define MGMT_FRAME_PLAY_GRANT 380u
+#define MGMT_FRAME_PLAY_GRANT_ACK 381u
+#define MGMT_FRAME_PADS_LIST 382u
+#define MGMT_FRAME_PADS_LIST_ACK 383u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -8781,7 +8790,21 @@ static void vpad_bind_forget(int handle) {
     vinput_relay_forget((uint32_t)handle);
 }
 
-static const vpad_binder_t VPAD_BINDER = {vpad_bind_hold, vpad_bind_signed_in, vpad_bind_seat, vpad_bind_forget};
+/* Who each guest pad is seated in now (read only, the companion's OWNERS): vpad's watchdog asks
+ * about once a second while a pad is open, after vpad_bind_hold kept the companion up. */
+static int vpad_bind_owners(const int *handles, int n, int *codes, uint32_t *owners) {
+    uint32_t dev[VWIRE_OWNERS_MAX];
+    int32_t sce[VWIRE_OWNERS_MAX];
+    int rc;
+    if (n < 1 || n > VWIRE_OWNERS_MAX) return -1;
+    for (int i = 0; i < n; i++) dev[i] = (uint32_t)handles[i];
+    rc = vinput_relay_owners(dev, n, sce, owners);
+    for (int i = 0; i < n; i++) codes[i] = rc == VWIRE_RC_OK ? (int)sce[i] : rc;
+    return rc == VWIRE_RC_OK ? 0 : rc;
+}
+
+static const vpad_binder_t VPAD_BINDER = {vpad_bind_hold, vpad_bind_signed_in, vpad_bind_seat, vpad_bind_forget,
+                                          vpad_bind_owners};
 
 static pthread_once_t g_vpad_binder_once = PTHREAD_ONCE_INIT;
 static void vpad_binder_install(void) {
@@ -8837,6 +8860,70 @@ static int handle_vpad_status(runtime_state_t *state) {
     n = vpad_status_json(vpad_now_ms(), out, sizeof out);
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_VPAD_STATUS_ACK, out, (uint64_t)n);
+}
+
+/* pads.list: the console's controllers as the helper knows them (the guest pads and who is on
+ * each). The console's own controllers are not read yet: only the guest places are counted. */
+static int handle_pads_list(runtime_state_t *state) {
+    vpad_seat_t seats[VPAD_SLOTS];
+    char out[1024];
+    size_t at;
+    int open = 0, k, first_user = 1;
+    if (!state) return -1;
+    vpad_seats(seats);
+    for (int i = 0; i < VPAD_SLOTS; i++) open += seats[i].open;
+    k = snprintf(out, sizeof out, "{\"ok\":true,\"max\":%d,\"guests\":{\"open\":%d,\"slots\":[", VPAD_LAST_SLOT, open);
+    if (k < 0 || (size_t)k >= sizeof out) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    at = (size_t)k;
+    for (int i = 0; i < VPAD_SLOTS; i++) {
+        const vpad_seat_t *t = &seats[i];
+        k = snprintf(out + at, sizeof out - at, "%s{\"slot\":%d,\"open\":%s,\"has_user\":%s,\"user\":%u,\"made_for\":%u}",
+                     i ? "," : "", t->slot, t->open ? "true" : "false",
+                     t->has_user < 0 ? "null" : t->has_user ? "true" : "false", (unsigned)t->user,
+                     (unsigned)t->made_for);
+        if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+        at += (size_t)k;
+    }
+    k = snprintf(out + at, sizeof out - at, "]},\"users\":[");
+    if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    at += (size_t)k;
+    for (int i = 0; i < VPAD_SLOTS; i++) {
+        if (!seats[i].open || !seats[i].user) continue;
+        k = snprintf(out + at, sizeof out - at, "%s%u", first_user ? "" : ",", (unsigned)seats[i].user);
+        if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+        at += (size_t)k;
+        first_user = 0;
+    }
+    k = snprintf(out + at, sizeof out - at, "],\"free\":%d}", VPAD_SLOTS - open);
+    if (k < 0 || (size_t)k >= sizeof out - at) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    at += (size_t)k;
+    return mgmt_reply(MGMT_FRAME_PADS_LIST_ACK, out, (uint64_t)at);
+}
+
+/* play.room / play.grant: from the engine whose AVA1 session this is (play_host.c). Memory only. */
+typedef int (*play_host_set_fn)(const uint8_t caller[32], const char *body, size_t n, uint64_t now_ms, char *out,
+                                size_t cap);
+
+static int play_host_reply(runtime_state_t *state, play_host_set_fn fn, uint32_t ack, const char *body,
+                           uint64_t body_len) {
+    char out[256];
+    const uint8_t *peer;
+    int n;
+    if (!state || body_len > PLAY_HOST_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    peer = ava1_server_rpc_peer();
+    if (!peer) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    play_host_set_lookup(mesh_engine_info);
+    n = fn(peer, body ? body : "", (size_t)body_len, (uint64_t)vpad_now_ms(), out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(ack, out, (uint64_t)n);
+}
+
+static int handle_play_room(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return play_host_reply(state, play_room_set_json, MGMT_FRAME_PLAY_ROOM_ACK, body, body_len);
+}
+
+static int handle_play_grant(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return play_host_reply(state, play_grant_set_json, MGMT_FRAME_PLAY_GRANT_ACK, body, body_len);
 }
 
 static int handle_minion_tile(runtime_state_t *state, const char *body, uint64_t body_len) {

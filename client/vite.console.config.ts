@@ -17,7 +17,10 @@
  *   learned to delete a game's folder or image (the page was 2.8 KiB over; gzip had room), and from
  *   784 to 800 KiB when Extract learned to delete the archive as it unpacks, and to 816 KiB when
  *   Saves showed save sync and the console's queue landed (#982) (13.0.0). The gzip cap went from 224
- *   to 232 KiB with save sync and every transfer's speed, elapsed time and time left (#981).
+ *   to 232 KiB with save sync and every transfer's speed, elapsed time and time left (#981). With
+ *   Play Rooms (13.0.0: the "Your room" card, Thanks & Support with its names and codes drawn on the
+ *   page, the rules page, the confirmations naming players) the page was 826.6 KiB raw and 235.0
+ *   KiB gzip: the caps went to 848 KiB raw and 240 KiB gzip.
  * - Strings: every other locale is emitted next to the page as strings/<code>.json (minified, cw_*
  *   keys only); payload/Makefile gzips each into the ELF (build/webui_strings.c) and the helper
  *   serves them at GET /strings/<code>.json. The page fetches them with ?v=<hash of these files>
@@ -41,8 +44,8 @@ import react from "@vitejs/plugin-react";
 import { splitLangLists } from "./postcss/langLists.mjs";
 import { appcacheManifest, serviceWorkerSource } from "./src/console/offline/offlineCopy.ts";
 
-const RAW_BUDGET = 816 * 1024; // 784 until 13.0.0 (free-space extract, save sync, console queue)
-const GZIP_BUDGET = 232 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences, 224 until 13.0.0
+const RAW_BUDGET = 848 * 1024; // 784 until 13.0.0 (free-space extract, save sync, console queue), 816 until Play Rooms
+const GZIP_BUDGET = 240 * 1024; // ruling R19 (was 150 KiB), 220 until the converter's sentences, 224 until 13.0.0, 232 until Play Rooms
 const TOKENS_ID = "virtual:pc-tokens.css";
 
 /** The `{…}` body that starts at `open` (the index of a "{"), braces balanced. */

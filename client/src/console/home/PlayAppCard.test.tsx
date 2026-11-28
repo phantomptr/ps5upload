@@ -97,6 +97,23 @@ describe("PlayAppCardView", () => {
   });
 });
 
+describe("PlayAppCardView: friends", () => {
+  it("offers Join a friend next to Open, and the one-time tip until dismissed", () => {
+    const html = render({ onJoin: noop, tip: true, onDismissTip: noop });
+    expect(html).toContain('data-action="play-app-join"');
+    expect(html).toContain(t("cw_play_join_friend"));
+    expect(html).toContain(t("cw_play_tip"));
+    expect(html).toContain('data-action="play-tip-ok"');
+    expect(render({ onJoin: noop, tip: false })).not.toContain(t("cw_play_tip"));
+  });
+  it("says what it is while it is not installed yet (one press installs, it pairs by itself)", () => {
+    const html = render({ state: st({ installed: null }), onJoin: noop, tip: true });
+    expect(html).toContain(t("cw_play_guide"));
+    expect(html).not.toContain("play-app-join");
+    expect(html).not.toContain(t("cw_play_tip"));
+  });
+});
+
 describe("playAppErrorText", () => {
   it("names the cases people can act on", () => {
     expect(playAppErrorText(new ApiError(409, "store_busy"))).toBe(t("cw_play_store_busy"));

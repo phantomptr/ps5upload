@@ -859,6 +859,7 @@ fn usage() -> ! {
     eprintln!("  ava1-cryptobench [MIB]         frame AEAD cost on the console vs this computer");
     eprintln!("  ava1-pairing-open [SECONDS]    let another device pair with the console");
     eprintln!("  ava1-stamp IN.elf OUT.elf      stamp this machine's AVA1 key into a payload");
+    eprintln!("  mgmt METHOD [JSON]             one management call by number or name (vpad.*, play.room, pads.list ...)");
     eprintln!("  chaos-proxy PORT HOST:PORT [--delay-ms N] [--kbps N] [--kill-every-s N]");
     eprintln!("  bench-corpus DIR large GIB    one incompressible file (BLAKE3 XOF, seed = GIB)");
     eprintln!(
@@ -1280,6 +1281,24 @@ fn main() -> Result<()> {
         // kernel-R/W path that must serialize against installs. Used to stress
         // the kernel_rw_lock concurrently from many connections.
         "hw-info" => do_hw_info(addr),
+        // mgmt METHOD [JSON]: one management call, by number (205) or label (PADS_LIST), with a JSON
+        // body (default {}); prints the reply. For hardware checks of methods the engine's HTTP
+        // passthrough keeps to itself (vpad.*), with this machine's own identity
+        // (PS5UPLOAD_DATA_DIR), never the engine's.
+        "mgmt" => {
+            let which = rest.get(1).map(String::as_str).unwrap_or_else(|| usage());
+            let body = rest.get(2).map(String::as_str).unwrap_or("{}");
+            let method = ps5upload_core::mgmt::m::ALL
+                .iter()
+                .copied()
+                .find(|m| {
+                    which.parse::<u16>().ok() == Some(m.id) || m.label.eq_ignore_ascii_case(which)
+                })
+                .unwrap_or_else(|| usage());
+            let reply = ps5upload_core::mgmt::call(addr, method, body.as_bytes())?;
+            println!("{}", String::from_utf8_lossy(&reply));
+            Ok(())
+        }
         "syslog" => {
             print!("{}", syslog_tail(addr)?);
             Ok(())

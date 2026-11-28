@@ -236,6 +236,7 @@ function Sheet({ s, p }: { s: SaveTitle; p: SavesViewProps }) {
           error={p.askError}
           onConfirm={p.onConfirm}
           onCancel={() => p.onAsk(null)}
+          roomNotice={p.ask.kind === "restore"}
         />
       ) : null}
     </Modal>
@@ -613,7 +614,7 @@ export function Saves({ ctx }: { ctx: SectionContext }) {
 
   const closeGame = async (appId: number) => {
     try {
-      await call("/api/app/close", { app_id: appId });
+      await call("/api/app/close", { app_id: appId, room_ok: true });
     } catch (e) {
       patch({ message: { tone: "error", text: saveErrorText(e) } });
     }

@@ -177,6 +177,7 @@ export function ProcessesView(p: ProcessesViewProps) {
           error={p.askError}
           onConfirm={p.onConfirm}
           onCancel={p.onDismiss}
+          roomNotice
         />
       ) : null}
     </div>
@@ -240,7 +241,7 @@ export function Processes({ ctx, switcher }: { ctx: SectionContext; switcher?: R
     setBusy(true);
     setAskError(null);
     try {
-      await call("/api/proc/kill", { pid: ask.pid });
+      await call("/api/proc/kill", { pid: ask.pid, room_ok: true });
       setMessage({ tone: "info", text: t("cw_procs_stopped", { name: ask.comm || ask.name }) });
       setAsk(null);
       if (ask.kind === "app") refreshStatus();

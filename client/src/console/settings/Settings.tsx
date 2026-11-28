@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Heart } from "lucide-react";
 import { ApiError, call, isOffline } from "../api";
 import { fullscreenState, setFullscreenPref, watchFullscreen } from "../fullscreen";
 import { onNavAction } from "../nav";
@@ -175,6 +176,10 @@ export interface SettingsViewProps {
   /** The Controls screen and the first-run tips (App's overlays); each button shows only when given. */
   onOpenControls?: () => void;
   onShowTips?: () => void;
+  /** About › Thanks & Support (the section opens its page). */
+  onOpenThanks?: () => void;
+  /** About › Rules & responsibility (Play Rooms' notice). */
+  onOpenRules?: () => void;
   /** Read /api/settings again after a failed load. */
   onRetry?: () => void;
   /** Turn off PS5Upload Minion: the confirm dialog is open (askOff), and its answers. */
@@ -494,6 +499,20 @@ export function SettingsView(p: SettingsViewProps) {
           {t("cw_settings_app_name")}
           {s ? ` · ${t("cw_settings_version", { version: s.version })}` : ""}
         </p>
+        <div className="cw-quick">
+          {p.onOpenThanks ? (
+            <button type="button" className="cw-focusable cw-button" data-action="open-thanks" onClick={p.onOpenThanks}>
+              <Heart aria-hidden />
+              <span>{t("cw_thanks_title")}</span>
+            </button>
+          ) : null}
+          {p.onOpenRules ? (
+            <button type="button" className="cw-focusable cw-button" data-action="open-rules" onClick={p.onOpenRules}>
+              <span>{t("cw_room_rules")}</span>
+            </button>
+          ) : null}
+        </div>
+        <p className="cw-dim cw-setting-note">{t("cw_about_disclaimer")}</p>
       </section>
 
       {p.askLan ? (
@@ -522,7 +541,12 @@ export function SettingsView(p: SettingsViewProps) {
 }
 
 /** The Settings section: theme, language, full screen, controls and tips, network, About. */
-export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () => void; onShowTips?: () => void } = {}) {
+export function Settings({
+  onOpenControls,
+  onShowTips,
+  onOpenThanks,
+  onOpenRules,
+}: { onOpenControls?: () => void; onShowTips?: () => void; onOpenThanks?: () => void; onOpenRules?: () => void } = {}) {
   const [settings, setSettings] = useState<WebSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [askLan, setAskLan] = useState(false);
@@ -675,6 +699,8 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
       }}
       onOpenControls={onOpenControls}
       onShowTips={onShowTips}
+      onOpenThanks={onOpenThanks}
+      onOpenRules={onOpenRules}
       onRetry={() => setTick((n) => n + 1)}
       askOff={askOff}
       turnedOff={turnedOff}
