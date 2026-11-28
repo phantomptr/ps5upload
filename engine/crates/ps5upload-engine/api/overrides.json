@@ -87,6 +87,7 @@
   "/api/ps5/sdk": "games",
   "/api/ps5/smp": "shadowmount",
   "/api/ps5/smp-meta": "shadowmount",
+  "/api/ps5/space-check": "health",
   "/api/ps5/status": "consoles",
   "/api/ps5/title-sdk-pair": "games",
   "/api/ps5/users": "users",
@@ -779,6 +780,9 @@
   },
   "POST /api/ps5/cleanup/scan": {
    "summary": "Start a console clean-up scan"
+  },
+  "POST /api/ps5/space-check": {
+   "summary": "Find space on an M.2 or USB drive that no file uses"
   },
   "POST /api/ps5/cleanup/scan/{id}/apply": {
    "summary": "Delete chosen items of a clean-up scan"
