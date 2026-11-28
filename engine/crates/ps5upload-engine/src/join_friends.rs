@@ -219,13 +219,24 @@ pub(crate) fn count() -> usize {
     })
 }
 
-pub(crate) fn issue(console: &str, name: &str, inbox: Option<(String, String)>) -> Option<String> {
+/// Its id (what [`revoke`] takes) comes with it: `(id, pass)`.
+pub(crate) fn issue(
+    console: &str,
+    name: &str,
+    inbox: Option<(String, String)>,
+) -> Option<(String, String)> {
     let pass = crate::join_net::random_b64(32)?;
     let mut idb = [0u8; 4];
     getrandom::fill(&mut idb).ok()?;
     let id: String = idb.iter().map(|b| format!("{b:02x}")).collect();
     with_store(|s| s.issue(&id, &pass, console, name, inbox, unix_now()));
-    Some(pass)
+    Some((id, pass))
+}
+
+/// The host removed (or blocked) the guest holding pass `id`: it no longer asks to play again.
+/// True when there was one.
+pub(crate) fn revoke(id: &str) -> bool {
+    forget(id)
 }
 
 /// Who a pass is: its id, console and the name it was given.

@@ -1250,6 +1250,9 @@ pub(crate) struct Meta {
     /// Seated on the stream's controller by "It's me": the host on another device of theirs keeps
     /// it while no host page drives it, whatever "A friend on the stream's controller" says.
     pub me: bool,
+    /// The id of the friend pass they hold here (join_friends.rs): the one they came with (Play
+    /// again) or the one they were given once let in. A remove or block takes it back.
+    pub friend: Option<String>,
 }
 
 impl Meta {
@@ -3769,6 +3772,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
         group_stranger: false,
         own: socket.net().is_none() && own_device(&client, ip),
         me: false,
+        friend: None,
     };
     // Many controllers: this socket carries no picture or sound (the first player's does).
     let media = hello.media != Some(false);
@@ -3882,6 +3886,7 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
                 if name.is_empty() {
                     name = k.name;
                 }
+                meta.friend = Some(k.id);
                 Some(Entry::Again(k.console))
             }
             Err(crate::join_friends::AgainErr::SlowDown) => {
@@ -4010,10 +4015,28 @@ pub(crate) async fn guest_session<S: GuestSocket>(mut socket: S, ip: IpAddr) {
             (c, id)
         }
     };
-    // A guest let in who asked for a pass (and did not come with one) gets one for next time.
-    let friend = (hello.remember && !by_again && hello.resume.is_none())
+    // A guest let in who asked for a pass (and did not come with one) gets one for next time:
+    // never a stranger from the public Rooms list (or one playing beside one), whom the host let
+    // in for this game only. The pass's id stays on the guest: a remove or block takes it back.
+    let key = host_key(&console);
+    let stranger = with_party(&key, |p| {
+        p.guests
+            .iter()
+            .find(|g| g.id == id)
+            .is_none_or(|g| g.meta.stranger())
+    })
+    .unwrap_or(true);
+    let friend = (hello.remember && !by_again && hello.resume.is_none() && !stranger)
         .then(|| crate::join_friends::issue(&console, &name, inbox))
-        .flatten();
+        .flatten()
+        .map(|(fid, pass)| {
+            with_party(&key, |p| {
+                if let Some(g) = p.guest_mut(id) {
+                    g.meta.friend = Some(fid);
+                }
+            });
+            pass
+        });
     if friend.is_some() {
         crate::join_net::lobby::changed();
     }

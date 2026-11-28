@@ -332,6 +332,80 @@ async fn knocks_passwords_blocks() {
     fresh_settings();
 }
 
+/// Friend passes (Play again) go only to people the host let in who are not strangers from the
+/// public Rooms list, and a remove takes the pass back (13.0.0 audit).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn friend_passes_skip_strangers_and_end_with_a_remove() {
+    let _turn = PARTY_TESTS.lock().await;
+    fresh_settings();
+    let console = "10.77.0.45";
+    let f = Arc::new(FakeHelper::default());
+    set_helper(console, f.clone());
+    let url = serve().await;
+    set_live(console, 1);
+    let s = open_room(console).await;
+    let key = s["invite"]["key"].as_str().unwrap().to_string();
+    let (code, v) = set_room(console, serde_json::json!({"visibility": "public"})).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+
+    // A stranger from the public list asks for a pass: let in, but given none.
+    let passes_before = crate::join_friends::count();
+    let mut jo = guest(
+        &url,
+        serde_json::json!({"hello": {"name": "Jo", "proto": 2, "device": "devJo-0000000045",
+            "remember": true, "knock": {"via": "rooms"}}}),
+    )
+    .await;
+    assert_eq!(next(&mut jo).await["stage"], "asking");
+    allow_next(console, true).await;
+    let j = next(&mut jo).await;
+    assert_eq!(j["stage"], "joined", "{j}");
+    assert!(j["friend"].is_null(), "a stranger from Rooms gets no friend pass: {j}");
+    assert_eq!(crate::join_friends::count(), passes_before);
+    jo.send(TMsg::Text(r#"{"leave":1}"#.into())).await.unwrap();
+    drop(jo);
+
+    // Two people with the invite get one each.
+    let mut passes = Vec::new();
+    for (name, dev) in [("Sam", "devSam-000000045"), ("Kim", "devKim-000000045")] {
+        let mut g = guest(
+            &url,
+            serde_json::json!({"hello": {"invite": key, "name": name, "proto": 2, "device": dev,
+                "remember": true}}),
+        )
+        .await;
+        assert_eq!(next(&mut g).await["stage"], "asking");
+        allow_next(console, true).await;
+        let j = next(&mut g).await;
+        assert_eq!(j["stage"], "joined", "{j}");
+        let pass = j["friend"].as_str().expect("a pass").to_string();
+        passes.push((g, j["player"].as_u64().unwrap() as u8, pass));
+    }
+    // The host removes Sam: Sam's pass is taken back; Kim's stays.
+    let (mut sam, sam_player, sam_pass) = passes.remove(0);
+    let (mut kim, _, kim_pass) = passes.remove(0);
+    assert!(room_api::kick_and_block(console, sam_player, None));
+    assert_eq!(next_with(&mut sam, "bye").await["bye"], "removed");
+    let mut back = guest(&url, serde_json::json!({"hello": {"again": sam_pass}})).await;
+    assert_eq!(
+        next(&mut back).await["why"],
+        "friend",
+        "a removed guest's pass asks no more"
+    );
+    kim.send(TMsg::Text(r#"{"leave":1}"#.into())).await.unwrap();
+    drop(kim);
+    let mut kim = guest(&url, serde_json::json!({"hello": {"again": kim_pass}})).await;
+    let v = next(&mut kim).await;
+    assert!(
+        v["stage"] == "joined" || v["stage"] == "asking",
+        "Kim's pass still works: {v}"
+    );
+    drop(kim);
+    test_close_party(console);
+    set_live(console, 0);
+    fresh_settings();
+}
+
 /// The preview: what the host chose to show, never an address, and one per address per 10 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_preview_shows_the_room_and_no_address() {

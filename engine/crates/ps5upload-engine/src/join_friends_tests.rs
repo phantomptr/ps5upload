@@ -159,8 +159,9 @@ async fn body(r: Response) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn the_routes_are_the_hosts_only_and_never_show_a_pass() {
-    let pass = issue("192.168.1.77", "Robin", None).unwrap();
+    let (id, pass) = issue("192.168.1.77", "Robin", None).unwrap();
     assert_eq!(pass.len(), 43);
+    assert_eq!(id.len(), 8);
     // A peer on the LAN is refused.
     let r = list(peer("192.168.1.30"), HeaderMap::new()).await;
     assert_eq!(r.status(), StatusCode::FORBIDDEN);

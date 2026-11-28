@@ -534,9 +534,12 @@ pub async fn kick(
 /// the room's life too, so a reset tag doesn't get them back).
 pub(crate) fn kick_and_block(addr: &str, player: u8, block: Option<bool>) -> bool {
     let now = Instant::now();
+    let mut pass = None;
     let fx = with_party(&host_key(addr), |p| {
         let g = p.guests.iter().find(|g| g.active() && g.player == player)?;
         let id = g.id;
+        // Removed (or blocked): their friend pass no longer asks to play again.
+        pass = g.meta.friend.clone();
         if let Some(always) = block {
             let b = Block {
                 tag_sha256: g.meta.who.tag_sha256.clone(),
@@ -560,6 +563,16 @@ pub(crate) fn kick_and_block(addr: &str, player: u8, block: Option<bool>) -> boo
     .flatten();
     let ok = fx.is_some();
     apply(addr, fx.unwrap_or_default());
+    if let Some(id) = pass.filter(|_| ok) {
+        if crate::join_friends::revoke(&id) {
+            crate::log_at!(
+                Info,
+                "together",
+                "join: Player {player} on {addr} removed: their friend pass is taken back"
+            );
+            crate::join_net::lobby::changed();
+        }
+    }
     ok
 }
 
