@@ -199,8 +199,8 @@ describe("closeGame (the PC app's Close: app kill, then SIGKILL)", () => {
     const h = deps({ closeFails: true, stays: 5 });
     await closeGame("PPSA01650", run(), h.d);
     expect(h.calls).toEqual([
-      ["/api/app/close", { app_id: 7 }],
-      ["/api/proc/kill", { pid: 120 }],
+      ["/api/app/close", { app_id: 7, room_ok: true }],
+      ["/api/proc/kill", { pid: 120, room_ok: true }],
     ]);
   });
 
