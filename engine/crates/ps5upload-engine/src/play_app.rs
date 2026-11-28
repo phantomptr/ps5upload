@@ -251,7 +251,7 @@ impl Store {
 }
 
 #[cfg(unix)]
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new()
@@ -265,7 +265,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     std::fs::write(path, bytes)?;
     Ok(())
 }

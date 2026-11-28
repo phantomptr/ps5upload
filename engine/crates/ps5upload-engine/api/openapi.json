@@ -6727,6 +6727,17 @@
         ],
         "type": "object"
       },
+      "IdBody": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "Identity": {
         "properties": {
           "category": {
@@ -14394,6 +14405,27 @@
           "user",
           "name",
           "owner"
+        ],
+        "type": "object"
+      },
+      "SendBody": {
+        "properties": {
+          "addr": {
+            "description": "The console whose invite goes (default: the one the friend played on).",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ],
         "type": "object"
       },
@@ -26352,6 +26384,171 @@
         }
       }
     },
+    "/api/join/friends": {
+      "get": {
+        "description": "`GET /api/join/friends`.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/join/friends/forget": {
+      "post": {
+        "description": "`POST /api/join/friends/forget {id}`: the pass stops working.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The pass stops working",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/join/friends/send": {
+      "post": {
+        "description": "`POST /api/join/friends/send {id, addr?}`: the current invite to the friend's PS5.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "why": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The current invite to the friend's PS5",
+        "tags": [
+          "play-together"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "console"
+            ],
+            "in": "body",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/join/invite": {
       "post": {
         "description": "`POST /api/join/invite {addr, new?, internet?, share?}`: `{key, code, code_display, url, urls,\nexpires_in_s, share, internet}`. `share` is the one link to show (`share.url`, where it works:\n`share.works` \"anywhere\" or \"wifi\", and `share.why` for the Wi-Fi: \"setting\", \"offline\" (the hub\ncan't be reached), \"local\"; see [`share_json`]). With `share` in the request the engine makes the\ninternet link when Settings › Play Together › Invites work says Anywhere, as `internet` does,\nand quietly keeps to the home network's link otherwise. The same invite again until it expires, unless `new` (the old link and\ncode stop working). With `internet`, also a link for friends anywhere (`internet.url`): the\nengine opens a room on the signalling hub in the settings and the guest's browser connects to\nit peer to peer (409 `internet_off` when the settings turned internet invites off, 409\n`hub_url` when the hub address is not a `wss://` one). The room stays open while the invite\nlasts or an internet guest is in.",
@@ -26795,9 +26992,21 @@
           "101": {
             "description": "Switches to a WebSocket."
           },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
           "429": {
             "$ref": "#/components/responses/Error",
             "description": "Too many requests"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "Engine error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
           },
           "default": {
             "$ref": "#/components/responses/Error",

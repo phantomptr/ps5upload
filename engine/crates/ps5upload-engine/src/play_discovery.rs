@@ -2,9 +2,11 @@
 //!
 //! The app sends one datagram to UDP port [`PORT`] (19261; broadcast, or a remembered address):
 //! [`PROBE`] (`PS5UPLOAD_PLAY_DISCOVER v1`), padded with anything to at least 512 bytes. The
-//! engine answers with one datagram of JSON, `{"name", "port", "version", "id"}`: this device's
-//! name, the engine's HTTP port (the app then dials `/api/play/app` there), its version, and a
-//! short id that tells two engines apart. Nothing else is answered.
+//! engine answers with one datagram of JSON, `{"name", "port", "version", "id", "together"}`: this
+//! device's name, the engine's HTTP port (the app then dials `/api/play/app` there), its version, a
+//! short id that tells two engines apart, and how many Play Togethers are open here with their host
+//! playing (the app's home screen then offers "Join <name>'s game": one press, and the host still
+//! lets them in). Nothing else is answered.
 //!
 //! What keeps it from being misused:
 //! * **No amplification:** the answer is never larger than the probe (a probe too short for it
@@ -43,6 +45,8 @@ pub(crate) struct Info {
     pub port: u16,
     pub version: String,
     pub id: String,
+    /// Play Togethers open here whose host is playing.
+    pub together: usize,
 }
 
 /// The answer to `req`, or None: not a probe, or too short to carry the answer.
@@ -61,6 +65,7 @@ pub(crate) fn reply_for(req: &[u8], info: &Info) -> Option<Vec<u8>> {
         "port": info.port,
         "version": info.version,
         "id": info.id,
+        "together": info.together,
     })
     .to_string()
     .into_bytes();
@@ -158,6 +163,7 @@ pub(crate) fn start(http: SocketAddr, allow: Vec<crate::AllowRule>) {
             id: crate::mesh_api::id_hex()
                 .map(|h| h.chars().take(16).collect())
                 .unwrap_or_default(),
+            together: crate::join::open_playing_count(),
         };
         serve(sock, info, allow, || crate::join::settings().play_discovery).await;
     });
@@ -206,6 +212,7 @@ mod tests {
             port: 19113,
             version: "13.0.0".into(),
             id: "0123456789abcdef".into(),
+            together: 1,
         }
     }
 
@@ -221,7 +228,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&r).unwrap();
         assert_eq!(
             v,
-            json!({"name": "Desk", "port": 19113, "version": "13.0.0", "id": "0123456789abcdef"})
+            json!({"name": "Desk", "port": 19113, "version": "13.0.0", "id": "0123456789abcdef", "together": 1})
         );
         assert!(r.len() <= 512);
     }
