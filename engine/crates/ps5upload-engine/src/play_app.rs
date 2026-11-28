@@ -5,10 +5,20 @@
 //! reachable from the LAN, like the guest socket, and over Tailscale through the engine's own node
 //! (its guest port, `crate::tailnet_guest`, which serves only these two sockets and gives the
 //! handler the peer's 100.x address), so everything past a minimal status needs the app's token:
-//! * app → engine, first: `{"hello": {"token"?: t, "v"?: version}}`.
+//! * app → engine, first: `{"hello": {"token"?: t, "app_id"?: id, "v"?: version}}`. `app_id` is
+//!   the app's own install id (made once on the console: 32 hex characters, or 22–64 base64url
+//!   ones; anything else is ignored), kept with a pairing made from then on.
 //! * without a valid token the app gets only `{"doc": {"engine": true, "version", "paired":
-//!   false}}` (no invite, no names), plus `{"auth": "invalid" | "other_console" | "revoked"}` when
-//!   the token it sent does not work here, or stopped working. It may ask to pair: `{"pair": {}}`
+//!   false}}` (no invite, no names), plus `{"auth": "invalid" | "other_console" | "revoked" |
+//!   "confirm_move"}` when the token it sent does not work here, or stopped working.
+//!   **A console that moved** keeps its pairing: a token made at another address acts here at once
+//!   when the console proves the same AVA1 key there (the key this engine pinned for the old
+//!   address; logged, nothing asked). With no key to compare, a hello whose `app_id` is the one
+//!   kept with the pairing gets `confirm_move` (the app shows "Confirm on <computer>") and
+//!   PS5Upload's feed a `play` event `{"moved": {"console", "id", "name", "addr_old",
+//!   "addr_new"}}`; one click there (`POST /api/play/app/moved`) re-binds the token, and the app's
+//!   socket is told `{"auth": "moved"}` and gets the full status (or `{"auth": "other_console"}`
+//!   when PS5Upload says it is not that console). It may ask to pair: `{"pair": {}}`
 //!   → `{"pairing": {"code", "code_display", "expires_in_s"}}`, a code it shows on the TV. The
 //!   user types it into PS5Upload (`POST /api/play/app/pair`, below); the socket then gets
 //!   `{"paired": {"id", "token"}}` once, and the full status from then on. The token is the app's
@@ -31,8 +41,9 @@
 //! API): `POST /api/play/app/pair {code}` (the code on the TV: 400 `code` when it is not one, 400
 //! `wrong_code` with `tries_left`, 429 `locked` with `retry_s` after 10 wrong codes (every code
 //! then stops working for 10 minutes), 409 `app_gone` when the app that asked closed meanwhile),
-//! `POST /api/play/app/unpair {id}`, `GET /api/play/app/paired` (the paired consoles, and those
-//! waiting for their code to be typed, never the code itself).
+//! `POST /api/play/app/unpair {id}`, `GET /api/play/app/paired` (the paired consoles, those
+//! waiting for their code to be typed, and the consoles that moved waiting to be confirmed),
+//! `POST /api/play/app/moved {console_old?, addr, ok}` (the one click for a console that moved).
 //!
 //! **The engine's event feed** gets a `play` event (`{"console", "doc"}`, the status without the
 //! invite's code and link) when the status of a console with Play Together open or the app on it
@@ -89,6 +100,11 @@ const LOOPBACK_CONNECTS_PER_MIN: usize = 120;
 const SOCKETS_PER_ADDRESS: usize = 4;
 /// A helper that answered a hello this recently counts as there.
 const HELPER_SEEN: Duration = Duration::from_secs(10 * 60);
+/// A console that moved waits this long for PS5Upload to confirm it, and so many wait at once.
+const MOVE_TTL: Duration = Duration::from_secs(10 * 60);
+const MAX_PENDING_MOVES: usize = 8;
+/// How long the console that moved has to prove its AVA1 key at the new address (a dial).
+const MOVE_PROOF_WAIT: Duration = Duration::from_secs(3);
 
 // ── Paired apps ──────────────────────────────────────────────────────────────────────────────────
 
@@ -98,7 +114,8 @@ struct PairedApp {
     /// A short id, for the list and Unpair.
     id: String,
     token_sha256: String,
-    /// The console's address (`host_key`) the app paired from: the only one its token acts on.
+    /// The console's address (`host_key`) the app paired from: the only one its token acts on
+    /// (until the console proves it moved, below).
     console: String,
     /// The console's name on the list when it paired, if it had one.
     #[serde(default)]
@@ -106,6 +123,70 @@ struct PairedApp {
     paired_unix: u64,
     #[serde(default)]
     last_seen_unix: Option<u64>,
+    /// The console's AVA1 key (hex) this engine pinned for that address, when it had one: the
+    /// token follows the console to a new address that proves the same key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    console_key: Option<String>,
+    /// The app's own install id (its hello's `app_id`): a new address with the same id is
+    /// offered to PS5Upload to confirm with one click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    app_id: Option<String>,
+}
+
+/// An app's install id as its hello sends it: 128 bits or more, as 32 hex characters or
+/// base64url (22 to 64 characters of `A-Z a-z 0-9 - _`).
+fn valid_app_id(s: &str) -> bool {
+    (22..=64).contains(&s.len())
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+}
+
+#[cfg(test)]
+static TEST_KEYS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// The AVA1 key (hex) this engine pinned for the console at `addr`, if it met it there. The tests
+/// name the keys themselves ([`TEST_KEYS`]), never the user's own pins.
+fn key_at(addr: &str) -> Option<String> {
+    #[cfg(test)]
+    {
+        let want = host_key(addr);
+        TEST_KEYS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(a, _)| *a == want)
+            .map(|(_, k)| k.clone())
+    }
+    #[cfg(not(test))]
+    {
+        ps5upload_ava1::pool()
+            .pinned_key(addr)
+            .map(|k| k.iter().map(|x| format!("{x:02x}")).collect())
+    }
+}
+
+/// Whether the console answering AVA1 at `new` holds the key pinned for `old` (a dial, as
+/// `/api/ava1/same-console` does): None when it cannot be told in [`MOVE_PROOF_WAIT`].
+async fn proves_key(old: &str, new: &str) -> Option<bool> {
+    #[cfg(test)]
+    {
+        let _ = (old, new, MOVE_PROOF_WAIT);
+        None
+    }
+    #[cfg(not(test))]
+    {
+        let r = tokio::time::timeout(
+            MOVE_PROOF_WAIT,
+            ps5upload_ava1::pool().same_console(old, new),
+        )
+        .await
+        .ok()?;
+        match r {
+            ps5upload_ava1::ConsoleMatch::Same => Some(true),
+            ps5upload_ava1::ConsoleMatch::Different => Some(false),
+            ps5upload_ava1::ConsoleMatch::Unknown => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -180,15 +261,23 @@ impl Store {
         Ok(())
     }
 
-    /// A new app paired from `console`: its id and its token (shown once, to the app).
+    /// A new app paired from `console` (with its AVA1 key and the app's install id, when known):
+    /// its id and its token (shown once, to the app). The same app paired before (the same
+    /// install id) is replaced: one install, one pairing.
     fn add(
         &mut self,
         console: &str,
         name: Option<String>,
         now: u64,
+        console_key: Option<String>,
+        app_id: Option<String>,
     ) -> anyhow::Result<(String, String)> {
         let token = random_hex(32).ok_or_else(|| anyhow::anyhow!("no randomness"))?;
         let id = random_hex(4).ok_or_else(|| anyhow::anyhow!("no randomness"))?;
+        let before = self.apps.clone();
+        if app_id.is_some() {
+            self.apps.retain(|a| a.app_id != app_id);
+        }
         if self.apps.len() >= MAX_PAIRED {
             // The one seen longest ago makes room.
             if let Some(i) = self
@@ -208,12 +297,34 @@ impl Store {
             name,
             paired_unix: now,
             last_seen_unix: None,
+            console_key,
+            app_id,
         });
         if let Err(e) = self.save() {
-            self.apps.retain(|a| a.id != id);
+            self.apps = before;
             return Err(e);
         }
         Ok((id, token))
+    }
+
+    /// App `id`'s console moved to `console` (and has the key `key` there, if known). false: no
+    /// such app (unpaired meanwhile).
+    fn rebind(&mut self, id: &str, console: &str, key: Option<String>) -> anyhow::Result<bool> {
+        let Some(a) = self.apps.iter_mut().find(|a| a.id == id) else {
+            return Ok(false);
+        };
+        let before = a.clone();
+        a.console = host_key(console);
+        if key.is_some() {
+            a.console_key = key;
+        }
+        if let Err(e) = self.save() {
+            if let Some(a) = self.apps.iter_mut().find(|a| a.id == id) {
+                *a = before;
+            }
+            return Err(e);
+        }
+        Ok(true)
     }
 
     /// The app holding `token`. Every record is compared, in constant time each.
@@ -241,9 +352,17 @@ impl Store {
         Ok(true)
     }
 
-    fn seen(&mut self, id: &str, now: u64) {
+    /// App `id` connected: when, and what it did not have yet (a pairing from before this
+    /// engine kept the console's key and the app's install id learns them now).
+    fn seen(&mut self, id: &str, now: u64, key: Option<String>, app_id: Option<String>) {
         if let Some(a) = self.apps.iter_mut().find(|a| a.id == id) {
             a.last_seen_unix = Some(now);
+            if a.console_key.is_none() {
+                a.console_key = key;
+            }
+            if a.app_id.is_none() {
+                a.app_id = app_id;
+            }
             if let Err(e) = self.save() {
                 crate::log_at!(Debug, "together", "play app: {e:#}");
             }
@@ -282,6 +401,25 @@ enum ToApp {
     },
     /// Its token was unpaired.
     Revoked,
+    /// PS5Upload confirmed its console's new address: its token works here now.
+    Moved {
+        id: String,
+    },
+    /// PS5Upload said the console at the new address is not the one that paired.
+    MoveRefused,
+}
+
+/// A paired app's console at a new address that nothing proved (no AVA1 key to compare), waiting
+/// for PS5Upload to confirm it (`POST /api/play/app/moved`).
+struct PendingMove {
+    /// The paired app's id.
+    id: String,
+    name: Option<String>,
+    old: String,
+    new: String,
+    until: Instant,
+    /// The socket that asked, told the answer (it may have closed meanwhile).
+    tx: mpsc::Sender<ToApp>,
 }
 
 /// A code shown on a console's TV, waiting to be typed into PS5Upload.
@@ -425,6 +563,8 @@ struct Sock {
     from: IpAddr,
     /// The paired app's id, once it showed a valid token or paired here.
     paired: Option<String>,
+    /// The app's install id, from its hello.
+    app_id: Option<String>,
     tx: mpsc::Sender<ToApp>,
 }
 
@@ -443,11 +583,38 @@ struct Hub {
     sockets: HashMap<u64, Sock>,
     /// By console (`host_key`): what its app said last.
     reports: HashMap<String, AppReport>,
+    /// Consoles at a new address waiting for PS5Upload's confirmation.
+    moves: Vec<PendingMove>,
 }
 
 impl Hub {
     fn store(&mut self) -> &mut Store {
         self.store.get_or_insert_with(|| Store::open(store_path()))
+    }
+
+    fn prune_moves(&mut self, now: Instant) {
+        self.moves.retain(|m| m.until > now);
+    }
+
+    /// App `m.id`'s console asks to be confirmed at `m.new`. true: a new ask (PS5Upload is told);
+    /// the same ask again only refreshes it.
+    fn ask_move(&mut self, m: PendingMove, now: Instant) -> bool {
+        self.prune_moves(now);
+        if let Some(p) = self
+            .moves
+            .iter_mut()
+            .find(|p| p.id == m.id && p.new == m.new)
+        {
+            p.until = m.until;
+            p.tx = m.tx;
+            return false;
+        }
+        self.moves.retain(|p| p.id != m.id);
+        if self.moves.len() >= MAX_PENDING_MOVES {
+            self.moves.remove(0);
+        }
+        self.moves.push(m);
+        true
     }
 }
 
@@ -580,8 +747,29 @@ fn say(v: Value) -> Message {
     Message::Text(v.to_string().into())
 }
 
-/// The app's hello: its token, if it sent one (None: no hello in time).
-async fn read_hello(socket: &mut WebSocket) -> Option<Option<String>> {
+/// What the app's hello says: its token and its install id, each when it sent a usable one.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Hello {
+    token: Option<String>,
+    app_id: Option<String>,
+}
+
+fn parse_hello(v: &Value) -> Option<Hello> {
+    let h = v.get("hello")?;
+    let text = |k: &str, ok: fn(&str) -> bool| {
+        h.get(k)
+            .and_then(Value::as_str)
+            .filter(|t| ok(t))
+            .map(str::to_string)
+    };
+    Some(Hello {
+        token: text("token", |t| !t.is_empty() && t.len() <= 128),
+        app_id: text("app_id", valid_app_id),
+    })
+}
+
+/// The app's hello (None: no hello in time).
+async fn read_hello(socket: &mut WebSocket) -> Option<Hello> {
     let m = tokio::time::timeout(HELLO_WAIT, async {
         loop {
             match socket.recv().await {
@@ -595,16 +783,11 @@ async fn read_hello(socket: &mut WebSocket) -> Option<Option<String>> {
     .ok()
     .flatten()?;
     let v: Value = serde_json::from_str(m.as_str()).ok()?;
-    let h = v.get("hello")?;
-    Some(
-        h.get("token")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty() && t.len() <= 128)
-            .map(str::to_string),
-    )
+    parse_hello(&v)
 }
 
 /// What a token presented from `console` is.
+#[derive(Debug, PartialEq)]
 enum Auth {
     Paired(String),
     None,
@@ -612,30 +795,147 @@ enum Auth {
     Invalid,
     /// A token made for another console.
     OtherConsole,
+    /// A token made for this app at the console's old address, which nothing here can prove
+    /// moved: PS5Upload confirms it first (one click).
+    ConfirmMove,
 }
 
-fn check_token(token: Option<&str>, console: &str) -> Auth {
-    let Some(token) = token else {
-        return Auth::None;
-    };
-    with_hub(|h| {
-        let found = h
-            .store()
-            .check(token)
-            .map(|a| (a.id.clone(), a.console.clone()));
-        match found {
-            None => Auth::Invalid,
-            Some((_, c)) if c != host_key(console) => Auth::OtherConsole,
-            Some((id, _)) => {
-                h.store().seen(&id, unix_now());
-                Auth::Paired(id)
-            }
+impl Auth {
+    /// The word the app is told, when it is told one.
+    fn word(&self) -> Option<&'static str> {
+        match self {
+            Auth::Invalid => Some("invalid"),
+            Auth::OtherConsole => Some("other_console"),
+            Auth::ConfirmMove => Some("confirm_move"),
+            Auth::Paired(_) | Auth::None => None,
         }
+    }
+}
+
+/// A valid token made for another address than the one it comes from.
+struct Moved {
+    id: String,
+    name: Option<String>,
+    old: String,
+    /// The key kept with the pairing, and the one pinned for the new address.
+    key: Option<String>,
+    here_key: Option<String>,
+    /// The hello's install id is the one kept with the pairing.
+    same_app: bool,
+}
+
+enum Looked {
+    Done(Auth),
+    Moved(Moved),
+}
+
+/// The token as the store has it (blocking: it may read the store and the pins).
+fn look_token(hello: &Hello, console: &str) -> Looked {
+    let Some(token) = hello.token.as_deref() else {
+        return Looked::Done(Auth::None);
+    };
+    let here_key = key_at(console);
+    let here = host_key(console);
+    with_hub(|h| {
+        let Some(a) = h.store().check(token).cloned() else {
+            return Looked::Done(Auth::Invalid);
+        };
+        if a.console == here {
+            h.store()
+                .seen(&a.id, unix_now(), here_key, hello.app_id.clone());
+            return Looked::Done(Auth::Paired(a.id));
+        }
+        Looked::Moved(Moved {
+            same_app: a.app_id.is_some() && a.app_id == hello.app_id,
+            id: a.id,
+            name: a.name,
+            old: a.console,
+            key: a.console_key,
+            here_key,
+        })
     })
 }
 
+/// The token presented from `console` (socket `tx`). A token made at another address acts here
+/// when the console proves the AVA1 key kept with it (it moved: the pairing follows it, silently);
+/// a console with no key to compare whose app sends the install id kept with the pairing is
+/// offered to PS5Upload to confirm (`confirm_move`, and a `play` event `{"moved": …}`).
+async fn check_token(hello: &Hello, console: &str, tx: &mpsc::Sender<ToApp>) -> Auth {
+    let h = hello.clone();
+    let c = console.to_string();
+    let m = match tokio::task::spawn_blocking(move || look_token(&h, &c)).await {
+        Ok(Looked::Done(a)) => return a,
+        Ok(Looked::Moved(m)) => m,
+        Err(_) => return Auth::None,
+    };
+    let same = match (&m.key, &m.here_key) {
+        (Some(k), Some(h)) => Some(same_key(k, h)),
+        (Some(_), None) => proves_key(&m.old, console).await,
+        _ => None,
+    };
+    match same {
+        Some(true) => {
+            let (id, c, key) = (m.id.clone(), console.to_string(), m.key.clone());
+            let r =
+                tokio::task::spawn_blocking(move || with_hub(|h| h.store().rebind(&id, &c, key)))
+                    .await;
+            match r {
+                Ok(Ok(true)) => {
+                    crate::log_at!(
+                        Info,
+                        "together",
+                        "play app: the console paired at {} answers at {console} now (the same AVA1 key); its app's pairing moved with it",
+                        m.old
+                    );
+                    Auth::Paired(m.id)
+                }
+                Ok(Ok(false)) => Auth::Invalid,
+                _ => Auth::None,
+            }
+        }
+        Some(false) => Auth::OtherConsole,
+        None if m.same_app => {
+            let now = Instant::now();
+            let name = m.name.clone();
+            let asked = with_hub(|h| {
+                h.ask_move(
+                    PendingMove {
+                        id: m.id.clone(),
+                        name: m.name.clone(),
+                        old: m.old.clone(),
+                        new: host_key(console),
+                        until: now + MOVE_TTL,
+                        tx: tx.clone(),
+                    },
+                    now,
+                )
+            });
+            if asked {
+                crate::log_at!(
+                    Info,
+                    "together",
+                    "play app: the app paired on {} connects from {console}; waiting for PS5Upload to confirm the console moved",
+                    m.old
+                );
+                crate::event_bus::bus().publish_json(
+                    "play",
+                    &json!({"moved": {
+                        "console": host_key(console),
+                        "id": m.id,
+                        "name": name,
+                        "addr_old": m.old,
+                        "addr_new": host_key(console),
+                    }}),
+                );
+            }
+            Auth::ConfirmMove
+        }
+        None => Auth::OtherConsole,
+    }
+}
+
 async fn session(mut socket: WebSocket, ip: IpAddr) {
-    let Some(token) = read_hello(&mut socket).await else {
+    let Some(hello) = read_hello(&mut socket).await else {
         let _ = socket
             .send(say(json!({"error": "hello", "for": "hello"})))
             .await;
@@ -644,21 +944,13 @@ async fn session(mut socket: WebSocket, ip: IpAddr) {
     let console = console_of(ip);
     let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = mpsc::channel::<ToApp>(4);
-    let c = console.clone();
-    let auth = tokio::task::spawn_blocking(move || check_token(token.as_deref(), &c))
-        .await
-        .unwrap_or(Auth::None);
+    let auth = check_token(&hello, &console, &tx).await;
+    if let Some(w) = auth.word() {
+        let _ = socket.send(say(json!({ "auth": w }))).await;
+    }
     let mut paired = match auth {
         Auth::Paired(id) => Some(id),
-        Auth::None => None,
-        Auth::Invalid => {
-            let _ = socket.send(say(json!({"auth": "invalid"}))).await;
-            None
-        }
-        Auth::OtherConsole => {
-            let _ = socket.send(say(json!({"auth": "other_console"}))).await;
-            None
-        }
+        _ => None,
     };
     crate::log_at!(
         Info,
@@ -677,6 +969,7 @@ async fn session(mut socket: WebSocket, ip: IpAddr) {
                 console: console.clone(),
                 from: crate::join::limit_key(ip),
                 paired: paired.clone(),
+                app_id: hello.app_id.clone(),
                 tx: tx.clone(),
             },
         )
@@ -707,6 +1000,23 @@ async fn session(mut socket: WebSocket, ip: IpAddr) {
                     crate::log_at!(Info, "together", "play app: the app on {console} is paired");
                     paired = Some(id);
                     last = None;
+                }
+                Some(ToApp::Moved { id }) => {
+                    if socket.send(say(json!({"auth": "moved"}))).await.is_err() {
+                        break;
+                    }
+                    with_hub(|h| {
+                        if let Some(s) = h.sockets.get_mut(&conn) {
+                            s.paired = Some(id.clone());
+                        }
+                    });
+                    paired = Some(id);
+                    last = None;
+                }
+                Some(ToApp::MoveRefused) => {
+                    if socket.send(say(json!({"auth": "other_console"}))).await.is_err() {
+                        break;
+                    }
                 }
                 Some(ToApp::Revoked) => {
                     paired = None;
@@ -1016,22 +1326,36 @@ pub async fn pair(
             )
         }
     };
-    let console = p.console.clone();
-    let c = console.clone();
-    let name = tokio::task::spawn_blocking(move || {
-        crate::consoles_api::console_brief(&c).and_then(|(n, _)| n)
+    finish_pair(p).await
+}
+
+/// A new pairing for the app on `console` (socket `conn`): saved, with the console's AVA1 key and
+/// the app's install id when known. `(id, token, name)`.
+async fn issue(
+    console: &str,
+    conn: Option<u64>,
+) -> anyhow::Result<(String, String, Option<String>)> {
+    let c = console.to_string();
+    tokio::task::spawn_blocking(move || {
+        let name = crate::consoles_api::console_brief(&c).and_then(|(n, _)| n);
+        let key = key_at(&c);
+        let (id, token) = with_hub(|h| {
+            let app_id = conn
+                .and_then(|n| h.sockets.get(&n))
+                .and_then(|s| s.app_id.clone());
+            h.store().add(&c, name.clone(), unix_now(), key, app_id)
+        })?;
+        Ok((id, token, name))
     })
     .await
-    .ok()
-    .flatten();
-    let n = name.clone();
-    let c = console.clone();
-    let issued =
-        tokio::task::spawn_blocking(move || with_hub(|h| h.store().add(&c, n, unix_now())))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .and_then(|r| r);
-    let (id, token) = match issued {
+    .map_err(|e| anyhow::anyhow!("{e}"))?
+}
+
+/// The code of `p` was confirmed (typed, or one click): the app is paired and told its token.
+async fn finish_pair(p: PendingPair) -> Response {
+    let console = p.console.clone();
+    let issued = issue(&console, Some(p.conn)).await;
+    let (id, token, name) = match issued {
         Ok(v) => v,
         Err(e) => {
             crate::log_at!(Warn, "together", "play app: pairing not saved: {e:#}");
@@ -1081,6 +1405,7 @@ pub async fn unpair(
         with_hub(|h| {
             let gone = h.store().remove(&id)?;
             if gone {
+                h.moves.retain(|m| m.id != id);
                 for s in h.sockets.values_mut() {
                     if s.paired.as_deref() == Some(id.as_str()) {
                         s.paired = None;
@@ -1106,8 +1431,85 @@ pub async fn unpair(
     }
 }
 
+#[derive(Deserialize)]
+pub struct MovedBody {
+    /// The address the app paired at (the `moved` event's `addr_old`); optional.
+    #[serde(default)]
+    console_old: Option<String>,
+    /// The console's new address (`addr_new`).
+    addr: String,
+    /// true: it is the same console; false: it is not (the app is told `other_console`).
+    ok: bool,
+}
+
+/// `POST /api/play/app/moved {console_old?, addr, ok}`: PS5Upload confirms (or refuses) that the
+/// console waiting at `addr` is the one its app paired from (the `play` event `{"moved": …}`).
+/// `{"ok": true, "moved": true, "id", "console", "name"}` (the app's token works at `addr` from
+/// now on, and its socket is told `moved`) or `{"ok": true, "moved": false}`; 404 `not_waiting`
+/// when nothing waits there (or it waited too long), 404 `app_gone` when that app was unpaired
+/// meanwhile.
+pub async fn moved(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(b): Json<MovedBody>,
+) -> Response {
+    if let Some(r) = crate::join::host_only(&peer, &headers) {
+        return r;
+    }
+    let new = host_key(&b.addr);
+    let old = b.console_old.as_deref().map(host_key);
+    let now = Instant::now();
+    let found = with_hub(|h| {
+        h.prune_moves(now);
+        let at = h
+            .moves
+            .iter()
+            .position(|m| m.new == new && old.as_ref().is_none_or(|o| *o == m.old))?;
+        Some(h.moves.remove(at))
+    });
+    let Some(m) = found else {
+        return bad(StatusCode::NOT_FOUND, json!({"error": "not_waiting"}));
+    };
+    if !b.ok {
+        let _ = m.tx.try_send(ToApp::MoveRefused);
+        crate::log_at!(
+            Info,
+            "together",
+            "play app: PS5Upload said the console at {new} is not the one paired at {}",
+            m.old
+        );
+        return Json(json!({"ok": true, "moved": false})).into_response();
+    }
+    let (id, c) = (m.id.clone(), new.clone());
+    let r = tokio::task::spawn_blocking(move || {
+        let key = key_at(&c);
+        with_hub(|h| h.store().rebind(&id, &c, key))
+    })
+    .await;
+    match r {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => return bad(StatusCode::NOT_FOUND, json!({"error": "app_gone"})),
+        _ => {
+            return bad(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": "save_failed"}),
+            )
+        }
+    }
+    let _ = m.tx.try_send(ToApp::Moved { id: m.id.clone() });
+    crate::log_at!(
+        Info,
+        "together",
+        "play app: PS5Upload confirmed the console paired at {} is at {new} now; its app's pairing moved with it",
+        m.old
+    );
+    Json(json!({"ok": true, "moved": true, "id": m.id, "console": new, "name": m.name}))
+        .into_response()
+}
+
 /// `GET /api/play/app/paired`: `{apps: [{id, console, name, paired_unix, last_seen_unix,
-/// connected}], waiting: [{console, expires_in_s}], locked_s}`. Never a token or a code.
+/// connected}], waiting: [{console, expires_in_s}], moves: [{id, name, addr_old, addr_new,
+/// expires_in_s}], locked_s}`. Never a token.
 pub async fn paired(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -1119,6 +1521,20 @@ pub async fn paired(
     let v = tokio::task::spawn_blocking(move || {
         with_hub(|h| {
             h.pairing.prune(now);
+            h.prune_moves(now);
+            let moves: Vec<Value> = h
+                .moves
+                .iter()
+                .map(|m| {
+                    json!({
+                        "id": m.id,
+                        "name": m.name,
+                        "addr_old": m.old,
+                        "addr_new": m.new,
+                        "expires_in_s": m.until.saturating_duration_since(now).as_secs(),
+                    })
+                })
+                .collect();
             let live: HashSet<String> = h
                 .sockets
                 .values()
@@ -1150,7 +1566,12 @@ pub async fn paired(
                     })
                 })
                 .collect();
-            json!({"apps": apps, "waiting": waiting, "locked_s": h.pairing.locked_s(now)})
+            json!({
+                "apps": apps,
+                "waiting": waiting,
+                "moves": moves,
+                "locked_s": h.pairing.locked_s(now),
+            })
         })
     })
     .await
@@ -1218,6 +1639,7 @@ pub(crate) fn router<S: Clone + Send + Sync + 'static>() -> axum::Router<S> {
         .route("/api/play/app/pair", post(pair))
         .route("/api/play/app/unpair", post(unpair))
         .route("/api/play/app/paired", get(paired))
+        .route("/api/play/app/moved", post(moved))
 }
 
 #[cfg(test)]

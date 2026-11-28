@@ -518,6 +518,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/play/app"),
     ("POST", "/api/play/app/install"),
     ("GET", "/api/play/app/installed"),
+    ("POST", "/api/play/app/moved"),
     ("POST", "/api/play/app/open"),
     ("POST", "/api/play/app/pair"),
     ("GET", "/api/play/app/paired"),

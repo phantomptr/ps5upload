@@ -10,10 +10,63 @@ type App =
 /// The tests share the engine's one hub: they take turns, each from a clean one.
 static TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// A fresh hub kept in `dir` (None: in memory).
+/// A fresh hub kept in `dir` (None: in memory), with no AVA1 keys pinned.
 fn reset(dir: Option<PathBuf>) {
     *TEST_DIR.lock().unwrap() = dir;
     *HUB.lock().unwrap() = None;
+    TEST_KEYS.lock().unwrap().clear();
+}
+
+/// The console at `addr` has the AVA1 key `key` (as if this engine pinned it there).
+fn pin(addr: &str, key: &str) {
+    TEST_KEYS
+        .lock()
+        .unwrap()
+        .push((host_key(addr), key.to_string()));
+}
+
+const KEY_A: &str = "aa00000000000000000000000000000000000000000000000000000000000000";
+const KEY_B: &str = "bb00000000000000000000000000000000000000000000000000000000000000";
+const APP_ID: &str = "0123456789abcdef0123456789abcdef";
+
+/// A pairing made earlier at `console` (with its key and the app's install id): the token.
+fn paired_earlier(console: &str, key: Option<&str>, app_id: Option<&str>) -> String {
+    with_hub(|h| {
+        h.store().add(
+            console,
+            Some("Living room".into()),
+            1,
+            key.map(str::to_string),
+            app_id.map(str::to_string),
+        )
+    })
+    .unwrap()
+    .1
+}
+
+async fn connect_hello(url: &str, hello: Value) -> App {
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    ws.send(TMsg::Text(json!({ "hello": hello }).to_string().into()))
+        .await
+        .unwrap();
+    ws
+}
+
+/// The next `play` event on the engine's feed that has `key`, within 5 s.
+async fn next_event(sub: &mut crate::event_bus::Subscription, key: &str) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let ev = tokio::time::timeout_at(deadline, sub.rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no play event with {key} in time"))
+            .unwrap();
+        if ev.kind == Some("play") {
+            let v: Value = serde_json::from_str(&ev.data).unwrap();
+            if v.get(key).is_some() {
+                return v;
+            }
+        }
+    }
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -129,7 +182,7 @@ fn a_store_keeps_only_the_tokens_hash_and_reads_it_back_after_a_restart() {
     let path = dir.join(PAIRED_FILE);
     let mut s = Store::open(Some(path.clone()));
     let (id, token) = s
-        .add("192.168.1.50", Some("Living room".into()), 7)
+        .add("192.168.1.50", Some("Living room".into()), 7, None, None)
         .unwrap();
     assert_eq!(s.check(&token).map(|a| a.id.clone()), Some(id.clone()));
     assert!(s.check("0".repeat(64).as_str()).is_none());
@@ -166,9 +219,10 @@ fn a_store_keeps_only_the_tokens_hash_and_reads_it_back_after_a_restart() {
 #[test]
 fn a_store_holds_so_many_apps_and_the_one_seen_longest_ago_makes_room() {
     let mut s = Store::open(None);
-    let first = s.add("10.0.0.1", None, 1).unwrap();
+    let first = s.add("10.0.0.1", None, 1, None, None).unwrap();
     for i in 0..MAX_PAIRED {
-        s.add(&format!("10.0.1.{i}"), None, 100 + i as u64).unwrap();
+        s.add(&format!("10.0.1.{i}"), None, 100 + i as u64, None, None)
+            .unwrap();
     }
     assert_eq!(s.apps.len(), MAX_PAIRED);
     assert!(s.check(&first.1).is_none());
@@ -399,4 +453,229 @@ fn an_app_on_a_mapped_address_is_its_ipv4_console() {
         "192.168.1.50"
     );
     assert_eq!(console_of("192.168.1.50".parse().unwrap()), "192.168.1.50");
+}
+
+#[test]
+fn the_hello_keeps_a_usable_install_id_and_drops_anything_else() {
+    let h = |v: Value| parse_hello(&json!({ "hello": v })).unwrap();
+    assert_eq!(h(json!({"app_id": APP_ID})).app_id.as_deref(), Some(APP_ID));
+    // base64url of 16 bytes (22 characters) is an install id too.
+    assert!(h(json!({"app_id": "AbCdEfGhIjKlMnOpQrSt-_"}))
+        .app_id
+        .is_some());
+    for bad in [
+        json!("short"),
+        json!("x".repeat(65)),
+        json!("0123456789abcdef0123456789abcde!"),
+        json!(12),
+    ] {
+        assert_eq!(h(json!({ "app_id": bad })).app_id, None, "{bad}");
+    }
+    assert_eq!(h(json!({})), Hello::default());
+    assert!(parse_hello(&json!({"hi": {}})).is_none());
+}
+
+#[test]
+fn a_paired_apps_file_from_before_still_reads_and_learns_the_new_fields() {
+    let dir = temp_dir("old-file");
+    let path = dir.join(PAIRED_FILE);
+    let token = "ab".repeat(32);
+    // What 13.0.0's first builds wrote: no console key, no install id.
+    let old = json!({"version": 1, "apps": [{
+        "id": "0a0b0c0d",
+        "token_sha256": sha256_hex(&token),
+        "console": "192.168.1.50",
+        "name": "Living room",
+        "paired_unix": 5,
+        "last_seen_unix": null,
+    }]});
+    std::fs::write(&path, old.to_string()).unwrap();
+    let mut s = Store::open(Some(path.clone()));
+    let a = s.check(&token).unwrap().clone();
+    assert_eq!(
+        (a.console_key.as_deref(), a.app_id.as_deref()),
+        (None, None)
+    );
+    // Seen again: what it did not have is kept from now on, and survives a restart.
+    s.seen(&a.id, 9, Some(KEY_A.into()), Some(APP_ID.into()));
+    let a = Store::open(Some(path.clone()))
+        .check(&token)
+        .unwrap()
+        .clone();
+    assert_eq!(a.console_key.as_deref(), Some(KEY_A));
+    assert_eq!(a.app_id.as_deref(), Some(APP_ID));
+    assert_eq!(a.last_seen_unix, Some(9));
+    // …but never replaced once known.
+    s.seen(&a.id, 10, Some(KEY_B.into()), Some("z".repeat(32)));
+    let a = s.check(&token).unwrap();
+    assert_eq!(a.console_key.as_deref(), Some(KEY_A));
+    assert_eq!(a.app_id.as_deref(), Some(APP_ID));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_same_app_paired_again_replaces_its_old_pairing() {
+    let mut s = Store::open(None);
+    let (_, first) = s
+        .add("10.0.0.1", None, 1, None, Some(APP_ID.into()))
+        .unwrap();
+    let (_, other) = s.add("10.0.0.2", None, 1, None, None).unwrap();
+    let (_, second) = s
+        .add("10.0.0.1", None, 2, None, Some(APP_ID.into()))
+        .unwrap();
+    assert!(s.check(&first).is_none());
+    assert!(s.check(&second).is_some());
+    assert!(s.check(&other).is_some());
+    assert_eq!(s.apps.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_console_that_moved_keeps_its_pairing_when_its_ava1_key_proves_it() {
+    let _turn = TURN.lock().await;
+    reset(None);
+    let url = serve().await;
+    // Paired at 192.168.1.50; the same console (the same AVA1 key) now answers at 127.0.0.1.
+    let token = paired_earlier("192.168.1.50", Some(KEY_A), None);
+    pin("127.0.0.1", KEY_A);
+    let mut app = connect(&url, Some(&token)).await;
+    let d = next_with(&mut app, "doc").await;
+    assert_eq!(d["doc"]["paired"], true, "{d}");
+    assert_eq!(d["doc"]["console"]["addr"], "127.0.0.1");
+    let a = with_hub(|h| h.store().check(&token).cloned()).unwrap();
+    assert_eq!(a.console, "127.0.0.1", "re-bound to the new address");
+    // A token whose console has another key than the one at this address: another console, even
+    // with the same install id.
+    let other = paired_earlier("192.168.1.60", Some(KEY_B), Some(APP_ID));
+    let mut app2 = connect_hello(&url, json!({"token": other, "app_id": APP_ID})).await;
+    assert_eq!(next_with(&mut app2, "auth").await["auth"], "other_console");
+    assert_eq!(next_with(&mut app2, "doc").await["doc"]["paired"], false);
+    let b = with_hub(|h| h.store().check(&other).cloned()).unwrap();
+    assert_eq!(b.console, "192.168.1.60", "left where it was");
+    reset(None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_moved_console_with_no_key_is_confirmed_in_ps5upload_with_one_click() {
+    let _turn = TURN.lock().await;
+    reset(None);
+    let url = serve().await;
+    let token = paired_earlier("192.168.1.50", None, Some(APP_ID));
+    let mut sub = crate::event_bus::bus().subscribe(None);
+    let mut app = connect_hello(&url, json!({"token": token, "app_id": APP_ID})).await;
+    assert_eq!(next_with(&mut app, "auth").await["auth"], "confirm_move");
+    assert_eq!(next_with(&mut app, "doc").await["doc"]["paired"], false);
+    // PS5Upload's own feed is told, and lists it.
+    let ev = next_event(&mut sub, "moved").await;
+    assert_eq!(
+        ev["moved"],
+        json!({"console": "127.0.0.1", "id": ev["moved"]["id"], "name": "Living room",
+            "addr_old": "192.168.1.50", "addr_new": "127.0.0.1"})
+    );
+    let (ci, hd) = local();
+    let (_, list) = body(paired(ci, hd).await).await;
+    assert_eq!(list["moves"][0]["addr_new"], "127.0.0.1", "{list}");
+    assert_eq!(list["moves"][0]["addr_old"], "192.168.1.50");
+    // Not moved until confirmed.
+    let a = with_hub(|h| h.store().check(&token).cloned()).unwrap();
+    assert_eq!(a.console, "192.168.1.50");
+    // From another computer: refused.
+    let lan = ConnectInfo("192.168.1.9:5555".parse().unwrap());
+    let mut lan_h = HeaderMap::new();
+    lan_h.insert("host", "192.168.1.2:3000".parse().unwrap());
+    let r = moved(
+        lan,
+        lan_h,
+        Json(MovedBody {
+            console_old: None,
+            addr: "127.0.0.1".into(),
+            ok: true,
+        }),
+    )
+    .await;
+    assert!(!r.status().is_success());
+    // One click here: moved, and the app is told at once.
+    let (ci, hd) = local();
+    let (st, v) = body(
+        moved(
+            ci,
+            hd,
+            Json(MovedBody {
+                console_old: Some("192.168.1.50".into()),
+                addr: "127.0.0.1".into(),
+                ok: true,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["moved"], true);
+    assert_eq!(v["console"], "127.0.0.1");
+    assert_eq!(next_with(&mut app, "auth").await["auth"], "moved");
+    let d = next_with(&mut app, "doc").await;
+    assert_eq!(d["doc"]["paired"], true, "{d}");
+    // Nothing waits any more; the token works here from now on.
+    let (ci, hd) = local();
+    let (st, v) = body(
+        moved(
+            ci,
+            hd,
+            Json(MovedBody {
+                console_old: None,
+                addr: "127.0.0.1".into(),
+                ok: true,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (st, v["error"].as_str()),
+        (StatusCode::NOT_FOUND, Some("not_waiting"))
+    );
+    let mut again = connect_hello(&url, json!({"token": token, "app_id": APP_ID})).await;
+    assert_eq!(next_with(&mut again, "doc").await["doc"]["paired"], true);
+    reset(None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_moved_console_needs_the_same_install_id_and_can_be_refused() {
+    let _turn = TURN.lock().await;
+    reset(None);
+    let url = serve().await;
+    let token = paired_earlier("192.168.1.50", None, Some(APP_ID));
+    // No install id, or another one: another console (as before).
+    for hello in [
+        json!({"token": token}),
+        json!({"token": token, "app_id": "f".repeat(32)}),
+    ] {
+        let mut app = connect_hello(&url, hello).await;
+        assert_eq!(next_with(&mut app, "auth").await["auth"], "other_console");
+    }
+    // A pairing that never had an install id is never offered.
+    let plain = paired_earlier("192.168.1.51", None, None);
+    let mut app = connect_hello(&url, json!({"token": plain, "app_id": APP_ID})).await;
+    assert_eq!(next_with(&mut app, "auth").await["auth"], "other_console");
+    // Refused in PS5Upload: the app is told it is another console; nothing moved.
+    let mut app = connect_hello(&url, json!({"token": token, "app_id": APP_ID})).await;
+    assert_eq!(next_with(&mut app, "auth").await["auth"], "confirm_move");
+    let (ci, hd) = local();
+    let (st, v) = body(
+        moved(
+            ci,
+            hd,
+            Json(MovedBody {
+                console_old: None,
+                addr: "127.0.0.1".into(),
+                ok: false,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!((st, v["moved"].as_bool()), (StatusCode::OK, Some(false)));
+    assert_eq!(next_with(&mut app, "auth").await["auth"], "other_console");
+    let a = with_hub(|h| h.store().check(&token).cloned()).unwrap();
+    assert_eq!(a.console, "192.168.1.50");
+    reset(None);
 }
