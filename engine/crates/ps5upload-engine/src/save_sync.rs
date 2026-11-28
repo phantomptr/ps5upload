@@ -42,7 +42,7 @@ use sha2::{Digest, Sha256};
 
 use crate::save_backup::{self as local, json_error, now_ms};
 
-const SETTINGS_FILE: &str = "save-sync.json";
+pub(crate) const SETTINGS_FILE: &str = "save-sync.json";
 const STATE_FILE: &str = "save-sync-state.json";
 /// How often consoles are asked what runs (the same minute the server backups use).
 pub const TICK: Duration = Duration::from_secs(60);
@@ -67,6 +67,14 @@ pub struct SyncPair {
     /// Saves left out (their keys, see [`Item::key`]). Everything else both sides have is in.
     #[serde(default)]
     pub excluded: Vec<String>,
+    /// Saves kept in step automatically (keys): the newer one is copied across after its game
+    /// closes, with no question unless both changed (`save_sync_auto`). Opt-in, one by one.
+    #[serde(default)]
+    pub auto: Vec<String>,
+    /// A console that is off the network in rest is woken to take a waiting copy. Off unless the
+    /// user turns it on: save sync never wakes a console by itself.
+    #[serde(default)]
+    pub wake: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -103,6 +111,9 @@ pub struct SyncItemState {
     pub b: Option<SyncSeen>,
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Kept in step automatically: where that stands (`save_sync_auto`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<crate::save_sync_auto::AutoView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,7 +155,7 @@ pub struct State {
     pub suggestions: Vec<SyncSuggestion>,
 }
 
-fn item_key(pair: &str, key: &str) -> String {
+pub(crate) fn item_key(pair: &str, key: &str) -> String {
     format!("{pair}|{key}")
 }
 
@@ -201,6 +212,8 @@ pub struct SyncRow {
     pub b: Option<SyncSideView>,
     pub synced_ms: Option<u64>,
     pub last_error: Option<String>,
+    /// Kept in step automatically: where that stood before this check.
+    pub auto: Option<crate::save_sync_auto::AutoView>,
     /// Which side changed since the last copy, where it could be read.
     #[serde(skip)]
     pub a_changed: Option<bool>,
@@ -231,6 +244,20 @@ pub trait Env {
         src: &SaveEntry,
         dst: Option<&SaveEntry>,
     ) -> Result<(), String>;
+    /// What [`Env::copy`] would refuse, asked before anything changes (`save_sync_auto`): no
+    /// place to back up the target first, no save of the game there yet, or images the helper
+    /// there can't make the other user's (#809).
+    fn preflight(
+        &self,
+        from: &SyncSide,
+        to: &SyncSide,
+        src: &SaveEntry,
+        dst: Option<&SaveEntry>,
+    ) -> Result<(), String>;
+    /// Backs up `entry` on `side` (a conflict: both saves are kept); the backup's file name.
+    fn keep(&self, side: &SyncSide, entry: &SaveEntry) -> Result<String, String>;
+    /// Wakes `host` from rest (only when the user turned that on for the pair).
+    fn wake(&self, host: &str) -> Result<(), String>;
 }
 
 pub struct Live;
@@ -274,13 +301,51 @@ impl Env for Live {
             crate::save_copy::copy_emulator_save(&from.host, &to.host, src, to_path, to_user)
         }
     }
+    fn preflight(
+        &self,
+        from: &SyncSide,
+        to: &SyncSide,
+        src: &SaveEntry,
+        _dst: Option<&SaveEntry>,
+    ) -> Result<(), String> {
+        use crate::save_copy::Console as _;
+        let there = crate::save_copy::Live::new(&to.host);
+        if src.kind == "ps5" {
+            crate::save_copy::copy_check(
+                &crate::save_copy::Live::new(&from.host),
+                &there,
+                &src.title_id,
+                src.user_id as u32,
+                to.user_id,
+            )
+            .map_err(|f| f.msg)
+        } else {
+            there.can_back_up()
+        }
+    }
+    fn keep(&self, side: &SyncSide, entry: &SaveEntry) -> Result<String, String> {
+        use crate::save_copy::Console as _;
+        let c = crate::save_copy::Live::new(&side.host);
+        c.can_back_up()?;
+        let zip = c.back_up(entry, crate::save_sync_auto::CONFLICT_TAG)?;
+        Ok(zip
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default())
+    }
+    fn wake(&self, host: &str) -> Result<(), String> {
+        let cred = crate::consoles_api::wake_credential(host).ok_or_else(|| {
+            "no wake key is saved for this console (pair it for Remote Play first)".to_string()
+        })?;
+        ps5upload_core::ddp::wake(host, &cred).map_err(|e| format!("{e:#}"))
+    }
 }
 
 /// The game a sync key is for, when neither console answers with the save itself: the key
 /// alone for a PS5 or PS4 save, `kind:game:user` for a PlayStation 2 emulator's, and for a
 /// Switch emulator's `switch:game` or, for any but ProsperoEden, `switch:emulator:game`.
 /// (That last one showed the emulator's own ID as the game on every such row.)
-fn title_of_key(key: &str) -> &str {
+pub(crate) fn title_of_key(key: &str) -> &str {
     let mut parts = key.split(':');
     match (parts.next(), parts.next(), parts.next()) {
         (Some(kind), Some(_), Some(game)) if kind == crate::emulator_saves::KIND => game,
@@ -504,6 +569,7 @@ pub fn check(
             b: eb.map(|e| view(e, kept.b.as_ref())),
             synced_ms: kept.synced.as_ref().map(|s| s.at_ms),
             last_error: kept.last_error.clone(),
+            auto: kept.auto.clone(),
             a_changed: None,
             b_changed: None,
             apps: apps.clone(),
@@ -672,6 +738,10 @@ pub fn apply(
                 at_ms: now,
             });
             slot.last_error = None;
+            // A save kept in step is in step again, whoever asked for the copy.
+            if let Some(v) = slot.auto.as_mut() {
+                v.copied(now, dir);
+            }
             state
                 .suggestions
                 .retain(|s| !(s.pair == pair.id && s.key == key));
@@ -739,6 +809,8 @@ pub struct Watch {
     pub back_at: BTreeMap<String, u64>,
     /// Games closed and not looked at yet: (pair, closed side, title).
     pub closed: BTreeSet<(String, char, String)>,
+    /// When each pair's saves kept in step were last all looked at (`save_sync_auto::pass`).
+    pub last_sweep: BTreeMap<String, u64>,
 }
 
 impl Watch {
@@ -807,6 +879,7 @@ pub fn watch_once(
         .collect();
     let mut todo: Vec<(String, char, String)> = watch.closed.iter().cloned().collect();
     todo.extend(waiting);
+    let mut handled: BTreeSet<(String, String)> = BTreeSet::new();
     for (pair_id, c, what) in todo {
         let Some(pair) = settings.pairs.iter().find(|p| p.id == pair_id) else {
             watch.closed.remove(&(pair_id, c, what));
@@ -831,6 +904,12 @@ pub fn watch_once(
             SyncDirection::BToA
         };
         for row in &rows {
+            // Kept in step: copied (or waited for, or a conflict) rather than suggested.
+            if pair.auto.contains(&row.key) {
+                crate::save_sync_auto::step(env, pair, state, row, now, &settle, false);
+                handled.insert((pair.id.clone(), row.key.clone()));
+                continue;
+            }
             match suggestion_for(row, c) {
                 Some(st) => {
                     let fresh = !state
@@ -880,18 +959,20 @@ pub fn watch_once(
             watch.closed.remove(&(pair_id, c, what));
         }
     }
+    // Saves kept in step: those waiting, and every so often all of them.
+    crate::save_sync_auto::pass(env, settings, state, watch, now, busy, &handled);
 }
 
 // ── persistence and the shared state ────────────────────────────────────
 
-struct Shared {
-    settings: Settings,
-    state: State,
-    watch: Watch,
+pub(crate) struct Shared {
+    pub(crate) settings: Settings,
+    pub(crate) state: State,
+    pub(crate) watch: Watch,
     /// The console pairs with an apply running (sorted hosts), or held by the background look.
-    applying: BTreeSet<String>,
+    pub(crate) applying: BTreeSet<String>,
     /// Those of `applying` the background look holds (not an apply).
-    looking: BTreeSet<String>,
+    pub(crate) looking: BTreeSet<String>,
 }
 
 fn shared() -> &'static Mutex<Shared> {
@@ -907,24 +988,24 @@ fn shared() -> &'static Mutex<Shared> {
     })
 }
 
-fn lock() -> std::sync::MutexGuard<'static, Shared> {
+pub(crate) fn lock() -> std::sync::MutexGuard<'static, Shared> {
     shared().lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn persist_state(state: &State) {
+pub(crate) fn persist_state(state: &State) {
     if let Err(e) = local::save(STATE_FILE, state) {
         crate::log_warn!("save sync: {e}");
     }
 }
 
-fn hosts_key(p: &SyncPair) -> String {
+pub(crate) fn hosts_key(p: &SyncPair) -> String {
     let mut h = [p.a.host.as_str(), p.b.host.as_str()];
     h.sort();
     format!("{}|{}", h[0], h[1])
 }
 
 /// Holds a pair of consoles for one apply (or the background look); released when dropped.
-struct Applying(String);
+pub(crate) struct Applying(String);
 
 impl Applying {
     fn begin(k: String) -> Option<Self> {
@@ -943,7 +1024,7 @@ impl Applying {
 
     /// [`Self::begin`] for `p`'s consoles, waiting up to `wait` for an after-close look (a few
     /// seconds) to end.
-    fn begin_within(p: &SyncPair, wait: Duration) -> Option<Self> {
+    pub(crate) fn begin_within(p: &SyncPair, wait: Duration) -> Option<Self> {
         let until = std::time::Instant::now() + wait;
         loop {
             if let Some(h) = Self::begin(hosts_key(p)) {
@@ -975,7 +1056,7 @@ pub fn pair_id(a: &SyncSide, b: &SyncSide) -> String {
     digest(&[(sides.join("~"), 0, 0)])[..12].to_string()
 }
 
-fn settle_now(h: &str) -> bool {
+pub(crate) fn settle_now(h: &str) -> bool {
     lock().watch.too_soon(h, now_ms())
 }
 
@@ -992,7 +1073,7 @@ fn checked(pair: &SyncPair, only: &dyn Fn(&str, &[String]) -> bool) -> Vec<SyncR
 
 /// [`merge_items`] into the shared state, unless the pair was removed meanwhile (its records went
 /// with it and must not come back).
-fn merge_shared(
+pub(crate) fn merge_shared(
     g: &mut Shared,
     from: State,
     base: &[SyncSuggestion],
@@ -1099,7 +1180,7 @@ pub fn spawn() {
 
 // ── HTTP ────────────────────────────────────────────────────────────────
 
-fn find_pair(id: &str) -> Option<SyncPair> {
+pub(crate) fn find_pair(id: &str) -> Option<SyncPair> {
     lock()
         .settings
         .pairs
@@ -1108,7 +1189,7 @@ fn find_pair(id: &str) -> Option<SyncPair> {
         .cloned()
 }
 
-fn no_pair() -> Response {
+pub(crate) fn no_pair() -> Response {
     json_error(StatusCode::NOT_FOUND, "no such sync pair")
 }
 
@@ -1132,10 +1213,14 @@ pub struct SyncPairBody {
     /// Saves left out (keys from the status). Left out: as before (none for a new pair).
     #[serde(default)]
     pub excluded: Option<Vec<String>>,
+    /// Wake a console in rest to take a waiting copy. Left out: as before (off for a new pair).
+    #[serde(default)]
+    pub wake: Option<bool>,
 }
 
-/// `PUT /api/save-sync/pair` `{a, b, excluded?}`: adds the pair, or changes which saves it leaves
-/// out.
+/// `PUT /api/save-sync/pair` `{a, b, excluded?, wake?}`: adds the pair, or changes which saves it
+/// leaves out and whether a resting console is woken for a waiting copy. Which saves are kept in
+/// step automatically is `PUT /api/save-sync/auto` (it checks each one first).
 pub async fn put_pair(Json(b): Json<SyncPairBody>) -> Response {
     let a = SyncSide {
         host: b.a.host.trim().to_string(),
@@ -1156,7 +1241,12 @@ pub async fn put_pair(Json(b): Json<SyncPairBody>) -> Response {
     let pair = match g.settings.pairs.iter_mut().find(|p| p.id == id) {
         Some(p) => {
             if let Some(ex) = b.excluded {
+                // A save left out is no longer kept in step either.
+                p.auto.retain(|k| !ex.contains(k));
                 p.excluded = ex;
+            }
+            if let Some(w) = b.wake {
+                p.wake = w;
             }
             p.clone()
         }
@@ -1166,6 +1256,8 @@ pub async fn put_pair(Json(b): Json<SyncPairBody>) -> Response {
                 a,
                 b: other,
                 excluded: b.excluded.unwrap_or_default(),
+                auto: Vec::new(),
+                wake: b.wake.unwrap_or(false),
             };
             g.settings.pairs.push(p.clone());
             p
@@ -1301,7 +1393,7 @@ pub async fn post_dismiss(Json(b): Json<SyncDismissBody>) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
 
@@ -1318,7 +1410,7 @@ mod tests {
         );
     }
 
-    fn save(title: &str, user: u32, kind: &str, size: i64) -> SaveEntry {
+    pub(crate) fn save(title: &str, user: u32, kind: &str, size: i64) -> SaveEntry {
         SaveEntry {
             title_id: title.into(),
             user_id: user as i32,
@@ -1330,30 +1422,40 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Console {
-        saves: Vec<SaveEntry>,
-        running: BTreeSet<String>,
-        offline: bool,
-        settling: bool,
+    pub(crate) struct Console {
+        pub(crate) saves: Vec<SaveEntry>,
+        pub(crate) running: BTreeSet<String>,
+        pub(crate) offline: bool,
+        pub(crate) settling: bool,
         /// path → content version: the fingerprint.
-        version: BTreeMap<String, u32>,
+        pub(crate) version: BTreeMap<String, u32>,
+        /// What a copy to this console is refused with before it starts (the helper can't make
+        /// a save the user's, no backup place).
+        pub(crate) refuse: Option<String>,
+        /// Copies to this console fail with this.
+        pub(crate) fail_copy: Option<String>,
+        /// A wake sent to it brings it back.
+        pub(crate) wakes_up: bool,
     }
 
     #[derive(Default)]
-    struct Fake {
-        consoles: RefCell<BTreeMap<String, Console>>,
-        copies: RefCell<Vec<String>>,
+    pub(crate) struct Fake {
+        pub(crate) consoles: RefCell<BTreeMap<String, Console>>,
+        pub(crate) copies: RefCell<Vec<String>>,
+        /// Backups taken for a conflict: `<title> <host>`.
+        pub(crate) kept: RefCell<Vec<String>>,
+        pub(crate) wakes: RefCell<Vec<String>>,
     }
 
     impl Fake {
-        fn with(&self, host: &str, f: impl FnOnce(&mut Console)) {
+        pub(crate) fn with(&self, host: &str, f: impl FnOnce(&mut Console)) {
             f(self
                 .consoles
                 .borrow_mut()
                 .entry(host.to_string())
                 .or_default());
         }
-        fn write(&self, host: &str, title: &str) {
+        pub(crate) fn write(&self, host: &str, title: &str) {
             self.with(host, |c| {
                 let p = c
                     .saves
@@ -1399,6 +1501,9 @@ mod tests {
             src: &SaveEntry,
             dst: Option<&SaveEntry>,
         ) -> Result<(), String> {
+            if let Some(e) = self.consoles.borrow()[&to.host].fail_copy.clone() {
+                return Err(e);
+            }
             self.copies
                 .borrow_mut()
                 .push(format!("{} {} -> {}", src.title_id, from.host, to.host));
@@ -1407,9 +1512,35 @@ mod tests {
             self.with(&to.host, |c| *c.version.entry(path).or_default() += 10);
             Ok(())
         }
+        fn preflight(
+            &self,
+            _from: &SyncSide,
+            to: &SyncSide,
+            _src: &SaveEntry,
+            _dst: Option<&SaveEntry>,
+        ) -> Result<(), String> {
+            match self.consoles.borrow()[&to.host].refuse.clone() {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        }
+        fn keep(&self, side: &SyncSide, entry: &SaveEntry) -> Result<String, String> {
+            let name = format!("{} {}", entry.title_id, side.host);
+            self.kept.borrow_mut().push(name.clone());
+            Ok(name)
+        }
+        fn wake(&self, host: &str) -> Result<(), String> {
+            self.wakes.borrow_mut().push(host.to_string());
+            self.with(host, |c| {
+                if c.wakes_up {
+                    c.offline = false;
+                }
+            });
+            Ok(())
+        }
     }
 
-    fn pair() -> SyncPair {
+    pub(crate) fn pair() -> SyncPair {
         let a = SyncSide {
             host: "10.0.0.1".into(),
             user_id: 1,
@@ -1423,10 +1554,12 @@ mod tests {
             a,
             b,
             excluded: vec![],
+            auto: vec![],
+            wake: false,
         }
     }
 
-    fn fake(titles_a: &[&str], titles_b: &[&str]) -> Fake {
+    pub(crate) fn fake(titles_a: &[&str], titles_b: &[&str]) -> Fake {
         let f = Fake::default();
         f.with("10.0.0.1", |c| {
             c.saves = titles_a.iter().map(|t| save(t, 1, "ps5", 100)).collect()
@@ -1437,10 +1570,10 @@ mod tests {
         f
     }
 
-    fn all(_: &str, _: &[String]) -> bool {
+    pub(crate) fn all(_: &str, _: &[String]) -> bool {
         true
     }
-    fn never(_: &str) -> bool {
+    pub(crate) fn never(_: &str) -> bool {
         false
     }
 
@@ -1926,6 +2059,7 @@ mod tests {
             a: seen("new"),
             b: seen("new"),
             last_error: None,
+            auto: None,
         };
         let mut into = State::default();
         into.items.insert(k.clone(), applied.clone());
@@ -1942,6 +2076,7 @@ mod tests {
                 a: seen("old"),
                 b: seen("x"),
                 last_error: None,
+                auto: None,
             },
         );
         merge_items(&mut into, from, &[], "p", false);
@@ -1974,6 +2109,8 @@ mod tests {
                 user_id: 2,
             },
             excluded: Vec::new(),
+            auto: Vec::new(),
+            wake: false,
         });
         merge_shared(&mut g, from, &[], "gone", true);
         assert_eq!(g.state.items.len(), 1);

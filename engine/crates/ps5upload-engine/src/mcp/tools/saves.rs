@@ -1,5 +1,5 @@
-//! Game saves: `saves_list`, `saves_backups_list`, `saves_sync_state`, `saves_backup_now`,
-//! `saves_restore`. Backups are kept by the engine, on its computer.
+//! Game saves: `saves_list`, `saves_backups_list`, `saves_sync_state`, `saves_sync_games`,
+//! `saves_backup_now`, `saves_restore`. Backups are kept by the engine, on its computer.
 
 use serde_json::json;
 
@@ -48,6 +48,20 @@ pub(super) fn tools() -> Vec<ToolDef> {
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: route!(path: "/api/save-sync", done: "Save sync's pairs and suggestions."),
+        },
+        ToolDef {
+            name: "saves_sync_games",
+            title: "Saves kept in step between two consoles",
+            description: "Each save the user keeps in step automatically between two consoles, \
+                          and where it stands: `state` in_step, waiting (for the console in \
+                          `side`, `reason` offline/settling/running/queued/error), conflict (both \
+                          changed: the user picks; `kept` names the backups of both) or \
+                          cant_sync (`reason` ps4/no_save/refused/failed, `detail` in words), \
+                          with the last copy (`copied_ms`, `copied_direction`). Nothing here \
+                          touches a console.",
+            kind: Kind::Read,
+            schema: object(json!({}), &[]),
+            run: route!(path: "/api/save-sync/games", done: "The saves kept in step."),
         },
         ToolDef {
             name: "saves_backup_now",
