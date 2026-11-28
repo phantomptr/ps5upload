@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const releaseCopy = vi.fn(async () => {});
 const materializeRemote = vi.fn(async (p: string) => p);
+// Play Rooms: nobody playing unless a test says so (rest mode waits for friends).
+const friendsNow = { n: 0 };
+vi.mock("../lib/rpStopConfirm", () => ({ friendsPlaying: vi.fn(async () => friendsNow.n) }));
 vi.mock("../lib/materialize", () => ({
   releaseCopy: (...a: unknown[]) => releaseCopy(...(a as [])),
   materializeRemote: (p: string) => materializeRemote(p),
@@ -594,6 +597,21 @@ describe("rest mode after upload", () => {
     // Standby targets the mgmt addr of the drained host.
     expect(mockedStandby).toHaveBeenCalledTimes(1);
     expect(mockedStandby).toHaveBeenCalledWith("192.168.1.10");
+  });
+
+  it("never rests a PS5 friends are playing on", async () => {
+    useRestAfterUploadStore.setState({ enabled: true });
+    friendsNow.n = 2;
+    try {
+      addItem("192.168.1.10:9113", "A1");
+      const p = useUploadQueueStore.getState().start();
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(itemsByStatus("done")).toHaveLength(1);
+      expect(mockedStandby).not.toHaveBeenCalled();
+    } finally {
+      friendsNow.n = 0;
+    }
   });
 
   it("each drained console by its own setting (Settings › This PS5), not the selected one", async () => {

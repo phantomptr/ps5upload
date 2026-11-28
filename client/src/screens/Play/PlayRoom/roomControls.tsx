@@ -5,7 +5,8 @@ import { Select } from "../../../components";
 import { LANGUAGES } from "../../../state/lang";
 import { useTr } from "../../../state/lang";
 import type { ChatMode } from "../../../lib/room/chat";
-import { REGIONS, regionLabel, type Region } from "../../../lib/room/regions";
+import { REGIONS, type Region } from "../../../lib/room/regions";
+import { regionLabel } from "../../../lib/room/regionText";
 import type { Visibility, VoiceMode } from "../../../lib/room/room";
 
 type Tr = ReturnType<typeof useTr>;

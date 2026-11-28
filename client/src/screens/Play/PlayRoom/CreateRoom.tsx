@@ -2,7 +2,8 @@ import { useState } from "react";
 
 import { Checkbox, Input, Toggle } from "../../../components";
 import { useConfirm } from "../../../components/ConfirmDialog";
-import { nameProblem, nameProblemText } from "../../../lib/room/names";
+import { nameProblem } from "../../../lib/room/names";
+import { nameProblemText } from "../../../lib/room/nameText";
 import { ownRegion } from "../../../lib/room/regions";
 import { approvalFor, visibilityDefaults, type RoomBody, type Visibility } from "../../../lib/room/room";
 import { confirmPublic, publicConfirmed, useRoomDraft } from "../../../state/roomDraft";
@@ -208,7 +209,7 @@ export function ApprovalFields({
 
 /** What Create sends: only what the host set, the password only when long enough. */
 export function createBody(d: RoomBody): RoomBody {
-  const out: RoomBody = { ...d };
+  const out: RoomBody = { ...d, ...(d.visibility === "public" ? { public_ok: true } : {}) };
   if (!out.name?.trim()) delete out.name;
   else out.name = out.name.trim();
   if (!out.password || out.password.length < 4) delete out.password;

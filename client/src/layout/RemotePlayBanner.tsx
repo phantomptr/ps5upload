@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router";
 import { Button, Spinner } from "../components";
 import { useConfirm } from "../components/ConfirmDialog";
 import { friendsPlaying } from "../lib/rpStopConfirm";
+import { friendsConfirmed } from "../lib/friendsGuard";
 import { isLive } from "../lib/goLive";
 import { useGoLiveStore } from "../state/goLive";
 import { useJoinPresence } from "../state/joinPresence";
@@ -65,13 +66,14 @@ function StreamBanner() {
     if (
       n > 0 &&
       !(await confirm({
-        title: tr("pt_confirm_stop", { n }, `Stopping Play ends Play Together for ${n} friend(s). Continue?`),
+        title: tr("pt_confirm_stop", { n }, `Stopping Play ends the Play Room for ${n} friend(s). Continue?`),
         confirmLabel: tr("join_confirm_continue", undefined, "Continue"),
         destructive: true,
       }))
     ) {
       return;
     }
+    if (n > 0) friendsConfirmed();
     stop();
   };
   if (!stream || !phase || phase === "ended" || pathname === "/play") return null;

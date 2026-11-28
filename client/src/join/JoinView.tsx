@@ -110,9 +110,9 @@ export function endText(tr: Tr, stage: JoinStage, host: string, internet = false
       case "no_answer":
         return tr("join_refused_no_answer", { host }, `${host} didn't answer in time. Tell ${host}, then try again.`);
       case "closed":
-        return tr("join_refused_closed", { host }, `${host} isn't hosting Play Together right now.`);
+        return tr("join_refused_closed", { host }, `${host} isn't hosting a Play Room right now.`);
       case "old_helper":
-        return tr("join_refused_old_helper", { host }, `${host}'s PS5 needs an updated helper for Play Together.`);
+        return tr("join_refused_old_helper", { host }, `${host}'s PS5 needs an updated helper for Play Rooms.`);
       case "not_playing":
         return tr("join_refused_not_playing", { host }, `${host} isn't playing right now. Ask ${host} to start Play first.`);
       case "unreachable":

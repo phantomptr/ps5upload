@@ -36,6 +36,8 @@ export interface RoomGame {
 /** "Listed in Rooms" / "Listing…" / "Not listed: <why>" (design 3.3). */
 export interface Listed {
   state: "off" | "listing" | "listed" | "refused" | "old_hub";
+  /** Listed until (unix seconds), when the hub said. */
+  untilUnix?: number | null;
   why: string | null;
 }
 
@@ -94,6 +96,11 @@ export interface RoomInfo {
   known: boolean;
   /** The room's chat as the host engine keeps it (the last 50 lines, memory only). */
   chatLog: HostChatLine[];
+  /** Many wrong passwords lately (20 in 10 minutes): "Change it?". */
+  manyWrongPasswords: boolean;
+  /** This computer's device tag, and the room's lobby id on the hub (Friends/Public). */
+  hostTag: string | null;
+  lobby: string | null;
 }
 
 /** One line of the room's chat on the host's side (`room.chat_log`). */
@@ -136,6 +143,9 @@ export const DEFAULT_ROOM: RoomInfo = {
   openedAt: null,
   known: false,
   chatLog: [],
+  manyWrongPasswords: false,
+  hostTag: null,
+  lobby: null,
 };
 
 /** The defaults a visibility brings (design 3.1, 7A.2): Public is quick messages, push-to-talk
@@ -203,27 +213,39 @@ export function readRoom(v: unknown): RoomInfo {
       stream: ps?.stream !== false,
       time: ps?.time !== false,
     },
-    checkBefore: o.check_before === true,
+    // The engine keeps it in preview_shows.check (join_room.rs PreviewShows).
+    checkBefore: o.check_before === true || ps?.check === true,
     ready: rd && num(rd.left_s) != null ? { leftS: num(rd.left_s)!, ready: Array.isArray(rd.ready) ? rd.ready.filter((x): x is number => typeof x === "number") : [] } : null,
     watchers: Math.max(0, Math.min(2, num(o.watchers) ?? 2)),
     lang: str(o.lang),
     region: readRegion(o.region),
     nearby: o.nearby !== false,
-    game: g && typeof g.title === "string" ? { title: g.title, id: str(g.id), from: g.from === "picked" ? "picked" : "auto" } : null,
+    game: g && typeof g.title === "string" ? { title: g.title, id: str(g.id), from: g.from === "picked" || g.picked === true ? "picked" : "auto" } : null,
     listed: {
+      // The engine says "not_listed" with why (join_room.rs Listed); "old_hub" is one of its whys.
       state:
         listedState === "listing" || listedState === "listed" || listedState === "refused" || listedState === "old_hub"
           ? listedState
-          : "off",
+          : listedState === "not_listed"
+            ? li?.why === "old_hub"
+              ? "old_hub"
+              : "refused"
+            : "off",
       why: str(li?.why),
+      untilUnix: num(li?.until_unix),
     },
     blocked: (Array.isArray(o.blocked) ? o.blocked : [])
       .map(obj)
       .filter((b): b is Record<string, unknown> => !!b && typeof b.tag === "string")
-      .map((b) => ({ name: typeof b.name === "string" ? b.name : "", tag: b.tag as string, at: num(b.at) })),
+      .map((b) => ({ name: typeof b.name === "string" ? b.name : "", tag: b.tag as string, at: num(b.at) ?? num(b.at_unix) })),
     hostLink: readLink(o.host_link),
-    openedAt: num(o.opened_at_ms) ?? (num(o.opened_at) != null ? num(o.opened_at)! * 1000 : null),
+    openedAt:
+      num(o.opened_at_ms) ??
+      (num(o.opened_at) != null ? num(o.opened_at)! * 1000 : num(o.open_for_s) != null ? Date.now() - num(o.open_for_s)! * 1000 : null),
     known: true,
+    manyWrongPasswords: o.many_wrong_passwords === true,
+    hostTag: str(o.host_tag),
+    lobby: str(o.lobby),
     chatLog: (Array.isArray(o.chat_log) ? o.chat_log : []).flatMap((l, i) => {
       const c = readEngineChatLine(l);
       return c ? [{ n: c.id || i + 1, x: c.x, from: c.from, host: c.host, quick: c.quick, text: c.text, at: c.t }] : [];
@@ -303,9 +325,20 @@ export interface RoomBody {
   region?: Region | null;
   nearby?: boolean;
   lock?: boolean;
-  check_before?: boolean;
-  preview_shows?: Partial<PreviewShows>;
+  /** What people see before joining, all of it (the engine's PreviewShows), with `check`:
+   *  "Let people check their connection before asking". */
+  preview?: PreviewShows & { check: boolean };
   game?: { id: string; title: string } | null;
+  /** The first-time Public confirm was given on this device. */
+  public_ok?: boolean;
+}
+
+/** A room body as the engine reads it: Any language is "any", a hidden region is "hidden". */
+export function engineBody(b: RoomBody): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...b };
+  if ("lang" in b) out.lang = b.lang ?? "any";
+  if ("region" in b) out.region = b.region ?? "hidden";
+  return out;
 }
 
 /** Why the engine refused a room change, in words (design 3.1, 10.1). */
@@ -384,7 +417,7 @@ async function post(path: string, body: object): Promise<{ ok: true; json: unkno
  *  ok or the refusal; the panel reads the whole state after (useJoinHost polls every second). */
 export const roomApi = {
   /** Change the room's settings live (design 4): people in always stay. */
-  update: (addr: string, body: RoomBody) => post("/api/join/room", { addr, ...body }),
+  update: (addr: string, body: RoomBody) => post("/api/join/room", { addr, ...engineBody(body) }),
   lock: (addr: string, lock: boolean) => post("/api/join/room", { addr, lock }),
   /** Remove a player; `block`: "room" (not back in this room) or "always" (this computer). */
   kick: (addr: string, player: number, block: "room" | "always" | null) =>

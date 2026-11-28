@@ -287,7 +287,7 @@ places to start.
 
 | Family | Routes | What it's for |
 |---|---|---|
-| `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/logs/*`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. |
+| `engine` | `/api/version`, `/api/events`, `/api/event-journal`, `/api/engine-logs`, `/api/logs/*`, `/api/diag/*`, `/api/metrics`, `/api/openapi.json`, `/api/mgmt/call`, `/api/support` | The engine itself. `/api/mgmt/call` is the raw helper call, for when nothing else fits. `/api/support` is Thanks & Support (the supporters' names and the support links) for PS5Upload Play and Minion: public, reachable from the home network. |
 | `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes`, `/api/ps5/connect-timings`, `/api/ps5/link-history` | Which consoles there are and how they stand. See [Consoles, Tailscale and new devices](#consoles-tailscale-and-new-devices). |
 | `console-files` | `/api/ps5/list-dir`, `/api/ps5/fs/*`, `/api/ps5/disk-usage`, `/api/ps5/folder-sizes/*`, `/api/ps5/console-shares` | Files on the console; known folder sizes and measuring them. |
 | `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*`, `/api/tar/*` | Uploads and downloads. |

@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 
 import { tierLabel } from "../join/routeTier";
 import { carriesStream, streamParts, type RoomPreview } from "../lib/room/preview";
-import { hubMissText, type HubMiss } from "../lib/room/hubRooms";
-import { regionLabel } from "../lib/room/regions";
+import { type HubMiss } from "../lib/room/hubRooms";
+import { hubMissText } from "../lib/room/hubRoomsText";
+import { regionLabel } from "../lib/room/regionText";
 import type { Expected, RoomCard } from "../lib/room/rooms";
 import { useTr } from "../state/lang";
 import { PingBars } from "./PingBars";

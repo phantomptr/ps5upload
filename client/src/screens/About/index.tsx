@@ -16,6 +16,7 @@ import { useNavigate } from "react-router";
 
 import { useTr } from "../../state/lang";
 import { Button, Card, Badge } from "../../components";
+import { RoomNoticeText, useRoomNoticeTitle } from "../../components/RoomNoticeText";
 
 const AUTHOR_EMAIL = "phantomptr@gmail.com";
 const AUTHOR_SITE = "phantomptr.com";
@@ -37,6 +38,7 @@ const URLS = {
 /** `embedded`: shown as the About tab of Help, under that screen's own header. */
 export default function AboutScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const tr = useTr();
+  const noticeTitle = useRoomNoticeTitle();
   const navigate = useNavigate();
   const [version, setVersion] = useState<string>("");
 
@@ -207,6 +209,18 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
               "Use it only with hardware you own and content you lawfully own. It must not be used to copy, distribute, or run software you do not have the right to use.",
             )}
           </p>
+          {/* Play Rooms (13.0.0): the responsibility notice in full, always reachable here. */}
+          <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]" data-testid="about-disclaimer-rooms">
+            {tr(
+              "about_disclaimer_rooms",
+              undefined,
+              "Play Rooms, chat and voice: PS5Upload only gives you the tool. Nobody behind it runs, watches, records, stores or moderates rooms, chat, voice, names or room names, and it isn't responsible for what users say, share or do. You're responsible for your own conduct and for following the law and the rules of the platforms and games you use. Parents and guardians are responsible for supervising children. You can mute, hide, remove or block anyone.",
+            )}
+          </p>
+          <div className="mt-3 rounded-lg bg-[var(--color-surface)] p-3" data-testid="about-room-notice">
+            <p className="mb-1 text-sm font-medium">{noticeTitle}</p>
+            <RoomNoticeText className="space-y-1.5 text-xs leading-relaxed text-[var(--color-muted)]" />
+          </div>
           <div className="mt-4">
             <Button
               variant="secondary"

@@ -19697,10 +19697,12 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "Success."
           },
           "400": {
             "$ref": "#/components/responses/Error",
@@ -19734,7 +19736,7 @@
             "name": "addr",
             "required": true
           },
-          "response_schema": "json-unknown"
+          "response_schema": "struct"
         }
       }
     },
@@ -19762,10 +19764,12 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "Success."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -19795,7 +19799,7 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "json-unknown"
+          "response_schema": "struct"
         }
       }
     },
@@ -19967,10 +19971,12 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "Success."
           },
           "400": {
             "content": {
@@ -20025,7 +20031,7 @@
             "name": "addr",
             "required": true
           },
-          "response_schema": "json-unknown"
+          "response_schema": "struct"
         }
       }
     },
@@ -20110,10 +20116,12 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+            "description": "Success."
           },
           "400": {
             "$ref": "#/components/responses/Error",
@@ -20147,7 +20155,7 @@
             "name": "addr",
             "required": true
           },
-          "response_schema": "json-unknown"
+          "response_schema": "struct"
         }
       }
     },
@@ -55180,6 +55188,32 @@
         }
       }
     },
+    "/api/support": {
+      "get": {
+        "description": "GET /api/support: the names and links (`{rev, names, anonymous, links}`).",
+        "responses": {
+          "200": {
+            "description": "Success. The handler builds this answer in a way the generator cannot read."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The names and links (`{rev, names, anonymous, links}`)",
+        "tags": [
+          "support"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "none"
+        }
+      }
+    },
     "/api/tailnet": {
       "get": {
         "responses": {
@@ -55435,6 +55469,9 @@
                       "type": "object"
                     },
                     {
+                      "type": "string"
+                    },
+                    {
                       "properties": {
                         "age_ms": {},
                         "backend": {},
@@ -55525,7 +55562,7 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "literal"
+          "response_schema": "mixed"
         }
       }
     },
@@ -55547,15 +55584,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "action": {},
-                    "console": {},
-                    "found": {},
-                    "ok": {
-                      "type": "boolean"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "properties": {
+                        "action": {},
+                        "console": {},
+                        "found": {},
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
                     }
-                  },
-                  "type": "object"
+                  ]
                 }
               }
             },
@@ -55642,7 +55686,7 @@
             "name": "addr",
             "required": true
           },
-          "response_schema": "literal"
+          "response_schema": "mixed"
         }
       }
     },
@@ -57767,6 +57811,9 @@
     {
       "description": "This computer only, addressed as localhost. PS5UPLOAD_ALLOW_IP alone does not open these; PS5UPLOAD_ALLOW_AUTOMATION=1 does.",
       "name": "strict-local"
+    },
+    {
+      "name": "support"
     },
     {
       "name": "tailnet"

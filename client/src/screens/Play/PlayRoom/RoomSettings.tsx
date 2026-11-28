@@ -56,7 +56,7 @@ export function RoomSettings({
   const pick = async (v: Visibility) => {
     if (v === room.visibility) return;
     if (v === "public" && !(await publicGate(tr, askNotice, confirm))) return;
-    await actions.update({ visibility: v });
+    await actions.update(v === "public" ? { visibility: v, public_ok: true } : { visibility: v });
   };
   if (!room.known) {
     return (
@@ -81,6 +81,11 @@ export function RoomSettings({
       {open && (
         <div className="space-y-4 rounded-lg bg-[var(--color-surface)] p-3">
           <p className="text-xs text-[var(--color-muted)]">{tr("room_vis_never_removes", undefined, "Changing who can see your room never removes anyone.")}</p>
+          {room.manyWrongPasswords && (
+            <p className="text-xs text-[var(--color-warn)]" data-testid="room-many-wrong">
+              {tr("room_many_wrong", undefined, "Many wrong passwords. Change it?")}
+            </p>
+          )}
           <Input
             label={tr("room_name", undefined, "Name")}
             defaultValue={room.name}
@@ -170,9 +175,12 @@ export function RoomSettings({
 }
 
 /** "What people see before joining" (design 6.4). */
-function PreviewShows({ room, set }: { room: RoomInfo; set: (b: Parameters<RoomActions["update"]>[0]) => void }) {
+function PreviewShows({ room, set: setBody }: { room: RoomInfo; set: (b: Parameters<RoomActions["update"]>[0]) => void }) {
   const tr = useTr();
   const s = room.previewShows;
+  // The engine takes the whole set each time (a part left out would go back to its default).
+  const set = (b: { preview_shows?: Partial<RoomInfo["previewShows"]>; check_before?: boolean }) =>
+    setBody({ preview: { ...s, ...b.preview_shows, check: b.check_before ?? room.checkBefore } });
   return (
     <div className="space-y-1.5" data-testid="room-preview-shows">
       <p className="text-sm font-medium">{tr("room_preview_shows", undefined, "What people see before joining")}</p>

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { RefreshCw, Search, X } from "lucide-react";
 
-import { fetchHubPreview, fetchRooms, hubMissText, type HubMiss, type RoomsSource } from "../lib/room/hubRooms";
+import { fetchHubPreview, fetchRooms, type HubMiss, type RoomsSource } from "../lib/room/hubRooms";
+import { hubMissText } from "../lib/room/hubRoomsText";
 import { LANGUAGE_LIST } from "../lib/languageNames";
-import { playerNameProblem, nameProblemText } from "../lib/room/names";
+import { playerNameProblem } from "../lib/room/names";
+import { nameProblemText } from "../lib/room/nameText";
 import { hiddenRooms, historyFor, hideRoom, playedHosts } from "../lib/room/played";
 import type { Region } from "../lib/room/regions";
 import {

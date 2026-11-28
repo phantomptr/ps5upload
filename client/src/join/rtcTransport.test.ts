@@ -27,6 +27,7 @@ import {
   STUN_SERVERS,
   trackCodecs,
   usefulCandidate,
+  withKnockToken,
   type InternetInvite,
 } from "./rtcTransport";
 
@@ -734,6 +735,9 @@ describe("Play Rooms knocks over the hub", () => {
     hub.say({ t: "joined", gid: "G1" });
     await vi.advanceTimersByTimeAsync(0);
     expect(hub.sent[1]).toEqual({ t: "signal", to: "host", data: { knock: { via: "rooms", name: "Jo", device: "D", client: "web", ver: "13.0.0" } } });
+    // The seat the engine holds after ok: the hello resumes it.
+    expect(JSON.parse(withKnockToken(JSON.stringify({ hello: { name: "Jo" } }), "T1"))).toEqual({ hello: { name: "Jo", resume: "T1" } });
+    expect(withKnockToken("{\"ping\":1}", "T1")).toBe("{\"ping\":1}");
     expect(hub.signals("offer")).toEqual([]);
     hub.say({ t: "signal", from: "host", data: { knock: "wait" } });
     expect(stages[stages.length - 1]).toEqual({ kind: "asking" });

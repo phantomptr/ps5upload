@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { friendsConfirmed } from "../../lib/friendsGuard";
 import { useNavigate } from "react-router";
 import {
   BarChart3,
@@ -545,11 +546,14 @@ export function StreamPanel({
   const okToStop = useCallback(async () => {
     const n = friendsIn(joinHost).length;
     if (!n) return true;
-    return confirm({
-      title: tr("pt_confirm_stop", { n }, `Stopping Play ends Play Together for ${n} friend(s). Continue?`),
+    const ok = await confirm({
+      title: tr("pt_confirm_stop", { n }, `Stopping Play ends the Play Room for ${n} friend(s). Continue?`),
       confirmLabel: tr("join_confirm_continue", undefined, "Continue"),
       destructive: true,
     });
+    // The engine's guard asks too (409 / confirm_friends): this yes answers it.
+    if (ok) friendsConfirmed();
+    return ok;
   }, [joinHost, confirm, tr]);
   const otherStream = streaming && !running ? target : null;
   const otherProfile = otherStream ? profiles.find((p) => p.host === otherStream.host) ?? null : null;
@@ -1536,7 +1540,7 @@ export function StreamPanel({
               )}
               {!compact && (
                 <BarButton
-                  label={tr("pt_button", undefined, "Play Together")}
+                  label={tr("pt_button", undefined, "Play Room")}
                   active={togetherOpen || friendsPlaying > 0}
                   onClick={() => {
                     if (full) exitFull();

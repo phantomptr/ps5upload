@@ -88,7 +88,34 @@ represent and warrant that:
 4. you will not hold the authors, contributors, or distributors of the
    Software liable for any loss or damage of any kind.
 
-## 7. Indemnity
+## 7. Play Rooms, chat and voice
+
+Play Rooms let people play together, find rooms, send chat messages and talk
+by voice. About these features:
+
+1. the Software only provides a tool. The authors, contributors and
+   distributors do not operate, run, host or supervise any room, and are
+   not a party to anything that happens in one;
+2. nobody behind the Software monitors, records, stores, reviews or
+   moderates what users say, type, share or do, including chat, voice,
+   player names and room names. Chat and voice pass only between the
+   devices in a room and are kept only in memory while the room is open;
+3. each user is solely responsible for their own conduct, for the content
+   they send or share, and for following the laws that apply to them and
+   the rules and terms of the platforms and games they use;
+4. parents and guardians are responsible for supervising children who use
+   Play Rooms, chat or voice;
+5. the authors, contributors and distributors are not liable for any
+   content created by users or for any interaction, dispute, loss or harm
+   between users, in or out of a room; and
+6. the tools available are local mute, hide and block on each device, and
+   the host's remove, block, mute and room settings. Only play with people
+   you trust.
+
+Each app shows a short version of this notice, which must be accepted
+before first using chat, voice or public rooms.
+
+## 8. Indemnity
 
 You agree to indemnify, defend, and hold harmless the authors,
 contributors, and distributors of the Software from and against any
@@ -96,7 +123,7 @@ claims, liabilities, damages, losses, and expenses, including
 reasonable legal fees, arising out of or in any way connected with your
 use or misuse of the Software or your violation of these terms.
 
-## 8. Development process
+## 9. Development process
 
 The Software is developed with AI coding tools ("vibe-coded"), directed
 and tested by its maintainer. This is a deliberate choice to keep a fast
@@ -107,7 +134,7 @@ project of comparable size would. Releases are tested on real consoles
 before publication, but defects may remain. You accept the Software on
 that basis and use it at your own discretion.
 
-## 9. Severability and governing terms
+## 10. Severability and governing terms
 
 If any provision of this disclaimer is held to be unenforceable or
 invalid, that provision shall be limited or eliminated to the minimum
@@ -120,7 +147,7 @@ distributed. See [LICENSE](LICENSE). Where this disclaimer and the
 licence differ on warranty and liability, the broader exclusion
 applies to the maximum extent permitted by applicable law.
 
-## 10. If you do not agree
+## 11. If you do not agree
 
 If you do not agree with any part of this disclaimer, **do not
 download, build, install, or use the Software**, and delete any copy in

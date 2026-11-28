@@ -277,7 +277,7 @@ test("an old Play › Receive link opens the Share screen", async ({ page }) => 
   await expect(page.getByTestId("share-screen")).toBeVisible();
   await expect(page.getByTestId("receive-link")).toHaveValue(LINK);
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("radio", { name: "Play Together" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("radio", { name: "Play Room" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("radio", { name: "Receive" })).toHaveCount(0);
 });
 

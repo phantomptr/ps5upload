@@ -58,6 +58,10 @@ void import("./lib/appJournal").then(({ recordAppEvent }) =>
 // command errors) only reaches the dev terminal during `tauri dev` —
 // packaged users would see nothing when something goes wrong.
 installEngineLogBridge();
+// Play Rooms (13.0.0): an engine call that would end friends' game asks first (lib/friendsGuard).
+void Promise.all([import("./lib/friendsGuard"), import("./state/engine")]).then(([g, e]) =>
+  g.installFriendsGuard((url) => url.startsWith(e.getEngineUrl())),
+);
 // "Detailed logs" (Logs tab): tell the engine, and turn it off when its time is up.
 void import("./lib/logLevels").then((m) => m.installLogLevels());
 

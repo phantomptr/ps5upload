@@ -1,0 +1,10 @@
+{
+  "kofi": "https://ko-fi.com/B0B81S0WUA",
+  "thanks_page": "https://ps5upload.phantomptr.com/#thanks",
+  "crypto": [
+    { "id": "btc", "coin": "BTC", "name": "Bitcoin", "network": "Bitcoin", "address": "bc1q36gxkvd3wfxy9azm8hft3rru9m6m9hjvn7u20n", "color": "#f7931a" },
+    { "id": "eth", "coin": "ETH", "name": "Ethereum", "network": "Ethereum", "address": "0x2e787654db543B69FB011E16995C274dFAfc2286", "color": "#627eea" },
+    { "id": "sol", "coin": "SOL", "name": "Solana", "network": "Solana", "address": "G1q5XCCn3mePYpcx7uY17CwDsUaAZTcty56huUDvVqjG", "color": "#9945ff" },
+    { "id": "xrp", "coin": "XRP", "name": "XRP", "network": "XRP Ledger", "address": "rEVq3si3sm9NuWNuZiUZFKsUtwC3w9SrjR", "color": "#2a9df4" }
+  ]
+}

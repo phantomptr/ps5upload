@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Lock } from "lucide-react";
 
-import { regionLabel } from "../lib/room/regions";
+import { regionLabel } from "../lib/room/regionText";
 import { versionForProto, type CardAction, type Expected, type RoomCard } from "../lib/room/rooms";
 import { languageName } from "../lib/languageNames";
 import { useTr } from "../state/lang";

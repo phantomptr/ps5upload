@@ -583,7 +583,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             hint={tr(
               "rp_picture_here_hint",
               undefined,
-              "Off, new streams start with no picture, sound or controller here, which saves this device's CPU and battery. Friends in Play Together and Go live still get the stream, and you can turn it on from the stream at any time.",
+              "Off, new streams start with no picture, sound or controller here, which saves this device's CPU and battery. Friends in your Play Room and Go live still get the stream, and you can turn it on from the stream at any time.",
             )}
           />
         </Section>

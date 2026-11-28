@@ -8,7 +8,7 @@ import { InternetHint } from "./NetworkChoice";
 import { joinApi, setPendingRoom } from "./playTogetherState";
 import { CreateRoomFields, createBody } from "./PlayRoom/CreateRoom";
 import { PlayAppTip } from "./PlayRoom/PlayAppTip";
-import { defaultRoomName } from "../../lib/room/names";
+import { defaultRoomName } from "../../lib/room/nameText";
 import { useRoomDraft } from "../../state/roomDraft";
 import { useMeshStore } from "../../state/mesh";
 import { PlayAppInstall } from "./PlayAppInstall";
@@ -148,7 +148,7 @@ export function PlayTogetherStartView({
             {tr(
               "pt_wifi_only_setting",
               undefined,
-              "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Together.",
+              "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Room.",
             )}
           </p>
           <Button size="sm" variant="ghost" leftIcon={<Settings2 size={14} />} onClick={() => navigate("/settings")}>

@@ -38,6 +38,7 @@ import { peopleIn } from "../../lib/room/room";
 import { useLangStore } from "../../state/lang";
 import { PlayerMenu } from "./PlayRoom/PlayerMenu";
 import { RoomHeader } from "./PlayRoom/RoomHeader";
+import { HostVoice } from "./PlayRoom/HostVoice";
 import { useRoomNotice } from "./PlayRoom/RoomNotice";
 import { RoomSettings, viaText } from "./PlayRoom/RoomSettings";
 import { useRoomActions, type RoomActions } from "./PlayRoom/useRoomActions";
@@ -526,7 +527,7 @@ export function PlayTogetherPanel({
   const share = async () => {
     if (!link) return;
     try {
-      await navigator.share({ title: tr("pt_button", undefined, "Play Together"), text: tr("pt_share_text", undefined, "Join my game on my PS5"), url: link });
+      await navigator.share({ title: tr("pt_button", undefined, "Play Room"), text: tr("pt_share_text", undefined, "Join my game on my PS5"), url: link });
     } catch {
       // Closed without sharing.
     }
@@ -593,7 +594,7 @@ export function PlayTogetherPanel({
             {tr(
               "pt_helper_old_body",
               undefined,
-              "The helper running on the PS5 is older than Play Together. Send the new one, then open this again.",
+              "The helper running on the PS5 is older than Play Rooms. Send the new one, then open this again.",
             )}
           </Callout>
         </div>
@@ -606,7 +607,7 @@ export function PlayTogetherPanel({
                 undefined,
                 "A reverse proxy on the engine's computer is in the way. On the engine, set PS5UPLOAD_ALLOW_HOST to this page's name, and PS5UPLOAD_TRUSTED_PROXY to the proxy's address.",
               )
-            : tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
+            : tr("pt_unavailable", undefined, "Your Play Room could not start. Check that the engine is up to date.")}
           {why && why !== "host_not_local" ? ` (${why})` : ""}
         </p>
       )}
@@ -744,7 +745,7 @@ export function PlayTogetherPanel({
                   : tr(
                       "pt_wifi_only_setting",
                       undefined,
-                      "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Together.",
+                      "Invites work only on your Wi-Fi. For friends somewhere else, set Invites work to Anywhere in Settings › App › Play Room.",
                     )}
               </p>
             )}
@@ -846,6 +847,8 @@ export function PlayTogetherPanel({
           ))}
         </ul>
       )}
+
+      {helperOk && !failed && state.room.known && <HostVoice voiceMode={state.room.voice} ensureNotice={() => notice.ask("voice")} />}
 
       {helperOk && !failed && state.room.known && (
         <RoomChatBox

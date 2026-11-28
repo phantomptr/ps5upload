@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { addLine, ChatPace, cleanChat, hideRude, quickText, readChat, unread, type ChatLine } from "./chat";
-import { b64url, fromB64url, knockNoText, knockStep, readKnockReply, seal } from "./knock";
+import { b64url, fromB64url, knockStep, readKnockReply, seal } from "./knock";
+import { knockNoText } from "./knockText";
 import { cleanName, looksLikeCode, looksLikeLink, nameKey, playerNameProblem, roomNameProblem } from "./names";
 import { carriesStream, readPreview, streamParts } from "./preview";
 import { nearRegion, readRegion, regionEstMs, regionFromTimeZone } from "./regions";
@@ -196,7 +197,9 @@ describe("room state", () => {
     expect(r.startMuted).toBe(true);
     expect(r.locked).toBe(true);
     expect(r.previewShows).toEqual({ names: true, pings: false, stream: true, time: true });
-    expect(r.listed).toEqual({ state: "refused", why: "name" });
+    expect(r.listed).toEqual({ state: "refused", why: "name", untilUnix: null });
+    expect(readRoom({ listed: { state: "not_listed", why: "hub" } }).listed.state).toBe("refused");
+    expect(readRoom({ listed: { state: "not_listed", why: "old_hub" } }).listed.state).toBe("old_hub");
     expect(r.blocked).toEqual([{ name: "Jo", tag: "9C11", at: 5 }]);
     expect(r.hostLink).toEqual({ rttMs: 2, tier: "excellent" });
     expect(r.ready).toEqual({ leftS: 20, ready: [2, 3] });
@@ -442,7 +445,8 @@ describe("voice", () => {
 describe("knocks", () => {
   it("reads the host's answers", () => {
     expect(readKnockReply({ knock: "wait" })).toEqual({ kind: "wait" });
-    expect(readKnockReply({ knock: "ok" })).toEqual({ kind: "ok" });
+    expect(readKnockReply({ knock: "ok" })).toEqual({ kind: "ok", token: null, lobby: null });
+    expect(readKnockReply({ knock: "ok", token: "T1", lobby: "L" })).toEqual({ kind: "ok", token: "T1", lobby: "L" });
     expect(readKnockReply({ knock: "no", why: "password", tries_left: 4 })).toEqual({ kind: "no", why: "password", triesLeft: 4, suggest: null });
     expect(readKnockReply({ knock: "no", why: "name_taken", name_taken: { suggest: "Sam (2)" } })).toMatchObject({ why: "name_taken", suggest: "Sam (2)" });
     expect(readKnockReply({ knock: "no", why: "weird" })).toMatchObject({ why: "no" });
@@ -468,8 +472,9 @@ describe("knocks", () => {
     const eph = await subtle.importKey("raw", raw.slice(0, 65), { name: "ECDH", namedCurve: "P-256" }, false, []);
     const shared = await subtle.deriveBits({ name: "ECDH", public: eph }, room.privateKey, 256);
     const hk = await subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
+    const info = new Uint8Array([...new TextEncoder().encode("ps5upload room knock v1"), ...raw.slice(0, 65)]);
     const key = await subtle.deriveKey(
-      { name: "HKDF", hash: "SHA-256", salt: challenge, info: new TextEncoder().encode("ps5upload-room-knock v1") },
+      { name: "HKDF", hash: "SHA-256", salt: challenge, info },
       hk,
       { name: "AES-GCM", length: 128 },
       false,

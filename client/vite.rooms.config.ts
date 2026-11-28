@@ -5,7 +5,8 @@
  * CORS). Localized like /join (vite.pagePlugins.ts: only the keys its modules use, in every
  * language). Joining hands over to the same site's /join/ page with the room in the fragment, the
  * same join flow as an invite. Not indexed (noindex): the list is people's rooms.
- * Budget: 400 KiB raw (a list, cards, Details, the notice; no player).
+ * Budget: 500 KiB raw (478.9 measured in 13.0.0: a list, cards, Details, the notice and their words
+ * in 21 languages; no player).
  */
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
@@ -14,7 +15,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlugins";
 import { pageCss } from "./vite.pageCss";
 
-const RAW_BUDGET = 400 * 1024;
+const RAW_BUDGET = 500 * 1024;
 const SITE_OUT = fileURLToPath(new URL("../site/rooms/index.html", import.meta.url));
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

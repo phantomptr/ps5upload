@@ -4,24 +4,27 @@
 // is sealed to the room's public key so only the host engine can read it, over a fresh challenge
 // per guest so a sealed blob can't be replayed.
 //
-// Seal (the byte layout the design leaves open; docs/ROOMS_DEVIATIONS.md):
-//   ephemeral P-256 key pair; shared = ECDH(eph, room pk)
-//   key = HKDF-SHA256(ikm shared, salt = challenge (16 B), info "ps5upload-room-knock v1") → 16 B
+// Seal (the engine's room_seal.rs, one format for the page, the apps and the engine):
+//   ephemeral P-256 key pair E; shared = ECDH(E, room pk) (the 32-byte x coordinate)
+//   key = HKDF-SHA256(ikm shared, salt = challenge (16 B), info = "ps5upload room knock v1" ‖
+//         E's 65-byte public point) → 16 B
 //   AES-128-GCM, 12-byte random nonce, additional data = the gid (UTF-8)
 //   plaintext = JSON {"pw"?: "...", "pass"?: "...", "gid": "...", "c": "<challenge b64url>"}
 //   blob = base64url(eph public key, uncompressed 65 B ‖ nonce 12 B ‖ ciphertext with tag)
 
 import type { Via } from "./room";
+import { ROOM_CAPS, ROOM_PROTO } from "./rooms";
 
-export type KnockNo = "no" | "full" | "locked" | "password" | "locked_out" | "host_away" | "not_listed" | "old" | "name_taken";
+export type KnockNo = "no" | "full" | "locked" | "password" | "locked_out" | "host_away" | "not_listed" | "old" | "name_taken" | "closed" | "not_playing";
 
-const NOS: readonly KnockNo[] = ["no", "full", "locked", "password", "locked_out", "host_away", "not_listed", "old", "name_taken"];
+const NOS: readonly KnockNo[] = ["no", "full", "locked", "password", "locked_out", "host_away", "not_listed", "old", "name_taken", "closed", "not_playing"];
 
 /** The host's answers to a knock. */
 export type KnockReply =
-  | { kind: "challenge"; c: Uint8Array }
+  | { kind: "challenge"; c: Uint8Array; pk: string | null }
   | { kind: "wait" }
-  | { kind: "ok" }
+  /** Let in: `token` resumes the seat on the data channel's hello (join_net/lobby.rs). */
+  | { kind: "ok"; token: string | null; lobby: string | null }
   | { kind: "no"; why: KnockNo; triesLeft: number | null; suggest: string | null };
 
 export function b64url(b: Uint8Array): string {
@@ -49,10 +52,13 @@ export function readKnockReply(data: unknown): KnockReply | null {
   const k = o.knock;
   if (k === "challenge") {
     const c = typeof o.c === "string" ? fromB64url(o.c) : null;
-    return c && c.length >= 8 && c.length <= 64 ? { kind: "challenge", c } : null;
+    const pk = typeof o.pk === "string" && /^[A-Za-z0-9_-]{40,100}$/.test(o.pk) ? o.pk : null;
+    return c && c.length >= 8 && c.length <= 64 ? { kind: "challenge", c, pk } : null;
   }
   if (k === "wait") return { kind: "wait" };
-  if (k === "ok") return { kind: "ok" };
+  if (k === "ok") {
+    return { kind: "ok", token: typeof o.token === "string" && o.token ? o.token : null, lobby: typeof o.lobby === "string" && o.lobby ? o.lobby : null };
+  }
   if (k === "no") {
     const why = typeof o.why === "string" && (NOS as readonly string[]).includes(o.why) ? (o.why as KnockNo) : "no";
     const left = typeof o.tries_left === "number" ? o.tries_left : null;
@@ -65,7 +71,7 @@ export function readKnockReply(data: unknown): KnockReply | null {
 
 /** The first knock signal: who asks and how they found the room. */
 export function knockHello(o: { via: Via; name: string; device: string; client: string; ver: string }): Record<string, unknown> {
-  return { knock: { via: o.via, name: o.name, device: o.device, client: o.client, ver: o.ver } };
+  return { knock: { via: o.via, name: o.name, device: o.device, client: o.client, ver: o.ver, proto: ROOM_PROTO, caps: [...ROOM_CAPS] } };
 }
 
 /** What a knock carries to the host engine only. */
@@ -75,7 +81,7 @@ export interface KnockSecret {
   pass?: string;
 }
 
-const INFO = new TextEncoder().encode("ps5upload-room-knock v1");
+const INFO = new TextEncoder().encode("ps5upload room knock v1");
 
 /** Seals `secret` to the room key `pk` (base64url, uncompressed P-256) for `gid` over the host's
  *  challenge. Null where this browser has no WebCrypto (a plain-http page): the knock then can't
@@ -90,13 +96,16 @@ export async function seal(pk: string, gid: string, challenge: Uint8Array, secre
     const shared = await subtle.deriveBits({ name: "ECDH", public: roomKey }, eph.privateKey, 256);
     const hk = await subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
     const salt = new Uint8Array(challenge);
-    const aes = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt, info: INFO }, hk, { name: "AES-GCM", length: 128 }, false, ["encrypt"]);
+    const pub = new Uint8Array(await subtle.exportKey("raw", eph.publicKey));
+    const info = new Uint8Array(INFO.length + pub.length);
+    info.set(INFO, 0);
+    info.set(pub, INFO.length);
+    const aes = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt, info }, hk, { name: "AES-GCM", length: 128 }, false, ["encrypt"]);
     const nonce = cryptoImpl.getRandomValues(new Uint8Array(12));
     const body = new TextEncoder().encode(JSON.stringify({ ...secret, gid, c: b64url(challenge) }));
     const ct = new Uint8Array(
       await subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(gid) }, aes, body),
     );
-    const pub = new Uint8Array(await subtle.exportKey("raw", eph.publicKey));
     const out = new Uint8Array(pub.length + nonce.length + ct.length);
     out.set(pub, 0);
     out.set(nonce, pub.length);
@@ -131,34 +140,5 @@ export function knockStep(stage: KnockStage, r: KnockReply, now: number): KnockS
       return { kind: "ok" };
     case "no":
       return { kind: "no", why: r.why, triesLeft: r.triesLeft, suggest: r.suggest };
-  }
-}
-
-type Tr = (key: string, vars: Record<string, string | number> | undefined, fallback: string) => string;
-
-/** A refusal in the room's words (design 8), the same on every surface. A blocked person gets
- *  the plain "said no" (never told they are blocked). */
-export function knockNoText(tr: Tr, why: KnockNo, host: string, triesLeft: number | null = null): string {
-  switch (why) {
-    case "full":
-      return tr("room_no_full", undefined, "The room is full.");
-    case "locked":
-      return tr("room_no_locked", undefined, "The room isn't taking players right now.");
-    case "host_away":
-      return tr("room_no_host_away", undefined, "Your host isn't there to answer right now.");
-    case "password":
-      return triesLeft != null
-        ? tr("room_no_password_left", { n: triesLeft }, `Wrong password. ${triesLeft} tries left.`)
-        : tr("room_no_password", undefined, "Wrong password.");
-    case "locked_out":
-      return tr("room_no_locked_out", undefined, "Too many tries. Try again in 10 minutes.");
-    case "not_listed":
-      return tr("room_no_closed", undefined, "This room is closed.");
-    case "old":
-      return tr("room_no_old", undefined, "Update to join (needs PS5Upload 13.0.0 or newer).");
-    case "name_taken":
-      return tr("room_no_name_taken", undefined, "Someone in this room already has that name.");
-    default:
-      return tr("room_no_said_no", { host }, `${host} said no.`);
   }
 }

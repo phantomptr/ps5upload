@@ -71,7 +71,7 @@ export function PlayAppPairing() {
           {tr(
             "pa_intro",
             undefined,
-            "Answer friends and run Play Together from your PS5. Open PS5Upload Play on the PS5, choose Pair, then type the code it shows.",
+            "Answer friends and run your Play Room from your PS5. Open PS5Upload Play on the PS5, choose Pair, then type the code it shows.",
           )}
         </p>
       </div>

@@ -8,7 +8,7 @@ import type { MeshJoin } from "../../api/mesh";
 import type { GuestState } from "../../lib/joinProtocol";
 import { getEngineUrl } from "../../state/engine";
 import { readTier, slowEnough, tierOfMs, type Tier } from "../../join/routeTier";
-import { readRoom, readRoomAsk, readRoomPlayer, roomApi, DEFAULT_ROOM, type RoomAsk, type RoomBody, type RoomInfo, type RoomPlayer } from "../../lib/room/room";
+import { engineBody, readRoom, readRoomAsk, readRoomPlayer, roomApi, DEFAULT_ROOM, type RoomAsk, type RoomBody, type RoomInfo, type RoomPlayer } from "../../lib/room/room";
 
 export interface JoinGuest {
   id: number;
@@ -868,7 +868,7 @@ export const joinApi = {
    *  (`room`; an engine before rooms ignores it). Kept for a retry until an open answers. */
   open: async (addr: string) => {
     const room = pendingRoom;
-    const r = await whole("/api/join/open", addr, room ? { room } : {});
+    const r = await whole("/api/join/open", addr, room ? { room: engineBody(room) } : {});
     if (r.state && pendingRoom === room) {
       pendingRoom = null;
       // Chat and voice modes have their own route (join_comms).

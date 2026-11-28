@@ -37,7 +37,7 @@ export function TvJoinCard({ className = "" }: { className?: string }) {
       </span>
       <div className="min-w-0 flex-1">
         <h2 className="text-xl font-semibold">
-          {tr("pt_title", undefined, "Play Together")}
+          {tr("pt_title", undefined, "Play Room")}
         </h2>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
           {tr(
@@ -54,7 +54,7 @@ export function TvJoinCard({ className = "" }: { className?: string }) {
         onClick={() => navigate("/play?mode=friend")}
         data-testid="tv-join-go"
       >
-        {tr("tv_join_button", undefined, "Join Play Together")}
+        {tr("tv_join_button", undefined, "Join a Play Room")}
       </Button>
     </section>
   );

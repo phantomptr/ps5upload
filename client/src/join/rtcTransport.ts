@@ -299,6 +299,18 @@ export function resetPrejoin(): void {
 }
 
 /** The WebSocket-shaped transport for an internet invite. Each instance is one attempt. */
+/** The session's hello after a let-in knock: it resumes the seat the engine holds (`token`), as
+ *  join_net/lobby.rs says; any other message goes as it is. */
+export function withKnockToken(text: string, token: string): string {
+  try {
+    const m = JSON.parse(text) as { hello?: Record<string, unknown> };
+    if (!m || typeof m !== "object" || !m.hello || typeof m.hello !== "object" || m.hello.resume) return text;
+    return JSON.stringify({ ...m, hello: { ...m.hello, resume: token } });
+  } catch {
+    return text;
+  }
+}
+
 export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): JoinTransport {
   const WS = o.WebSocketImpl ?? (typeof WebSocket === "undefined" ? undefined : WebSocket);
   const PC = o.PeerConnection ?? (typeof RTCPeerConnection === "undefined" ? undefined : RTCPeerConnection);
@@ -339,6 +351,8 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
     /** Play Rooms: knocking (no offer until the host says ok), this page's gid in the lobby. */
     private knocking = false;
     private gid = "";
+    /** The seat the host's engine holds for a let-in knock: the hello resumes it. */
+    private knockToken: string | null = null;
     /** The video track, once the answer brought it (the session reads it when joined). */
     media: TrackMedia | null = null;
 
@@ -458,7 +472,8 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       if (!r || !o.knock) return;
       switch (r.kind) {
         case "challenge": {
-          const blob = o.knock.pk && o.knock.secret ? await seal(o.knock.pk, this.gid, r.c, o.knock.secret) : null;
+          const pk = r.pk ?? o.knock.pk;
+          const blob = pk && o.knock.secret ? await seal(pk, this.gid, r.c, o.knock.secret) : null;
           // No key or no secret to seal: the host's check says no (a wrong password).
           this.signal(blob ? { knock: "sealed", blob } : { knock: "sealed", blob: "" });
           return;
@@ -468,6 +483,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
           return;
         case "ok":
           this.knocking = false;
+          this.knockToken = r.token;
           log("knock: let in");
           void this.sendOffer();
           return;
@@ -683,7 +699,7 @@ export function rtcTransport(inv: InternetInvite, o: RtcTransportOptions = {}): 
       const dc = this.dc;
       if (this.readyState !== 1 || !dc || dc.readyState !== "open") throw new Error("not open");
       if (typeof data === "string") {
-        dc.send(data);
+        dc.send(this.knockToken ? withKnockToken(data, this.knockToken) : data);
         return;
       }
       const bytes = ArrayBuffer.isView(data)

@@ -103,7 +103,7 @@ export function PlayTogetherSettings() {
         {tr(
           "pt_unavailable",
           undefined,
-          "Play Together could not start. Check that the engine is up to date.",
+          "Your Play Room could not start. Check that the engine is up to date.",
         )}
       </p>
     );

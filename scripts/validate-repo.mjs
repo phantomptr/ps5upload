@@ -99,6 +99,7 @@ function androidNdkEnv() {
 
 runInline("version sync", "node", ["scripts/update-version.js", "--check"]);
 runInline("PS5Upload Play version", "node", ["scripts/check-play-version.mjs"]);
+runInline("support links", "node", ["scripts/check-support-data.mjs"]);
 runInline("script syntax", "node", ["scripts/check-scripts.mjs"]);
 // Plain sh, which a Windows host may not have on PATH (CI runs these on Linux).
 if (isWin) {

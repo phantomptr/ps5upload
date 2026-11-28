@@ -104,11 +104,6 @@ export const roomNameProblem = (raw: string) => nameProblem(raw, 3, 32);
 /** A player's name inside a room: 1–24 characters (design 3.5). */
 export const playerNameProblem = (raw: string) => nameProblem(raw, 1, 24);
 
-/** The default room name: "<host>'s room" (the words are the app's). */
-export function defaultRoomName(tr: (key: string, vars: Record<string, string>, fallback: string) => string, host: string): string {
-  const who = cleanName(host).slice(0, 20) || "PS5";
-  return tr("room_default_name", { name: who }, `${who}'s room`);
-}
 
 /** The comparison key two names are "the same" by (design 3.5): NFKC, case folded, invisible
  *  characters dropped, spaces collapsed, and the common Cyrillic/Greek look-alikes of Latin
@@ -121,26 +116,4 @@ export function nameKey(raw: string): string {
   return cleanName(raw.normalize("NFKC"))
     .toLowerCase()
     .replace(/./gu, (c) => LOOK[c] ?? c);
-}
-
-type Tr = (key: string, vars: undefined, fallback: string) => string;
-
-/** What to fix in a name, in words. */
-export function nameProblemText(tr: Tr, p: NameProblem, room: boolean): string {
-  switch (p) {
-    case "length":
-      return room
-        ? tr("room_name_length", undefined, "Use 3 to 32 characters.")
-        : tr("room_player_name_length", undefined, "Use 1 to 24 characters.");
-    case "chars":
-      return tr("room_name_chars", undefined, "Use letters, numbers, spaces and simple punctuation.");
-    case "link":
-      return tr("room_name_link", undefined, "Names can't have links.");
-    case "code":
-      return tr("room_name_code", undefined, "Names can't have codes or long numbers.");
-    case "reserved":
-      return tr("room_name_reserved", undefined, "Pick another name.");
-    case "spam":
-      return tr("room_name_spam", undefined, "Pick a name with fewer repeats and symbols.");
-  }
 }
