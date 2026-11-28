@@ -786,6 +786,25 @@ fn build(
     };
     let one_file = plan.image.is_some() || plan.pkg.is_some();
     if let Some(why) = probe.refusal(need, one_file, folder_build::SPARE) {
+        // A stored package this console can't open is refused for that, not for the room:
+        // freeing space would not help (the builder makes the same check once it starts).
+        if let (Some(_), Some(console), true) = (plan.pkg, plan.console_firmware, need > 0) {
+            let param = std::fs::read(plan.source.join("sce_sys/param.json")).unwrap_or_default();
+            let fit = ps5upload_fpkg::package_limit::check(
+                need,
+                false,
+                None,
+                Some(console),
+                None,
+                &ps5upload_fpkg::package_limit::param_sizes(&param),
+            );
+            if let Some(refusal) = fit.refusal {
+                return Err(Refusal {
+                    cause: "convert_too_big_for_firmware",
+                    detail: refusal,
+                });
+            }
+        }
         let cause = if probe.read_only {
             "convert_dest_read_only"
         } else if why.contains("at most") {
