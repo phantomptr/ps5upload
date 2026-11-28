@@ -5,13 +5,16 @@ import { Button, Select } from "../../components";
 import {
   addExtra,
   blankProfile,
+  deadzonesById,
   defaultProfileFor,
   detectPress,
+  loadDeadzones,
   loadProfiles,
   MAP_STEPS,
   PadLearner,
   padKind,
   profileFor,
+  saveDeadzones,
   saveProfile,
   snapshot,
   withStandardGaps,
@@ -22,7 +25,14 @@ import { isWeak8BitDo, padName } from "../../lib/padMappings";
 import { EightBitDoHint } from "./PadHint";
 import { gamepadsOf } from "../../lib/nativePad";
 import { setPadForwardReason } from "../../lib/androidPadBridge";
-import { PadButton, type PadProfile } from "../../lib/remotePlayStream";
+import {
+  axisValue,
+  MAX_STICK_DEADZONE,
+  PadButton,
+  USUAL_STICK_DEADZONE,
+  type PadProfile,
+  type StickDeadzones,
+} from "../../lib/remotePlayStream";
 import { useTr } from "../../state/lang";
 import { rpInput } from "../../state/remotePlay";
 
@@ -121,7 +131,14 @@ function usePadFrames(on: boolean, index: number, cb: (s: PadSnapshot | null) =>
   }, [on, index]);
 }
 
-type Mode = { kind: "idle" } | { kind: "map"; pad: PadInfo } | { kind: "extra"; pad: PadInfo };
+type Mode =
+  | { kind: "idle" }
+  | { kind: "map"; pad: PadInfo }
+  | { kind: "extra"; pad: PadInfo }
+  | { kind: "deadzone"; pad: PadInfo };
+
+/** A dead zone as a whole percent. */
+const pct = (v: number) => Math.round(v * 100);
 
 /** Controllers: which are connected, whether each is recognized, and mapping any of them by
  *  pressing its buttons in turn. Phone controllers (Backbone, Kishi, GameSir, Nomad...) are
@@ -130,6 +147,7 @@ export function ControllerSetup() {
   const tr = useTr();
   const pads = useConnectedPads();
   const [saved, setSaved] = useState(loadProfiles);
+  const [savedDz, setSavedDz] = useState(loadDeadzones);
   const [mode, setMode] = useState<Mode>({ kind: "idle" });
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -157,6 +175,7 @@ export function ControllerSetup() {
         <ul className="space-y-2">
           {pads.map((p) => {
             const mapped = !!saved[p.id];
+            const dz = deadzonesById(savedDz, p.id);
             return (
               <li
                 key={`${p.index}-${p.id}`}
@@ -179,6 +198,15 @@ export function ControllerSetup() {
                             undefined,
                             "Not recognized: it plays in the usual layout. If a button is wrong, map them.",
                           )}
+                    {dz && (
+                      <span className="block" data-testid="rp-pad-deadzone-status">
+                        {tr(
+                          "rp_pad_deadzone_status",
+                          { left: pct(dz.left), right: pct(dz.right) },
+                          `Stick dead zones: left ${pct(dz.left)}%, right ${pct(dz.right)}%`,
+                        )}
+                      </span>
+                    )}
                   </div>
                 </div>
                 {mode.kind === "idle" && (
@@ -188,6 +216,9 @@ export function ControllerSetup() {
                     </Button>
                     <Button size="sm" variant="secondary" onClick={() => setMode({ kind: "extra", pad: p })}>
                       {tr("rp_pad_extra", undefined, "Set an extra button")}
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => setMode({ kind: "deadzone", pad: p })} data-testid="rp-pad-deadzone">
+                      {tr("rp_pad_deadzone", undefined, "Stick dead zones")}
                     </Button>
                     {mapped && (
                       <Button
@@ -217,6 +248,22 @@ export function ControllerSetup() {
           pad={mode.pad}
           onCancel={() => setMode({ kind: "idle" })}
           onDone={(prof) => done(mode.pad.id, prof, tr("rp_pad_extra_done", undefined, "Saved: the extra button is set."))}
+        />
+      )}
+      {mode.kind === "deadzone" && (
+        <DeadzoneEditor
+          pad={mode.pad}
+          initial={deadzonesById(savedDz, mode.pad.id) ?? { left: 0, right: 0 }}
+          onCancel={() => setMode({ kind: "idle" })}
+          onDone={(dz) => {
+            setSavedDz(saveDeadzones(mode.pad.id, dz));
+            setMode({ kind: "idle" });
+            setNotice(
+              dz.left > 0 || dz.right > 0
+                ? tr("rp_pad_deadzone_saved", undefined, "Saved: this controller plays with its own stick dead zones.")
+                : tr("rp_pad_deadzone_off", undefined, "Stick dead zones are back to the usual."),
+            );
+          }}
         />
       )}
       {notice && mode.kind === "idle" && (
@@ -335,6 +382,114 @@ function ExtraButton({ pad, onCancel, onDone }: { pad: PadInfo; onCancel: () => 
             }}
           >
             {tr("rp_pad_extra_save", undefined, "Save")}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          {tr("rp_pad_cancel", undefined, "Cancel")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** How far out (0-1) each stick of the controller at `index` is now, read through its profile;
+ *  null when it is gone. Updated every frame while mounted. */
+function useStickReach(index: number): StickDeadzones | null {
+  const [reach, setReach] = useState<StickDeadzones | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const g = padAt(index);
+      if (!g?.connected) setReach(null);
+      else {
+        const prof = profileFor(g);
+        const mag = (ax: PadProfile["lx"], ay: PadProfile["ly"]) =>
+          Math.min(1, Math.hypot(ax ? axisValue(g, ax) : 0, ay ? axisValue(g, ay) : 0));
+        const left = Math.round(mag(prof.lx, prof.ly) * 100) / 100;
+        const right = Math.round(mag(prof.rx, prof.ry) * 100) / 100;
+        setReach((old) => (old && old.left === left && old.right === right ? old : { left, right }));
+      }
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [index]);
+  return reach;
+}
+
+/** A dead zone per stick, for a worn stick that drifts: let go of the stick, see where it rests,
+ *  and set the zone a little past that. */
+function DeadzoneEditor({
+  pad,
+  initial,
+  onCancel,
+  onDone,
+}: {
+  pad: PadInfo;
+  initial: StickDeadzones;
+  onCancel: () => void;
+  onDone: (dz: StickDeadzones) => void;
+}) {
+  const tr = useTr();
+  const [dz, setDz] = useState<StickDeadzones>(initial);
+  const reach = useStickReach(pad.index);
+  const max = pct(MAX_STICK_DEADZONE);
+
+  const row = (which: keyof StickDeadzones, label: string) => {
+    const now = reach ? pct(reach[which]) : null;
+    // A zone under the usual one plays as the usual one (remotePlayStream.ts).
+    const inside = now !== null && now <= Math.max(pct(dz[which]), pct(USUAL_STICK_DEADZONE));
+    return (
+      <div className="space-y-1">
+        <label className="flex items-center gap-3 text-xs">
+          <span className="w-24 shrink-0">{label}</span>
+          <input
+            type="range"
+            min={0}
+            max={max}
+            value={pct(dz[which])}
+            onChange={(e) => setDz((d) => ({ ...d, [which]: Number(e.target.value) / 100 }))}
+            className="min-w-0 flex-1 accent-[var(--color-accent)]"
+            aria-label={label}
+            data-testid={`rp-pad-deadzone-${which}`}
+          />
+          <span className="w-10 text-end tabular-nums">{pct(dz[which])}%</span>
+        </label>
+        {now !== null && (
+          <p className={`text-xs ${inside ? "text-[var(--color-muted)]" : "text-[var(--color-warn)]"}`}>
+            {inside
+              ? tr("rp_pad_deadzone_now_in", { n: now }, `Now ${now}% out: inside the zone, the PS5 sees it centered.`)
+              : tr("rp_pad_deadzone_now_out", { n: now }, `Now ${now}% out: past the zone, the PS5 sees it move.`)}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-3 rounded-[var(--radius-card)] border border-[var(--color-accent)] p-3" data-testid="rp-pad-deadzone-editor">
+      <div className="text-xs text-[var(--color-muted)]">{padName(pad.id)}</div>
+      <p className="text-xs text-[var(--color-muted)]">
+        {tr(
+          "rp_pad_deadzone_hint",
+          undefined,
+          "For a stick that moves by itself (drift): let go of it, see how far out it rests, and set its zone a little past that. Pushed all the way still reaches the end. Under 8% is the usual small zone.",
+        )}
+      </p>
+      {row("left", tr("rp_pad_deadzone_left", undefined, "Left stick"))}
+      {row("right", tr("rp_pad_deadzone_right", undefined, "Right stick"))}
+      {!reach && (
+        <p className="text-xs text-[var(--color-warn)]">
+          {tr("rp_pad_gone", undefined, "The controller went away. Press a button on it.")}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="primary" onClick={() => onDone(dz)} data-testid="rp-pad-deadzone-save">
+          {tr("rp_pad_extra_save", undefined, "Save")}
+        </Button>
+        {(initial.left > 0 || initial.right > 0) && (
+          <Button size="sm" variant="ghost" onClick={() => onDone({ left: 0, right: 0 })}>
+            {tr("rp_pad_reset", undefined, "Reset")}
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={onCancel}>

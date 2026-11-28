@@ -322,27 +322,62 @@ export function guessProfile(g: Gamepad): PadProfile {
 /** The usual layout plus a hat d-pad, per controller seen with one. */
 const hatGuesses = new Map<string, PadProfile>();
 
+/** A controller's own stick dead zones, 0-1 of the way out (0: the usual small one). For a worn
+ *  stick that drifts: one resting at 80% plays as centered with 0.85. */
+export interface StickDeadzones {
+  left: number;
+  right: number;
+}
+
+/** The largest dead zone kept: past it, a stick could not reach anything but full. */
+export const MAX_STICK_DEADZONE = 0.95;
+
+/** The usual dead zone, on each axis: a controller's own zone is never smaller. */
+export const USUAL_STICK_DEADZONE = 0.08;
+
+/** A stick through a round dead zone `dz` (0-1): inside it reads centered; outside, the rest of
+ *  the way is stretched back in the same direction, so the edge is still all the way and a small
+ *  push past the zone is a small move, not a jump. Not clamped: a square gate's corner or a hat's
+ *  diagonal goes past 1 and is clamped on each axis by the caller, so it stays full on both. */
+export function stickDeadzone(x: number, y: number, dz: number): [number, number] {
+  const mag = Math.hypot(x, y);
+  if (!(dz > 0)) return [x, y];
+  if (mag <= dz) return [0, 0];
+  const k = (mag - dz) / (1 - dz) / mag;
+  return [x * k, y * k];
+}
+
 /** The pad the connected controllers amount to (all of them, merged), each read through its
- *  profile. */
+ *  profile, and its own stick dead zones when it has them. */
 export function padFromGamepads(
   pads: ReadonlyArray<Gamepad | null>,
   profileOf: (g: Gamepad) => PadProfile = guessProfile,
+  deadzonesOf: (g: Gamepad) => StickDeadzones | null = () => null,
 ): PadState {
   const p = { ...IDLE_PAD };
-  const axis = (v: number) => (Math.abs(v) < 0.08 ? 0 : clampAxis(v * 32767));
+  const axis = (v: number) => (Math.abs(v) < USUAL_STICK_DEADZONE ? 0 : clampAxis(v * 32767));
   // Several pads: the stick pushed furthest wins, so a resting pad does not cancel another.
   const pick = (cur: number, v: number) => (Math.abs(v) > Math.abs(cur) ? v : cur);
-  const stick = (g: Gamepad, ax: PadAxis | null) => (ax ? axis(axisValue(g, ax)) : 0);
+  const stick = (g: Gamepad, ax: PadAxis | null, ay: PadAxis | null, dz: number): [number, number] => {
+    const x = ax ? axisValue(g, ax) : 0;
+    const y = ay ? axisValue(g, ay) : 0;
+    if (!(dz > 0)) return [axis(x), axis(y)];
+    const [dx, dy] = stickDeadzone(x, y, Math.min(Math.max(dz, USUAL_STICK_DEADZONE), MAX_STICK_DEADZONE));
+    return [clampAxis(dx * 32767), clampAxis(dy * 32767)];
+  };
   for (const g of pads) {
     if (!g || !g.connected) continue;
     const prof = profileOf(g);
+    const dz = deadzonesOf(g);
     for (const [bit, src] of prof.buttons) if (sourceValue(g, src) > 0.5) p.buttons |= bit;
     if (prof.l2) p.l2 = Math.max(p.l2, Math.round(sourceValue(g, prof.l2, true) * 255));
     if (prof.r2) p.r2 = Math.max(p.r2, Math.round(sourceValue(g, prof.r2, true) * 255));
-    p.lx = pick(p.lx, stick(g, prof.lx));
-    p.ly = pick(p.ly, stick(g, prof.ly));
-    p.rx = pick(p.rx, stick(g, prof.rx));
-    p.ry = pick(p.ry, stick(g, prof.ry));
+    const [lx, ly] = stick(g, prof.lx, prof.ly, dz?.left ?? 0);
+    const [rx, ry] = stick(g, prof.rx, prof.ry, dz?.right ?? 0);
+    p.lx = pick(p.lx, lx);
+    p.ly = pick(p.ly, ly);
+    p.rx = pick(p.rx, rx);
+    p.ry = pick(p.ry, ry);
   }
   return p;
 }

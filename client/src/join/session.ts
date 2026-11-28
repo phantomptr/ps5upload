@@ -10,7 +10,7 @@ import { useSyncExternalStore } from "react";
 import { JoinClient, type JoinStage } from "../lib/joinClient";
 import type { JoinStatus } from "../lib/joinProtocol";
 import { gamepadsOf } from "../lib/nativePad";
-import { profileFor } from "../lib/padProfiles";
+import { deadzonesFor, profileFor } from "../lib/padProfiles";
 import {
   DEFAULT_KEYMAP,
   IDLE_PAD,
@@ -178,7 +178,7 @@ export function withRoute(
 export function devicePad(): PadState {
   // Checking the controller (PadCheck): its presses are not the game's.
   if (padChecking) return { ...IDLE_PAD };
-  const pads = padFromGamepads(gamepadsOf(typeof navigator === "undefined" ? undefined : navigator), profileFor);
+  const pads = padFromGamepads(gamepadsOf(typeof navigator === "undefined" ? undefined : navigator), profileFor, deadzonesFor);
   const touch = rpInput.touchPad;
   const merged = mergePads(mergePads(pads, padFromKeys(guestHeld, GUEST_KEYMAP)), touch);
   return { ...merged, touch: touch.touch ?? null, motion: rpInput.motion ?? null };
