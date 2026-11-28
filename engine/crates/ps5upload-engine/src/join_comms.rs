@@ -324,6 +324,30 @@ impl Room {
         now.saturating_duration_since(self.t0).as_secs()
     }
 
+    /// Takes socket `gen` off person `pid`. When it was their last, their mic goes off and nobody
+    /// hears them any more (it is off again on their return).
+    fn unlink(&mut self, pid: u64, gen: u64) {
+        let gone = self.people.get_mut(&pid).and_then(|p| {
+            p.links.retain(|(g, _)| *g != gen);
+            if p.here() {
+                return None;
+            }
+            p.mic_on = false;
+            p.ptt_down = false;
+            p.last_frame = None;
+            p.last_try = None;
+            p.slots = [None; join_voice::MAX_SPEAKERS];
+            Some(p.sid)
+        });
+        if let Some(sid) = gone {
+            for p in self.people.values_mut() {
+                for s in p.slots.iter_mut().filter(|s| **s == Some(sid)) {
+                    *s = None;
+                }
+            }
+        }
+    }
+
     /// A free speaker id for a guest (the host is 0): the next unused, else one of someone gone.
     fn new_sid(&mut self) -> u8 {
         for _ in 0..255 {
@@ -971,6 +995,69 @@ impl Link {
             r.tick(self.pid, tier, player, Instant::now())
         });
     }
+
+    /// Who this socket speaks as (a guest id). Many controllers: after the first player of a PS5
+    /// left (`release`) their socket still carries that PS5's talk, so it is moved to a player of
+    /// it still in ([`Self::rebind`]).
+    pub(crate) fn pid(&self) -> u64 {
+        self.pid
+    }
+
+    /// Many controllers: the first player of a PS5 left (`release`) while this socket carries the
+    /// talk of the others from that PS5. Its chat and voice now speak as `pid` (a player still in,
+    /// `name`, `player`), so the host's mutes and remove for that player reach them. The notice
+    /// accepted, the mic and the host's mutes come along (the same PS5, the same mic).
+    pub(crate) fn rebind(&mut self, pid: u64, name: &str, player: Option<u8>) {
+        if pid == self.pid {
+            return;
+        }
+        let now = Instant::now();
+        let (from, gen, shared) = (self.pid, self.gen, self.shared.clone());
+        with_room_or_new(&self.console, |room| {
+            let (accepted, mic_on, ptt_down, muted_voice, muted_chat) = room
+                .people
+                .get(&from)
+                .map(|p| {
+                    (
+                        p.accepted,
+                        p.mic_on,
+                        p.ptt_down,
+                        p.muted_voice,
+                        p.muted_chat,
+                    )
+                })
+                .unwrap_or_default();
+            room.unlink(from, gen);
+            if !room.people.contains_key(&pid) {
+                let sid = room.new_sid();
+                let mut p = Person::new(sid, name, player, false, now);
+                p.muted_voice = room.modes.start_muted;
+                room.people.insert(pid, p);
+            }
+            let p = room.people.get_mut(&pid).expect("inserted above");
+            p.accepted |= accepted;
+            p.muted_voice |= muted_voice;
+            p.muted_chat |= muted_chat;
+            if mic_on && !p.muted_voice {
+                p.mic_on = true;
+                p.ptt_down = ptt_down;
+            }
+            if player.is_some() {
+                p.player = player;
+            }
+            p.links.push((gen, shared));
+            let p = &room.people[&pid];
+            for v in [
+                room.comms_json(p),
+                Room::muted_json(p),
+                room.voice_json(p, now),
+            ] {
+                p.say(&v);
+            }
+            room.voice_to_all(now);
+        });
+        self.pid = pid;
+    }
 }
 
 impl Drop for Link {
@@ -982,26 +1069,7 @@ impl Drop for Link {
         let Some(room) = rooms.get_mut(&key) else {
             return;
         };
-        let gone = room.people.get_mut(&self.pid).and_then(|p| {
-            p.links.retain(|(g, _)| *g != self.gen);
-            if p.here() {
-                return None;
-            }
-            // Gone: the mic goes off (it is off again on their return).
-            p.mic_on = false;
-            p.ptt_down = false;
-            p.last_frame = None;
-            p.last_try = None;
-            p.slots = [None; join_voice::MAX_SPEAKERS];
-            Some(p.sid)
-        });
-        if let Some(sid) = gone {
-            for p in room.people.values_mut() {
-                for s in p.slots.iter_mut().filter(|s| **s == Some(sid)) {
-                    *s = None;
-                }
-            }
-        }
+        room.unlink(self.pid, self.gen);
         if room.people.values().any(Person::here) {
             room.voice_to_all(now);
         } else if room.people.values().all(|p| p.host) {

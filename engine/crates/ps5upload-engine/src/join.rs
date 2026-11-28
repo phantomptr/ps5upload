@@ -1826,6 +1826,17 @@ impl Party {
             .any(|g| g.active() && g.meta.group == Some(id))
     }
 
+    /// Many controllers: after the first player `lead` left (`release`), the player of that PS5
+    /// still in whom its socket's chat and voice speak as (the lowest player number): id, name,
+    /// player. None when nobody from it plays.
+    fn group_heir(&self, lead: u64) -> Option<(u64, String, u8)> {
+        self.guests
+            .iter()
+            .filter(|g| g.active() && g.meta.group == Some(lead))
+            .min_by_key(|g| g.player)
+            .map(|g| (g.id, g.name.clone(), g.player))
+    }
+
     /// The group a guest is shown in (many controllers): the first player's id, for them and for
     /// every other player from their PS5; None when they play alone.
     fn group_of(&self, g: &Guest) -> Option<u64> {
@@ -5266,6 +5277,11 @@ async fn play<S: GuestSocket>(
                                     apply(&console, fx);
                                     crate::log_at!(Info, "together",
                                         "join: Player {player} on {console} left; their PS5's other players play on (socket {gen} keeps the picture)");
+                                    // The PS5's talk goes on through this socket: it speaks as a
+                                    // player still in, whom the host's controls reach.
+                                    if let Some((hid, hname, hplayer)) = with_party(&key, |p| p.group_heir(id)).flatten() {
+                                        comms.rebind(hid, &hname, Some(hplayer));
+                                    }
                                 }
                                 // Nobody else from that PS5: the same as leaving.
                                 None => {
@@ -5373,10 +5389,14 @@ async fn play<S: GuestSocket>(
                 if released {
                     // The others from this PS5 still play: keep the picture; the last one gone
                     // ends it.
-                    if !with_party(&key, |p| p.group_playing(id)).unwrap_or(false) {
+                    let Some((hid, hname, hplayer)) = with_party(&key, |p| p.group_heir(id)).flatten() else {
                         let _ = socket.send(say(serde_json::json!({"bye": "left"}))).await;
                         let _ = socket.send(Message::Close(None)).await;
                         break;
+                    };
+                    // That player left too while others play on: the talk speaks as the next.
+                    if comms.pid() != hid {
+                        comms.rebind(hid, &hname, Some(hplayer));
                     }
                     let _ = socket.send(Message::Ping(now_ms().to_le_bytes().to_vec().into())).await;
                     continue;

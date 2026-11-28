@@ -406,6 +406,103 @@ async fn friend_passes_skip_strangers_and_end_with_a_remove() {
     fresh_settings();
 }
 
+/// Many controllers: after the first player of a PS5 leaves (`release`), their socket still
+/// carries that PS5's chat and voice. It speaks as the player still in, so the host's per-player
+/// mute reaches it (13.0.0 audit: it kept the old player number, which nobody could mute).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_released_first_players_talk_speaks_as_the_player_still_in() {
+    let _turn = PARTY_TESTS.lock().await;
+    fresh_settings();
+    let console = "10.77.0.46";
+    let f = Arc::new(FakeHelper::default());
+    set_helper(console, f.clone());
+    let url = serve().await;
+    set_live(console, 1);
+    let s = open_room(console).await;
+    let key = s["invite"]["key"].as_str().unwrap().to_string();
+    let dev = "devSam-000000046";
+    let mut sam = guest(
+        &url,
+        serde_json::json!({"hello": {"invite": key, "name": "Sam", "proto": 2, "device": dev,
+            "caps": ["chat", "voice"]}}),
+    )
+    .await;
+    assert_eq!(next(&mut sam).await["stage"], "asking");
+    allow_next(console, true).await;
+    let j = next_with(&mut sam, "stage").await;
+    assert_eq!(j["stage"], "joined", "{j}");
+    let sam_token = j["token"].as_str().unwrap().to_string();
+    let sam_player = j["player"].as_u64().unwrap();
+    sam.send(TMsg::Text(r#"{"notice":1}"#.into())).await.unwrap();
+    // Mia, a second controller on the same PS5 (no picture of her own).
+    let mut mia = guest(
+        &url,
+        serde_json::json!({"hello": {"group": sam_token, "name": "Mia", "media": false,
+            "proto": 2, "device": dev}}),
+    )
+    .await;
+    assert_eq!(next_with(&mut mia, "stage").await["stage"], "asking");
+    allow_next(console, true).await;
+    let j = next_with(&mut mia, "stage").await;
+    assert_eq!(j["stage"], "joined", "{j}");
+    let mia_player = j["player"].as_u64().unwrap();
+    assert_ne!(mia_player, sam_player);
+
+    // Sam leaves; the PS5 talks on through Sam's socket.
+    sam.send(TMsg::Text(r#"{"release":1}"#.into()))
+        .await
+        .unwrap();
+    until("Sam's place freed", || {
+        with_party(&host_key(console), |p| {
+            p.guests.iter().filter(|g| g.active()).count() == 1
+        })
+        .unwrap_or(false)
+    })
+    .await;
+    let line = |text: &str| {
+        TMsg::Text(serde_json::json!({"chat": {"text": text}}).to_string().into())
+    };
+    let last_line = || async {
+        let s = host_state(console).await;
+        s["room"]["chat_log"]
+            .as_array()
+            .and_then(|a| a.last().cloned())
+            .unwrap_or_default()
+    };
+    sam.send(line("still here")).await.unwrap();
+    let mut got = serde_json::Value::Null;
+    for _ in 0..200 {
+        got = last_line().await;
+        if got["text"] == "still here" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(got["text"], "still here", "{got}");
+    assert_eq!(
+        got["player"], mia_player,
+        "the PS5's talk speaks as the player still in: {got}"
+    );
+    // The host mutes that player's chat: the socket's next line is refused.
+    let n = crate::join_comms::mute(
+        console,
+        crate::join_comms::Target::Player(mia_player as u8),
+        None,
+        Some(true),
+    )
+    .unwrap();
+    assert!(n >= 1);
+    sam.send(line("can you hear me")).await.unwrap();
+    let r = next_with(&mut sam, "comms_refused").await;
+    assert_eq!(r["comms_refused"]["what"], "chat", "{r}");
+    assert_eq!(last_line().await["text"], "still here");
+    drop(mia);
+    drop(sam);
+    test_close_party(console);
+    set_live(console, 0);
+    fresh_settings();
+}
+
 /// The preview: what the host chose to show, never an address, and one per address per 10 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_preview_shows_the_room_and_no_address() {
