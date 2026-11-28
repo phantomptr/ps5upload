@@ -121,6 +121,7 @@ void *thread_main(void *) noexcept
     unsigned seen_blip = 0;
     for (;;)
     {
+        beat(Beat::sound, 0);
         pthread_mutex_lock(&lock);
         const bool stream = streaming;
         if (stream)
@@ -178,6 +179,7 @@ void *thread_main(void *) noexcept
                 block[i * 2 + 1] = static_cast<std::int16_t>(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
             }
         }
+        beat(Beat::sound, 1);
         const int rc = sceAudioOutOutput(port, block);
         if (rc < 0)
         {

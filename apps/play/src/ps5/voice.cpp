@@ -155,6 +155,7 @@ void *capture_main(void *) noexcept
     std::uint8_t out[voice::kMaxOpus];
     for (;;)
     {
+        beat(Beat::voice, 0);
         pthread_mutex_lock(&lock);
         voice::Allow a = allow_now;
         char mode[8];

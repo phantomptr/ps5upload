@@ -410,11 +410,46 @@ int main()
     const bool dev_mode = stat(dev, &st) == 0;
     if (dev_mode)
         log("dev: commands are read from %s", cmd);
+    // A watchdog: when the main loop, the pad, sound or voice thread stops going round, say
+    // which and at what stage (a stuck app otherwise leaves a silent log).
+    pthread_t wd;
+    pthread_create(&wd, nullptr, [](void *) -> void * {
+        unsigned last[4] = {};
+        int quiet[4] = {};
+        static const char *names[4] = {"main", "pad", "sound", "voice"};
+        for (;;)
+        {
+            for (int k = 0; k < 4; ++k)
+                sceKernelUsleep(500000); // under a second a call (a longer one may not sleep at all)
+            for (int i = 0; i < 4; ++i)
+            {
+                int stage = 0;
+                unsigned rounds = 0;
+                beat_read(static_cast<Beat>(i), &stage, &rounds);
+                if (rounds == last[i] && rounds)
+                {
+                    if (++quiet[i] == 2)
+                    {
+                        char line[128];
+                        std::snprintf(line, sizeof line, "[watchdog] the %s thread stopped at stage %d (round %u)\n",
+                                      names[i], stage, rounds);
+                        log_raw(line);
+                    }
+                }
+                else
+                    quiet[i] = 0;
+                last[i] = rounds;
+            }
+        }
+        return nullptr;
+    }, nullptr);
     std::uint64_t next_cmd = 0, next_report = 0;
     for (;;)
     {
         const std::uint64_t now = net::now_us();
+        beat(Beat::main, 0);
         app.frame(now, ui_px, layer);
+        beat(Beat::main, 10);
         if (dev_mode && now >= next_cmd)
         {
             next_cmd = now + 500000;
@@ -425,11 +460,13 @@ int main()
                 const long r = read(fd, line, sizeof line - 1);
                 close(fd);
                 unlink(cmd);
+                log("dev: command file, %ld bytes", r);
                 if (r > 0)
                 {
                     for (long i = 0; i < r; ++i)
                         if (line[i] == '\n' || line[i] == '\r')
                             line[i] = 0;
+                    beat(Beat::main, 11);
                     app.command(line);
                 }
             }
@@ -437,6 +474,16 @@ int main()
         if (now >= next_report)
         {
             next_report = now + 10000000;
+            // a sign of life every minute (a quiet log otherwise can't tell "idle" from "stuck")
+            static unsigned reports;
+            if (reports++ % 6 == 0)
+            {
+                int st[4];
+                unsigned rd[4];
+                for (int i = 0; i < 4; ++i)
+                    beat_read(static_cast<Beat>(i), &st[i], &rd[i]);
+                log("alive: main %u, pad %u, sound %u, voice %u rounds", rd[0], rd[1], rd[2], rd[3]);
+            }
             const auto v = ps5::video::stats();
             const auto s = ps5::sound::stats();
             const auto d = ps5::display::stats();
@@ -450,6 +497,7 @@ int main()
                     d.slow, static_cast<double>(d.worst_ms), s.decoded, s.concealed, s.recovered, s.underruns,
                     s.dropped, s.late, ps5::padio::sent(), r.calls, r.nonzero, static_cast<unsigned>(r.last_rc));
         }
+        beat(Beat::main, 12);
         sceKernelUsleep(8000);
     }
 }

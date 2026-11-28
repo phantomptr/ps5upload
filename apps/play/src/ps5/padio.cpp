@@ -58,16 +58,19 @@ std::uint64_t next_users = 0;
 // Signed-in users (sceUserServiceGetLoginUserIdList): a pad opened for each one not yet open.
 void refresh_users() noexcept
 {
+    // SceUserServiceLoginUserIdList: 4 ids on the PS4; room for more in case the PS5's is larger
+    // (a short buffer would be written past).
     struct
     {
-        std::int32_t id[4];
+        std::int32_t id[64];
     } list{};
     for (auto &x : list.id)
         x = -1;
     if (sceUserServiceGetLoginUserIdList(&list) != 0)
         return;
-    for (std::int32_t u : list.id)
+    for (int k = 0; k < 4; ++k)
     {
+        const std::int32_t u = list.id[k];
         if (u < 0 || u == primary_user)
             continue;
         bool have = false;
@@ -97,8 +100,8 @@ void refresh_users() noexcept
         if (e.user < 0)
             continue;
         bool still = false;
-        for (std::int32_t u : list.id)
-            still = still || u == e.user;
+        for (int k = 0; k < 4; ++k)
+            still = still || list.id[k] == e.user;
         if (!still)
         {
             log("pad: user %#x signed out", static_cast<unsigned>(e.user));
@@ -230,6 +233,7 @@ void *thread_main(void *) noexcept
     cur.lx = cur.ly = cur.rx = cur.ry = 128;
     for (;;)
     {
+        beat(Beat::pad, 0);
         const int n = handle >= 0 ? scePadRead(handle, s, 16) : 0;
         const std::uint64_t now = net::now_us();
         std::uint32_t went_down = 0;
@@ -334,11 +338,14 @@ void *thread_main(void *) noexcept
         if (now >= next_users)
         {
             next_users = now + 1000000;
+            beat(Beat::pad, 1);
             refresh_users();
+            beat(Beat::pad, 2);
         }
         for (auto &e : extra)
             if (e.user >= 0)
                 read_extra(e, now);
+        beat(Beat::pad, 3);
         sceKernelUsleep(4000);
     }
     return nullptr;

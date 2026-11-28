@@ -959,6 +959,17 @@ void App::command(const char *line) noexcept
     }
     else if (!std::strcmp(verb, "pair"))
         host_->pair();
+    else if (!std::strcmp(verb, "rooms") || !std::strcmp(verb, "thanks") || !std::strcmp(verb, "notice"))
+    {
+        // the Join list, Thanks & Support, the notice (dev checks on the console)
+        stop_host();
+        depth_ = 0;
+        screen_ = Screen::home;
+        if (!std::strcmp(verb, "rooms"))
+            open_rooms();
+        else
+            go(!std::strcmp(verb, "thanks") ? Screen::thanks : Screen::notice);
+    }
     else if (!std::strcmp(verb, "pick") || !std::strcmp(verb, "pickhost"))
     {
         stop_host();
@@ -995,7 +1006,9 @@ void App::command(const char *line) noexcept
 
 void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) noexcept
 {
+    beat(Beat::main, 1);
     const platform::Input in = platform::input();
+    beat(Beat::main, 2);
     // Back in front after the home screen or the control center: sockets may be gone.
     if (in.in_front && !was_front_)
     {
@@ -1005,7 +1018,9 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
     was_front_ = in.in_front;
     if (in.in_front)
         on_input(in.pressed, in.held, now);
+    beat(Beat::main, 3);
     easy_frame(now);
+    beat(Beat::main, 4);
 
     // The guest's progress moves the screens.
     const GuestView gv = guest_view();
@@ -1084,7 +1099,9 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
         voice::Allow off;
         platform::voice_allow(off);
     }
+    beat(Beat::main, 5);
     seats_frame(now);
+    beat(Beat::main, 6);
     // The game gets "nothing pressed" while the Room menu or any other screen is up.
     platform::pad_to_menu(streaming_ && (ov_open_ || screen_ != Screen::playing));
     // The resume token kept on disk (back after the host restarts or the app closes).
@@ -1115,6 +1132,7 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
     }
     if (gv.phase != GuestView::password)
         password_asked_ = false;
+    beat(Beat::main, 7);
     // The Join list's network side: while the list (or its sheets) are up, and on the home
     // screen for "<friend>'s room is open" at the hub's pace.
     if (!fake_.on)
@@ -1161,7 +1179,9 @@ void App::frame(std::uint64_t now, std::uint32_t *ui_px, std::uint32_t *layer) n
         return;
     bool show_ui = true;
     int top = 0, bottom = 0;
+    beat(Beat::main, 8);
     draw(ui_px, layer, now, &show_ui, &top, &bottom);
+    beat(Beat::main, 9);
     last_draw_ = now;
     dirty_ = false;
     if (screen_ == Screen::playing)

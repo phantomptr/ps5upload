@@ -120,3 +120,17 @@ departs from the designs (the Play Rooms design, 2026-11-28, and the integration
   `rooms-offline`, `keyboard`, `notice`, `thanks`, `welcome`, `help`, `name-taken`,
   `wrong-password`, `asking-ping`, `asking-seats`, `playing-chat`, `playing-room-menu`,
   `host-room`, `host-this-ps5`, `host-close`); `LANG_CODE=xx` for each language.
+
+## On hardware (Pro, FW 13.60, 2026-11-27, helper 12.6.45, test install removed afterwards)
+
+- The app starts; main, pad, sound and voice threads all go round (`alive:` line each minute; a
+  watchdog names a thread that stops).
+- The Join list fetched the production hub's `GET /rooms` through the app's own DNS + TLS: `http
+  404` (the hub on Fly isn't redeployed with Rooms yet), shown as "Your rooms service has no
+  public rooms". The waiting room still opens on the hub.
+- Found and fixed: `sceUserServiceGetLoginUserIdList` into a 4-id buffer left the app quiet after
+  its first frame; the buffer is now 64 ids (the first 4 read).
+- Not tried on hardware: capture → Opus → the engine (the capture itself is proven in MIC.md), a
+  second signed-in user's controller (the Pro has one user), the Room menu and host tabs on the
+  TV (the screenshots cover their layout), helper grants and intent (the console runs helper
+  12.6.45, app API 1: the app fell back as designed).
