@@ -42,5 +42,7 @@
 #define PLAY_APP_TITLE_ID "FAKE99261"
 /* Its loopback API (app_api.h): 127.0.0.1 only, always on while the helper runs, Minion or not. */
 #define PLAY_APP_API_PORT 9181
+/* Its Tailscale forward (tailnet_node_forward_open): 127.0.0.1 only, to one tailnet peer's engine. */
+#define PLAY_APP_FORWARD_PORT 9182
 
 #endif

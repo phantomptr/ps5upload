@@ -35,6 +35,7 @@
 #include "mesh.h"
 #include "proc_identity.h"
 #include "remoteplay.h"
+#include "tailnet_node.h"
 #include "webui_server.h"
 
 #define APP_API_CONN_MS 3000u
@@ -140,9 +141,35 @@ static int op_mesh(void *ctx, char *out, size_t cap) {
     return mesh_engines_json(out, cap);
 }
 
+/* PS5Upload Play's Tailscale forward: tailnet_node.c holds the one exception to "the PS5 never
+ * dials out on the tailnet" and its rules. */
+static int op_forward_status(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    return tailnet_node_forward_json(out, cap);
+}
+
+static int op_forward_open(void *ctx, uint32_t peer, unsigned port, char *out, size_t cap, int *http) {
+    unsigned lport = 0;
+    const char *err = "failed";
+    char ip[16];
+    int k;
+    (void)ctx;
+    if (tailnet_node_forward_open(peer, port, &lport, &err) != 0)
+        return err_into(out, cap, http, strcmp(err, "failed") == 0 ? 500 : 409, err);
+    snprintf(ip, sizeof ip, "%u.%u.%u.%u", peer >> 24, (peer >> 16) & 255u, (peer >> 8) & 255u, peer & 255u);
+    k = snprintf(out, cap, "{\"local_port\":%u,\"peer\":\"%s\",\"port\":%u}", lport, ip, port);
+    return k < 0 || (size_t)k >= cap ? -1 : k;
+}
+
+static int op_forward_close(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    tailnet_node_forward_close();
+    return snprintf(out, cap, "{\"ok\":true}");
+}
+
 static const app_api_ops_t OPS = {
-    NULL, PS5UPLOAD2_VERSION, op_rp_readiness, op_rp_enable, op_rp_pin_request, op_rp_pin_status, op_rp_pin_cancel,
-    op_mesh, NULL,
+    NULL,           PS5UPLOAD2_VERSION, op_rp_readiness,   op_rp_enable,    op_rp_pin_request, op_rp_pin_status,
+    op_rp_pin_cancel, op_mesh,          op_forward_status, op_forward_open, op_forward_close,
 };
 
 /* ---- the listener ---- */

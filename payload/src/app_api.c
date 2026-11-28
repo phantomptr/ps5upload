@@ -149,8 +149,33 @@ enum {
     R_RP_PIN_REQ,
     R_RP_PIN_GET,
     R_RP_PIN_CANCEL,
-    R_MESH
+    R_MESH,
+    R_FWD_OPEN,
+    R_FWD_GET,
+    R_FWD_CLOSE
 };
+
+uint32_t app_api_tailnet_ip(const char *s) {
+    uint32_t v = 0, part = 0;
+    int dots = 0, digits = 0;
+    if (!s) return 0;
+    for (; *s; s++) {
+        if (*s >= '0' && *s <= '9') {
+            part = part * 10 + (uint32_t)(*s - '0');
+            if (++digits > 3 || part > 255) return 0;
+        } else if (*s == '.') {
+            if (!digits || ++dots > 3) return 0;
+            v = v << 8 | part;
+            part = 0;
+            digits = 0;
+        } else {
+            return 0;
+        }
+    }
+    if (dots != 3 || !digits) return 0;
+    v = v << 8 | part;
+    return (v >> 22) == (100u << 2 | 1u) ? v : 0; /* 100.64.0.0/10 */
+}
 
 static const struct {
     const char *method, *path;
@@ -164,6 +189,9 @@ static const struct {
     { "GET", "/v1/rp/pin", R_RP_PIN_GET },
     { "POST", "/v1/rp/pin/cancel", R_RP_PIN_CANCEL },
     { "GET", "/v1/mesh", R_MESH },
+    { "POST", "/v1/tailnet/forward", R_FWD_OPEN },
+    { "GET", "/v1/tailnet/forward", R_FWD_GET },
+    { "POST", "/v1/tailnet/forward/close", R_FWD_CLOSE },
 };
 
 /* The route for (method, path): its id, 0 unknown path, -1 known path with another method. */
@@ -301,6 +329,32 @@ size_t app_api_handle(const char *req, size_t len, unsigned port, const app_api_
         break;
     case R_MESH:
         if (ops->mesh) n = ops->mesh(ops->ctx, b, APP_API_OUT_MAX);
+        break;
+    case R_FWD_OPEN: {
+        char peer[24] = "", proto[8] = "";
+        uint64_t port = 0;
+        uint32_t ip;
+        if (blen == 0 || webui_json_str(body, blen, "peer", peer, sizeof peer) != 1 ||
+            !(ip = app_api_tailnet_ip(peer))) {
+            http = 400;
+            n = err_body(b, APP_API_OUT_MAX, "not_tailnet_address");
+        } else if (webui_json_u64(body, blen, "port", &port) != 1 || port == 0 || port > 65535) {
+            http = 400;
+            n = err_body(b, APP_API_OUT_MAX, "bad_port");
+        } else if (webui_json_str(body, blen, "proto", proto, sizeof proto) < 0 ||
+                   (proto[0] && strcmp(proto, "tcp") != 0)) {
+            http = 400;
+            n = err_body(b, APP_API_OUT_MAX, "tcp_only");
+        } else if (ops->forward_open) {
+            n = ops->forward_open(ops->ctx, ip, (unsigned)port, b, APP_API_OUT_MAX, &http);
+        }
+        break;
+    }
+    case R_FWD_GET:
+        if (ops->forward_status) n = ops->forward_status(ops->ctx, b, APP_API_OUT_MAX);
+        break;
+    case R_FWD_CLOSE:
+        if (ops->forward_close) n = ops->forward_close(ops->ctx, b, APP_API_OUT_MAX);
         break;
     default: break;
     }

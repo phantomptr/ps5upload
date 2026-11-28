@@ -847,7 +847,10 @@ static int inbound_ok(tn_ctx *c, const tn_dp *d, const tn_ip_info *ip)
 	for (uint32_t i = 0; i < c->n_serve && !listed; i++)
 		listed = c->serve[i].proto == ip->proto && c->serve[i].port == ip->dport;
 	if (!listed)
-		return 0;
+		/* The replies on a connection this node dialed itself through tn_map (a serving node
+		 * that also maps: the PS5 helper's one forward for PS5Upload Play). Only a connection
+		 * lwIP already has matches; nothing new gets in this way. */
+		return ip->proto == TN_IPPROTO_TCP && tn_fwd_tcp_known(c, ip);
 	/* A new flow also needs the app's own peer list (tn_set_peer_allow). */
 	if (ip->proto == TN_IPPROTO_TCP) /* only a SYN opens a connection */
 		return (ip->tcp_flags & 0x12) != 0x02 || new_flow_ok(c, d, ip);

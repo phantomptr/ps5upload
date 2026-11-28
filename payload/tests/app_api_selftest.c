@@ -69,7 +69,42 @@ static int f_fwd(void *ctx, char *out, size_t cap) {
     return snprintf(out, cap, "{\"state\":\"off\"}");
 }
 
-static const app_api_ops_t OPS = { NULL, "13.0.0", f_readiness, f_enable, f_pin, f_pin_status, f_cancel, f_mesh, f_fwd };
+static uint32_t g_fwd_peer;
+static unsigned g_fwd_port;
+static int g_fwd_closes;
+static int f_fwd_open(void *ctx, uint32_t peer, unsigned port, char *out, size_t cap, int *http) {
+    (void)ctx;
+    if (peer == 0x64400063u) { /* 100.64.0.99: not a peer the node knows */
+        *http = 409;
+        return snprintf(out, cap, "{\"error\":\"unknown_peer\"}");
+    }
+    g_fwd_peer = peer;
+    g_fwd_port = port;
+    return snprintf(out, cap, "{\"local_port\":9182}");
+}
+static int f_fwd_close(void *ctx, char *out, size_t cap) {
+    (void)ctx;
+    g_fwd_closes++;
+    return snprintf(out, cap, "{\"ok\":true}");
+}
+
+static const app_api_ops_t OPS = { NULL,    "13.0.0", f_readiness, f_enable,   f_pin,       f_pin_status,
+                                   f_cancel, f_mesh,  f_fwd,       f_fwd_open, f_fwd_close };
+
+static void test_tailnet_ip(void) {
+    CHECK(app_api_tailnet_ip("100.64.0.1") == 0x64400001u);
+    CHECK(app_api_tailnet_ip("100.127.255.254") == 0x647ffffeu);
+    CHECK(app_api_tailnet_ip("100.128.0.1") == 0); /* outside 100.64.0.0/10 */
+    CHECK(app_api_tailnet_ip("100.63.0.1") == 0);
+    CHECK(app_api_tailnet_ip("192.168.1.2") == 0);
+    CHECK(app_api_tailnet_ip("127.0.0.1") == 0);
+    CHECK(app_api_tailnet_ip("100.64.0") == 0);
+    CHECK(app_api_tailnet_ip("100.64.0.1.2") == 0);
+    CHECK(app_api_tailnet_ip("100.64.0.256") == 0);
+    CHECK(app_api_tailnet_ip("100.64.0.1 ") == 0);
+    CHECK(app_api_tailnet_ip("") == 0);
+    CHECK(app_api_tailnet_ip(NULL) == 0);
+}
 
 static char g_resp[APP_API_RESP_MAX];
 
@@ -229,12 +264,50 @@ static void test_routes(void) {
     CHECK(st == 200 && has(b, "\"engine\":null"));
 }
 
+static void test_forward(void) {
+    int st;
+    const char *b;
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.101.2.3\",\"port\":19113}", &st);
+    CHECK(st == 200 && has(b, "\"local_port\":9182") && g_fwd_peer == 0x64650203u && g_fwd_port == 19113);
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.101.2.3\",\"port\":19113,\"proto\":\"tcp\"}", &st);
+    CHECK(st == 200);
+    g_fwd_peer = 0;
+    /* Never anything but a tailnet address, a real port, TCP. */
+    b = post("/v1/tailnet/forward", "{\"peer\":\"192.168.1.10\",\"port\":19113}", &st);
+    CHECK(st == 400 && has(b, "not_tailnet_address") && g_fwd_peer == 0);
+    b = post("/v1/tailnet/forward", "{\"peer\":\"127.0.0.1\",\"port\":9120}", &st);
+    CHECK(st == 400 && has(b, "not_tailnet_address") && g_fwd_peer == 0);
+    b = post("/v1/tailnet/forward", "{\"port\":19113}", &st);
+    CHECK(st == 400 && has(b, "not_tailnet_address"));
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.101.2.3\",\"port\":0}", &st);
+    CHECK(st == 400 && has(b, "bad_port"));
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.101.2.3\",\"port\":65536}", &st);
+    CHECK(st == 400 && has(b, "bad_port"));
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.101.2.3\",\"port\":\"80\"}", &st);
+    CHECK(st == 400 && has(b, "bad_port"));
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.101.2.3\",\"port\":9296,\"proto\":\"udp\"}", &st);
+    CHECK(st == 400 && has(b, "tcp_only") && g_fwd_peer == 0);
+    b = post("/v1/tailnet/forward", "", &st);
+    CHECK(st == 400);
+    /* The node's own answer comes through (a peer it does not know). */
+    b = post("/v1/tailnet/forward", "{\"peer\":\"100.64.0.99\",\"port\":19113}", &st);
+    CHECK(st == 409 && has(b, "unknown_peer"));
+    b = get("/v1/tailnet/forward", &st);
+    CHECK(st == 200 && !strcmp(b, "{\"state\":\"off\"}"));
+    b = post("/v1/tailnet/forward/close", "", &st);
+    CHECK(st == 200 && has(b, "\"ok\":true") && g_fwd_closes == 1);
+    b = get("/v1/tailnet/forward/close", &st);
+    CHECK(st == 405);
+}
+
 int main(void) {
     test_host();
     test_framing();
     test_checks();
     test_rp_summary();
     test_routes();
+    test_tailnet_ip();
+    test_forward();
     if (failures) {
         fprintf(stderr, "%d app API check(s) failed\n", failures);
         return 1;

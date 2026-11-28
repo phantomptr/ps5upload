@@ -122,9 +122,29 @@ int main(void) {
     CHECK(str("state", v, sizeof v) == 1 && strcmp(v, "off") != 0);
     CHECK(boolean("signed_in") == 1);
 
+    /* PS5Upload Play's forward: only to a peer the node knows (this node has none: no control
+     * server), only a real port; its state follows the node. */
+    {
+        unsigned lp = 0;
+        const char *ferr = NULL;
+        char fj[160];
+        CHECK(tailnet_node_forward_open(0x64650203u, 19113, &lp, &ferr) == -1 && !strcmp(ferr, "unknown_peer"));
+        CHECK(tailnet_node_forward_open(0xC0A80102u, 19113, &lp, &ferr) == -1 && !strcmp(ferr, "unknown_peer"));
+        CHECK(tailnet_node_forward_open(0x64650203u, 0, &lp, &ferr) == -1 && !strcmp(ferr, "bad_port"));
+        CHECK(tailnet_node_forward_json(fj, sizeof fj) > 0 && !strcmp(fj, "{\"state\":\"off\"}"));
+        tailnet_node_forward_close(); /* nothing open: a no-op */
+    }
+
     /* renew: the same node signs in again; refused while off */
     CHECK(call("{\"op\":\"renew\"}") > 0 && boolean("ok") == 1 && boolean("enabled") == 1);
     CHECK(call("{\"op\":\"disable\"}") > 0 && boolean("enabled") == 0);
+    {
+        unsigned lp = 0;
+        const char *ferr = NULL;
+        char fj[160];
+        CHECK(tailnet_node_forward_open(0x64650203u, 19113, &lp, &ferr) == -1 && !strcmp(ferr, "tailnet_off"));
+        CHECK(tailnet_node_forward_json(fj, sizeof fj) > 0 && !strcmp(fj, "{\"state\":\"tailnet_off\"}"));
+    }
     CHECK(call("{\"op\":\"renew\"}") > 0 && strstr(out, "not_running"));
 
     /* the allow-list: a fresh setup lets in only listed devices; "all" is an explicit choice */

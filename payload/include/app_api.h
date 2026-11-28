@@ -23,6 +23,14 @@
  *                             device registered (as the engine's rp.status does)
  *   POST /v1/rp/pin/cancel    {"ok":true}
  *   GET  /v1/mesh             the engines connected to this helper (mesh_engines_json)
+ *   POST /v1/tailnet/forward  {"peer":"100.x.y.z","port":N[,"proto":"tcp"]} -> {"local_port":9182,
+ *                             "peer","port"}: the app's connections to 127.0.0.1:9182 go to that
+ *                             tailnet peer's port (tailnet_node_forward_open, the one exception to
+ *                             "the PS5 never dials out on the tailnet"); 400 not_tailnet_address,
+ *                             bad_port, tcp_only; 409 tailnet_off, unknown_peer, port_busy
+ *   GET  /v1/tailnet/forward  {"state":"on","local_port","peer","port"} | {"state":"off"} |
+ *                             {"state":"tailnet_off"}
+ *   POST /v1/tailnet/forward/close  {"ok":true}
  * Errors are {"error":"<token>"} with a 4xx/5xx status. Wrong method: 405 method_not_allowed;
  * unknown path: 404 not_found.
  *
@@ -53,9 +61,16 @@ typedef struct {
     int (*rp_pin_status)(void *ctx, char *out, size_t cap);
     int (*rp_pin_cancel)(void *ctx, char *out, size_t cap);
     int (*mesh)(void *ctx, char *out, size_t cap);
-    /* The forward's state for /v1/status (NULL: "forward":null). */
+    /* The forward's state for /v1/status and GET /v1/tailnet/forward (NULL: "forward":null). */
     int (*forward_status)(void *ctx, char *out, size_t cap);
+    /* Open the forward to (peer, a tailnet IPv4 in host order, already checked to be in
+     * 100.64.0.0/10; port 1..65535). */
+    int (*forward_open)(void *ctx, uint32_t peer, unsigned port, char *out, size_t cap, int *http);
+    int (*forward_close)(void *ctx, char *out, size_t cap);
 } app_api_ops_t;
+
+/* "100.64.0.1" -> host order, 0 when not a dotted IPv4 in 100.64.0.0/10 (Tailscale's range). */
+uint32_t app_api_tailnet_ip(const char *s);
 
 /* 1 when host is "127.0.0.1:<port>" or "localhost:<port>" (any letter case), else 0. */
 int app_api_host_ok(const char *host, unsigned port);
